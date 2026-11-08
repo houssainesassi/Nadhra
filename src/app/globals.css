@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  --font-sans: var(--font-arabic), system-ui, "Segoe UI", Roboto, "Noto Sans Arabic", Tahoma, sans-serif;
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-soft: var(--soft);
+  --color-edge: var(--edge);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-danger-ink: var(--danger-ink);
+}
+
+/* Every text and control pair meets WCAG AAA (7:1) contrast in both themes. Dark comes first
+   because bright screens are painful for many people with low vision. */
+:root,
+:root[data-theme="dark"] {
+  --bg: #000000;
+  --panel: #111111;
+  --ink: #ffffff;
+  --soft: #d4d4d4;
+  --edge: #ffffff;
+  --accent: #ffd60a;
+  --accent-ink: #000000;
+  --danger: #b00020;
+  --danger-ink: #ffffff;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f2f2f2;
+  --ink: #000000;
+  --soft: #333333;
+  --edge: #000000;
+  --accent: #0b3d91;
+  --accent-ink: #ffffff;
+  --danger: #b00020;
+  --danger-ink: #ffffff;
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 18px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 4px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@keyframes active-ring {
+  0% { box-shadow: 0 0 0 0 var(--accent); }
+  100% { box-shadow: 0 0 0 14px transparent; }
+}
+.is-active { animation: active-ring 1.1s ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .is-active { animation: none; outline: 4px solid var(--accent); }
+}

@@ -1,0 +1,9 @@
+node_modules
+.next
+.vercel
+.env
+.env*.local
+next-env.d.ts
+*.tsbuildinfo
+# Downloaded and copied by scripts/copy-mediapipe.mjs on install
+public/mediapipe
