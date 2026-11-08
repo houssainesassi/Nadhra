@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from "next";
-import { Noto_Sans_Arabic } from "next/font/google";
+import { IBM_Plex_Sans_Arabic } from "next/font/google";
 import "./globals.css";
 
-const arabic = Noto_Sans_Arabic({ subsets: ["arabic"], variable: "--font-arabic", display: "swap" });
+const arabic = IBM_Plex_Sans_Arabic({ subsets: ["arabic", "latin"], weight: ["400", "500", "600"], variable: "--font-arabic", display: "swap" });
 
 export const metadata: Metadata = {
   title: "بصيرة: مساعد البصر",
@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#000000",
+  themeColor: "#09090b",
 };
 
 // Applies the saved theme before paint. Dark unless the user chose light.

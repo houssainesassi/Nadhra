@@ -24,6 +24,8 @@ Two layers on purpose. The **cloud model** understands the scene: rooms, stairs,
 | Path | Responsibility |
 |---|---|
 | `src/components/Assistant.tsx` | The only screen |
+| `src/components/Iris.tsx`, `icons.tsx` | The state emblem and line icons |
+| `src/app/globals.css` | Design tokens, controls and all motion |
 | `src/lib/assistant/controller.ts` | Runs everything: camera, frame selection, analysis, speech, voice. No React in it |
 | `src/lib/assistant/cameraSource.ts` | Camera interface and webcam implementation |
 | `src/lib/assistant/frameAnalysis.ts`, `scheduler.ts` | Is this frame usable, and is it worth sending? |
@@ -37,6 +39,14 @@ Two layers on purpose. The **cloud model** understands the scene: rooms, stairs,
 | `src/lib/speech/` | Voice output: browser voice first, Edge voice as fallback |
 | `src/lib/server/http.ts` | Body limits, same-origin check, rate limiter |
 | `src/app/api/` | `vision`, `vision/transcribe`, `tts` |
+
+## Design rules
+
+- **One meaning per colour.** Warm light is the assistant, blue is listening, and a large red area is only ever a warning. Don't use them decoratively.
+- **Nothing depends on sight or motion.** Each state is also spoken and given as text. Motion is CSS only and stops under `prefers-reduced-motion`.
+- **Native elements first:** `dialog`, `select`, and `input role="switch"` keep focus handling and screen-reader behaviour correct.
+- **Keep text 7:1 or better, control edges 3:1 or better,** and controls at least 48 px, in both themes. Text over the video sits on solid chips.
+- **No fixed bars.** They cover content when low-vision users zoom in.
 
 ## Safety rules live in code
 

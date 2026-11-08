@@ -154,10 +154,17 @@ test("transcribe: WAV only, forwarded to the provider that supports audio", asyn
   }));
   assert.equal((await call({})).status, 400);
   assert.equal((await call({ audio: JPEG })).status, 400);
-  upstream = () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "  شنوة قدّامي؟\n" }] } }] }));
+  upstream = () => gemini({ speech: true, text: "  شنوة قدّامي؟\n" });
   const res = await call({ audio: WAV });
   assert.deepEqual(await res.json(), { text: "شنوة قدّامي؟" });
   assert.equal(calls[0].body.contents[0].parts[0].inlineData.mimeType, "audio/wav");
+  // Words invented for a clip judged to have no voice must not become a question.
+  upstream = () => gemini({ speech: false, text: "شنوة قدّامي؟" });
+  assert.deepEqual(await (await call({ audio: WAV })).json(), { text: "" });
+  upstream = () => gemini({ text: "وينو" });
+  assert.deepEqual(await (await call({ audio: WAV })).json(), { text: "" }, "no clear yes means no speech");
+  upstream = () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "وينو" }] } }] }));
+  assert.equal((await call({ audio: WAV })).status, 503, "plain text output isn't trusted");
   upstream = () => new Response("down", { status: 500 });
   assert.equal((await call({ audio: WAV })).status, 503);
 });

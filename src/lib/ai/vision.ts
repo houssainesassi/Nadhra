@@ -4,7 +4,7 @@
 // are refused, so requests can't be billed.
 import "server-only";
 import { HttpError, isFreeOpenRouterModel, postJson } from "./http.ts";
-import { parseModelJson, sanitizeAnalysis, swapSides } from "../assistant/schema.ts";
+import { parseModelJson, parseTranscript, sanitizeAnalysis, swapSides } from "../assistant/schema.ts";
 import { buildUserText, TRANSCRIBE_PROMPT, VISION_SYSTEM_PROMPT } from "../assistant/prompts.ts";
 import type { SceneAnalysis, VisionRequestBody, VisionStatus } from "../assistant/types.ts";
 
@@ -72,7 +72,7 @@ export function getVisionProviders(): VisionProvider[] {
       transcribe: async (wavBase64, signal) => {
         const data = await postJson(url, { "x-goog-api-key": geminiKey }, {
           contents: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/wav", data: wavBase64 } }, { text: TRANSCRIBE_PROMPT }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 300 },
+          generationConfig: { temperature: 0, maxOutputTokens: 300, responseMimeType: "application/json" },
         }, signal);
         return geminiText(data);
       },
@@ -201,8 +201,8 @@ export type TranscribeResult = { ok: true; text: string; attempts: Attempt[] } |
 
 export async function transcribeAudio(wavBase64: string): Promise<TranscribeResult> {
   const providers = getVisionProviders().filter((p) => p.transcribe);
-  const out = await withFallback(providers, num(process.env.VISION_TIMEOUT_MS, 9_000), 15_000, (p, signal) => p.transcribe!(wavBase64, signal));
-  return out.result !== null ? { ok: true, text: out.result.trim().slice(0, 300), attempts: out.attempts } : { ok: false, attempts: out.attempts };
+  const out = await withFallback(providers, num(process.env.VISION_TIMEOUT_MS, 9_000), 15_000, async (p, signal) => parseTranscript(await p.transcribe!(wavBase64, signal)));
+  return out.result !== null ? { ok: true, text: out.result, attempts: out.attempts } : { ok: false, attempts: out.attempts };
 }
 
 /** For tests. */

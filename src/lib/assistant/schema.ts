@@ -22,6 +22,12 @@ export function parseModelJson(raw: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+/** What was said, or "" when the model found no voice. Throws on unusable output, so nothing is guessed. */
+export function parseTranscript(raw: string): string {
+  const parsed = parseModelJson(raw);
+  return parsed.speech === true ? str(parsed.text, 300) : "";
+}
+
 /** For matching only: removes vowel marks and unifies letter forms. */
 export function normalizeArabic(text: string): string {
   return text

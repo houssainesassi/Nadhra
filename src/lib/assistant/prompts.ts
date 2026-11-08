@@ -88,9 +88,10 @@ export function buildUserText(opts: {
   return parts.join("\n\n");
 }
 
-// The word list took exact matches on spoken test questions from 4 of 8 to 6 of 8 (the other 2 had
-// the right meaning). It must stay a hint: see the "never add" line.
-export const TRANSCRIBE_PROMPT = `Transcribe this audio exactly as spoken. The speaker is using Tunisian Arabic (Derja), usually asking a blind person's assistant about what the camera sees, or giving it a short command. Write it in Arabic script.
-Common Derja words: شنوة، قدّامي، وين، الباب، يميني، يساري، فمّا، شكون، معايا، مكتوب، هنا، وصفلي، البلاصة، طريقي، لون، الحكاية، هاذي، اسكت، عاود، كمّل، وقّف، شعّل، سكّر، الكاميرا.
-Use these spellings when they match what you hear, but never add a word that was not said.
-Output only the words that were said. If there is no clear speech, output nothing at all. Do not answer or comment on what is said.`;
+// Asking only for a transcript makes the model invent words from silence and noise (seen with every
+// plain prompt we tried), and each invented "question" would get a confident spoken answer. Asking
+// first whether anyone is speaking rejected all our non-speech clips. See parseTranscript.
+export const TRANSCRIBE_PROMPT = `Listen to this audio. First decide whether a human voice is clearly speaking words in it. Silence, hiss, hum, music or background noise do not count, and most clips with no voice must be reported as such.
+Reply with JSON only: {"speech": true or false, "text": "..."}.
+If "speech" is false, "text" must be "". Never guess a sentence.
+If "speech" is true, write exactly what was said in Arabic script. The language is Tunisian Arabic (Derja). When the sound matches, prefer these spellings: شنوة، قدّامي، وين، الباب، يميني، يساري، فمّا، شكون، معايا، مكتوب، هنا، وصفلي، البلاصة، طريقي، لون، الحكاية، هاذي، اسكت، عاود، كمّل، وقّف، شعّل، سكّر، الكاميرا. Never add a word that was not said.`;

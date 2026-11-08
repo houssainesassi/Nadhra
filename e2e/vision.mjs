@@ -366,7 +366,8 @@ const scenarios = {
         const ctx = new OfflineAudioContext(1, 1, 16000);
         const d = await ctx.decodeAudioData(await res.arrayBuffer());
         const pad = 16000 * 2;
-        const pcm = new Float32Array(pad + d.length + pad * 6);
+        // The fake microphone loops this file: its silences must be shorter than the 8 s wait for speech.
+        const pcm = new Float32Array(pad + d.length + pad * 2);
         pcm.set(d.getChannelData(0), pad);
         const buf = new ArrayBuffer(44 + pcm.length * 2);
         const v = new DataView(buf);
@@ -453,6 +454,26 @@ const scenarios = {
     const small = await e.page.evaluate(() => [...document.querySelectorAll("main button")].filter((b) => b.getBoundingClientRect().height < 48 && b.getBoundingClientRect().height > 0).map((b) => b.textContent));
     check("phone width: all buttons are large", small.length === 0, small.join(","));
     await e.page.screenshot({ path: join(shots, "mobile.png"), fullPage: true });
+    await e.browser.close();
+  },
+
+  async sheetsAndThemes() {
+    const e = await open();
+    await e.button("الإعدادات").click();
+    const sheet = e.page.getByRole("dialog", { name: "الإعدادات" });
+    await sheet.waitFor();
+    check("settings open as a dialog, with focus inside", await sheet.evaluate((d) => d.contains(document.activeElement)));
+    await e.page.keyboard.press("KeyC");
+    await sleep(300);
+    check("shortcuts don't fire behind an open dialog", (await e.statusOf("camera-status")) === "مطفية");
+    await e.page.keyboard.press("Escape");
+    await sleep(200);
+    check("Esc closes it and focus returns to the opener", (await sheet.isHidden()) && (await e.page.evaluate(() => document.activeElement?.textContent)) === "الإعدادات");
+    await e.button("الإعدادات").click();
+    await e.page.getByLabel("الألوان").selectOption("light");
+    check("the light theme applies and is remembered", (await e.page.evaluate(() => document.documentElement.dataset.theme + localStorage.getItem("theme"))) === "lightlight");
+    await e.page.getByRole("switch", { name: /وصف أوتوماتيكي/ }).uncheck();
+    check("settings are saved", (await e.page.evaluate(() => JSON.parse(localStorage.getItem("assistant.settings")).narration)) === false);
     await e.browser.close();
   },
 

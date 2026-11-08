@@ -79,5 +79,6 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - **The Derja is written by an AI model and spoken by a synthetic voice.** It needs review by Tunisian blind users. Browser voices that aren't `ar-TN` will pronounce it less naturally.
 - **Offline, only on-device warnings work,** and the voice works only if the device has an Arabic voice installed.
 - **Free-tier services can be busy or change.** The Edge voice in particular is an unofficial endpoint with no guarantee.
+- **Speech recognition has only been tested on synthetic speech.** Real voices, accents and noise will do worse. Check «سمعت منك» on screen when an answer seems wrong.
 - **Hands-free mode treats any nearby speech as a question,** which uses quota. Use the Ask button in noisy places.
 - **Smart glasses are not supported yet.** The camera input is modular so they can be added ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#adding-another-camera)), but nothing has been tested on real glasses.
