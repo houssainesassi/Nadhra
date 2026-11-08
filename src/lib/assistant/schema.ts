@@ -81,9 +81,14 @@ export function guardSpoken(spoken: string, texts: SceneText[]): string {
 }
 
 const SIDE_SWAP: Record<string, string> = { يمين: "يسار", يسار: "يمين", شمال: "يمين" };
+// Only clear English uses of "right" and "left": "is this right?" must stay as it is.
+const ENGLISH_SIDE = /\b((?:my|the|your)\s+)(left|right)\b|\b(left|right)(\s+(?:side|hand)\b)/gi;
+const otherSide = (word: string) => (word.toLowerCase() === "left" ? "right" : "left");
 /** Exchanges left and right, for a webcam that faces the user. */
 export function swapSides(text: string): string {
-  return text.replace(/يمين|يسار|شمال/g, (m) => SIDE_SWAP[m]);
+  return text
+    .replace(/يمين|يسار|شمال/g, (m) => SIDE_SWAP[m])
+    .replace(ENGLISH_SIDE, (_, before, side, sideFirst, after) => (side ? `${before}${otherSide(side)}` : `${otherSide(sideFirst)}${after}`));
 }
 /** Like swapSides, but leaves alone any sentence that quotes text read from the scene. */
 function swapSidesOutsideQuotes(spoken: string, texts: SceneText[]): string {
@@ -93,7 +98,7 @@ function swapSidesOutsideQuotes(spoken: string, texts: SceneText[]): string {
     .join(" ");
 }
 
-const PATH_QUESTION = /(طريق|ثنيه|ثنية|نعدي|نقطع|نتعدي|نمشي|نتقدم|عوائق|حواجز|حاجز|عائق)/;
+const PATH_QUESTION = /(طريق|ثنيه|ثنية|نعدي|نقطع|نتعدي|نمشي|نتقدم|عوائق|حواجز|حاجز|عائق|\b(?:road|street|path|way|cross|crossing|walk|go|safe|clear|obstacles?)\b)/;
 export const isPathQuestion = (question: string) => PATH_QUESTION.test(normalizeArabic(question));
 
 const SIDES = ["left", "center", "right", "unknown"] as const;

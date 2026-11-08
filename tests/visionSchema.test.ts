@@ -73,6 +73,17 @@ test("webcam facing the user: sides swap in the data and the sentence, but not i
   assert.equal(swapSides("شنوة موجود على يميني؟"), "شنوة موجود على يساري؟");
 });
 
+test("questions typed in English get the same safety caveat and side correction", () => {
+  const q = { mode: "question", cameraFacing: "outward", hasMotionEvidence: false } as const;
+  for (const question of ["Can I cross the street?", "Is the road safe?", "Is anything in my way?"]) {
+    assert.ok(sanitizeAnalysis({ spoken: "فمّا عباد." }, { ...q, question }).spoken.endsWith(SPEECH.pathCaveat), question);
+  }
+  assert.ok(!isPathQuestion("What color is this?"));
+  assert.equal(swapSides("What is on my right?"), "What is on my left?");
+  assert.equal(swapSides("the left side of the room"), "the right side of the room");
+  assert.equal(swapSides("Is this right?"), "Is this right?", "'right' meaning 'correct' stays");
+});
+
 test("webcam facing the user: the user is not an obstacle to themself", () => {
   const raw = { hazards: [{ kind: "person", label: "شخص", side: "center", proximity: "near", confidence: "confirmed" }, { kind: "person", label: "شخص", side: "left", proximity: "mid", confidence: "confirmed" }] };
   assert.equal(sanitizeAnalysis(raw, { ...scan, cameraFacing: "user" }).hazards.length, 1);

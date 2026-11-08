@@ -98,20 +98,20 @@ const scenarios = {
   async consentAndPrivacy() {
     const e = await open({ consent: false });
     const focused = await e.page.evaluate(() => document.activeElement?.textContent);
-    check("page opens with focus on the Start button", focused === "شعّل الكاميرا", focused);
+    check("page opens with focus on the Start button", focused === "Start camera", focused);
     await e.page.keyboard.press("Enter");
     const dialog = e.page.getByRole("dialog");
     await dialog.waitFor();
     const text = await dialog.innerText();
-    check("first start asks consent and names who gets the images", text.includes("Google Gemini") && text.includes("ما يخزّنش"), text.slice(0, 120));
-    check("focus moves into the consent dialog", (await e.page.evaluate(() => document.activeElement?.textContent)) === "موافق");
+    check("first start asks consent and names who gets the images", text.includes("Google Gemini") && text.includes("doesn't record"), text.slice(0, 120));
+    check("focus moves into the consent dialog", (await e.page.evaluate(() => document.activeElement?.textContent)) === "I agree");
     check("no camera and no image before consent", e.api.length === 0 && (await e.page.evaluate(() => window.__tracks.length)) === 0);
-    await e.button("موش موافق").click();
+    await e.button("I don't agree").click();
     await sleep(800);
-    check("refusing keeps the camera off", (await e.statusOf("camera-status")) === "مطفية" && (await e.page.evaluate(() => window.__tracks.length)) === 0);
-    await e.button("شعّل الكاميرا").click();
-    await e.button("موافق").click();
-    check("accepting starts the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "خدّامة")));
+    check("refusing keeps the camera off", (await e.statusOf("camera-status")) === "Off" && (await e.page.evaluate(() => window.__tracks.length)) === 0);
+    await e.button("Start camera").click();
+    await e.button("I agree").click();
+    check("accepting starts the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "On")));
     await e.browser.close();
   },
 
@@ -127,9 +127,9 @@ const scenarios = {
     check(`no automated accessibility violations${process.env.AXE ? "" : " (axe not supplied, skipped)"}`, violations.length === 0, violations.join(" | "));
 
     const t0 = Date.now();
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
-    check("camera status is on", (await e.statusOf("camera-status")) === "خدّامة");
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
+    check("camera status is on", (await e.statusOf("camera-status")) === "On");
     const firstInfo = await until(() => e.tts.some((t) => /شارع|كرهب|كراهب|موتور|عباد|شخص/.test(t)), 15_000);
     check("something useful about the surroundings is spoken within 15 s", !!firstInfo, `${Date.now() - t0} ms: ${e.tts.at(-1)}`);
     check("live preview plays", await e.page.evaluate(() => { const v = document.querySelector("video"); return v.videoWidth > 0 && !v.paused && v.srcObject !== null; }));
@@ -170,7 +170,7 @@ const scenarios = {
 
     // Question, by preset button.
     const before = e.api.length;
-    await e.button("شنوة قدّامي؟").click();
+    await e.button("What's in front of me?").click();
     await until(() => e.api.slice(before).some((a) => a.mode === "question"));
     const q = e.api.slice(before).find((a) => a.mode === "question");
     check("a question captures a new, larger frame", !!q && q.kb > e.api[0].kb * 0.9, JSON.stringify(q));
@@ -180,20 +180,20 @@ const scenarios = {
 
     // Pause and resume.
     await sleep(2000);
-    await e.button("وقّف التحليل").click();
+    await e.button("Pause analysis").click();
     const paused = e.api.length;
     await sleep(9000);
-    check("pause: no requests", e.api.length === paused && (await e.statusOf("analysis-status")).includes("موقوف"));
-    await e.button("كمّل التحليل").click();
+    check("pause: no requests", e.api.length === paused && (await e.statusOf("analysis-status")).includes("Paused"));
+    await e.button("Resume analysis").click();
     check("resume: analysis runs again", !!(await until(() => e.api.length > paused, 12_000)));
 
     // Interrupt.
-    await e.button("عاود آخر جملة").click();
-    await e.button("اسكت").click();
+    await e.button("Repeat last sentence").click();
+    await e.button("Stop talking").click();
     check("repeat and stop controls respond", (await e.page.evaluate(() => document.body.innerText.length)) > 0);
 
     // Stop camera.
-    await e.button("سكّر الكاميرا").click();
+    await e.button("Stop camera").click();
     await sleep(300);
     const tracks = await e.page.evaluate(() => window.__tracks.map((t) => t.readyState));
     check("stop releases the camera hardware", tracks.length > 0 && tracks.every((s) => s === "ended"), tracks.join(","));
@@ -207,8 +207,8 @@ const scenarios = {
 
   async leavingReleasesCamera() {
     const e = await open();
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
     // The event a browser fires when the user leaves. The page is gone after a real navigation, so
     // its tracks can't be inspected then.
     await e.page.evaluate(() => dispatchEvent(new Event("pagehide")));
@@ -221,26 +221,26 @@ const scenarios = {
   async keyboardOnly() {
     const e = await open();
     await e.page.keyboard.press("KeyC");
-    check("key C starts the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "خدّامة")));
+    check("key C starts the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "On")));
     await e.page.keyboard.press("KeyP");
-    check("key P pauses", !!(await until(async () => (await e.statusOf("analysis-status")).includes("موقوف"), 3000)));
+    check("key P pauses", !!(await until(async () => (await e.statusOf("analysis-status")).includes("Paused"), 3000)));
     await e.page.keyboard.press("KeyP");
     await e.page.keyboard.press("KeyR");
     await e.page.keyboard.press("Escape");
     await e.page.keyboard.press("KeyC");
-    check("key C stops the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "مطفية", 3000)));
+    check("key C stops the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "Off", 3000)));
     await e.page.locator("#question").focus();
     await e.page.keyboard.type("c");
-    check("typing in the question box doesn't trigger shortcuts", (await e.statusOf("camera-status")) === "مطفية" && (await e.page.locator("#question").inputValue()) === "c");
+    check("typing in the question box doesn't trigger shortcuts", (await e.statusOf("camera-status")) === "Off" && (await e.page.locator("#question").inputValue()) === "c");
     await e.browser.close();
   },
 
   async permissionDenied() {
     const e = await open({ grant: false, device: true });
-    await e.button("شعّل الكاميرا").click();
-    const alert = await until(async () => { const a = e.page.locator('[role="alert"]', { hasText: "الإذن" }); return (await a.count()) ? a.first().innerText() : null; }, 10_000);
+    await e.button("Start camera").click();
+    const alert = await until(async () => { const a = e.page.locator('[role="alert"]', { hasText: "permission" }); return (await a.count()) ? a.first().innerText() : null; }, 10_000);
     check("a refused camera is explained", !!alert, alert);
-    check("status shows the problem", (await e.statusOf("camera-status")) === "فمّا مشكل");
+    check("status shows the problem", (await e.statusOf("camera-status")) === "Problem");
     check("the explanation is spoken", !!(await until(() => e.tts.some((t) => t.includes("الإذن")), 8000)), e.tts.join(" | "));
     check("no frame was sent", e.api.length === 0);
     await e.browser.close();
@@ -248,7 +248,7 @@ const scenarios = {
 
   async noCamera() {
     const e = await open({ grant: true, device: false });
-    await e.button("شعّل الكاميرا").click();
+    await e.button("Start camera").click();
     const said = await until(() => e.tts.some((t) => t.includes("ما لقيتش كاميرا")), 10_000);
     check("a missing camera is explained", !!said, e.tts.join(" | "));
     await e.browser.close();
@@ -256,7 +256,7 @@ const scenarios = {
 
   async darkRoom() {
     const e = await open({ camera: "dark" });
-    await e.button("شعّل الكاميرا").click();
+    await e.button("Start camera").click();
     const warned = await until(() => e.tts.some((t) => t.includes("مظلمة")), 15_000);
     check("too dark: the user is told", !!warned, e.tts.join(" | "));
     await sleep(6000);
@@ -269,7 +269,7 @@ const scenarios = {
     const analysis = { spoken: "إنت في بلاصة كبيرة وفيها برشة حاجات.", changed: true, imageQuality: "good", environment: null, detections: [], texts: [], uncertain: false,
       hazards: [{ kind: "stairs", label: "درج", side: "center", proximity: "near", confidence: "confirmed", motion: "unknown" }, { kind: "stairs", label: "درج", side: "left", proximity: "near", confidence: "uncertain", motion: "unknown" }] };
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST" ? route.fulfill({ json: { analysis, provider: "mock", latencyMs: 1 } }) : route.continue()));
-    await e.button("شعّل الكاميرا").click();
+    await e.button("Start camera").click();
     const ok = await until(() => e.tts.some((t) => t.includes("رد بالك، فمّا درج قدّامك")), 20_000);
     check("(mocked API) a confirmed hazard gives the firm warning", !!ok, e.tts.join(" | "));
     // Right away: the next sentence replaces it on screen once it has been spoken.
@@ -286,11 +286,11 @@ const scenarios = {
   async aiFailure() {
     const e = await open();
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST" ? route.fulfill({ status: 503, json: { error: "ai-unavailable" } }) : route.continue()));
-    await e.button("شعّل الكاميرا").click();
+    await e.button("Start camera").click();
     const warned = await until(() => e.tts.some((t) => t.includes("التحليل واقف")), 35_000);
     check("(mocked API) when the AI is down, the user is told not to rely on it", !!warned, e.tts.join(" | "));
     check("(mocked API) nothing is made up", !e.tts.some((t) => /قدّامك|شارع/.test(t)), e.tts.join(" | "));
-    check("(mocked API) status shows it", !!(await until(async () => (await e.statusOf("analysis-status")).includes("موش متوفّرة"), 5000)));
+    check("(mocked API) status shows it", !!(await until(async () => (await e.statusOf("analysis-status")).includes("unavailable"), 5000)));
     await e.ctx.unroute("**/api/vision");
     const back = await until(() => e.tts.some((t) => t.includes("رجع التحليل")), 60_000);
     check("recovery is announced once the AI returns", !!back, e.tts.slice(-3).join(" | "));
@@ -300,14 +300,14 @@ const scenarios = {
   async approaching() {
     const e = await open({ camera: "approaching", facing: "outward" });
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST" ? route.fulfill({ status: 503, json: { error: "ai-unavailable" } }) : route.continue()));
-    await e.button("شعّل الكاميرا").click();
+    await e.button("Start camera").click();
     const seen = [];
     const hit = await until(async () => {
       const box = e.page.getByTestId("local-hazards");
       if (await box.count()) {
         const t = await box.innerText();
         seen.push(t);
-        return /يقرّب/.test(t) ? t : null;
+        return /approaching/.test(t) ? t : null;
       }
       return null;
     }, 40_000, 200);
@@ -338,19 +338,20 @@ const scenarios = {
       };
     };
     const e = await open({ init, facing: "outward" });
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
-    await e.button("شعّل المساعد الصوتي").click();
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
+    await e.button("Turn on voice assistant").click();
     const q = await until(() => e.api.find((a) => a.mode === "question"), 45_000); // the mic waits for speech to finish
     check("voice question reaches the vision API with a frame", q?.question === "شنوة قدّامي؟", JSON.stringify(q));
     check("recognition language is Tunisian Arabic", (await e.page.evaluate(() => window.__rec.lang)) === "ar-TN");
-    check("what was heard is shown", (await e.page.locator("text=سمعت منك").innerText().catch(() => "")).includes("شنوة قدّامي"));
+    check("the interface is English while the assistant speaks Tunisian", (await e.page.locator("html").getAttribute("lang")) === "en" && (await e.page.getByTestId("last-spoken").getAttribute("lang")) === "ar");
+    check("what was heard is shown", (await e.page.locator("text=I heard").innerText().catch(() => "")).includes("شنوة قدّامي"));
     const answered = await until(() => e.tts.some((t) => /شارع|كراهب|كرهبة|موتور|عباد/.test(t)), 25_000);
     check("the spoken answer follows", !!answered, e.tts.join(" | "));
     check("the loop keeps listening", (await e.page.evaluate(() => window.__rec.started)) >= 2 || !!(await until(() => e.page.evaluate(() => window.__rec.started >= 2), 20_000)));
-    await e.button("سكّر المساعد الصوتي").click();
+    await e.button("Turn off voice assistant").click();
     await sleep(500);
-    check("the mic can be turned off", (await e.statusOf("mic-status")) === "مسكّر");
+    check("the mic can be turned off", (await e.statusOf("mic-status")) === "Off");
     await e.browser.close();
   },
 
@@ -392,9 +393,9 @@ const scenarios = {
     const e = await open({ audio, facing: "outward", init });
     const transcribes = [];
     e.page.on("response", async (r) => { if (r.url().endsWith("/api/vision/transcribe")) transcribes.push(`${r.status()} ${await r.text().catch(() => "")}`); });
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
-    await e.button("اسأل بالصوت").click();
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
+    await e.button("Ask by voice").click();
     const fell = await until(() => e.tts.some((t) => t.includes("نسجّل صوتك")), 15_000);
     check("without a speech service it falls back to recording, and says so", !!fell, e.tts.join(" | "));
     const q = await until(() => e.api.find((a) => a.mode === "question"), 40_000);
@@ -420,9 +421,9 @@ const scenarios = {
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST"
       ? route.fulfill({ json: { analysis: { spoken: JSON.parse(route.request().postData()).mode === "question" ? "الباب على يمينك." : "إنت في شارع.", changed: true, imageQuality: "good", environment: null, detections: [], hazards: [], texts: [], uncertain: false }, provider: "mock", latencyMs: 1 } })
       : route.continue()));
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
-    await e.button("اسأل بالصوت").click();
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
+    await e.button("Ask by voice").click();
     const q = await until(() => e.api.find((a) => a.mode === "question"), 15_000);
     check("(mocked API) routine speech doesn't cut off a question being asked", q?.question === "وين الباب؟" && (await e.page.evaluate(() => window.__rec.aborted)) === 0, JSON.stringify(q));
     await e.browser.close();
@@ -438,17 +439,17 @@ const scenarios = {
       };
     };
     const e = await open({ audio: join(fixtures, "question.wav"), facing: "outward", init });
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
-    await e.button("شعّل المساعد الصوتي").click();
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
+    await e.button("Turn on voice assistant").click();
     check("a service that ends instantly falls back to recording", !!(await until(() => e.tts.some((t) => t.includes("نسجّل صوتك")), 50_000)), e.tts.join(" | "));
     await e.browser.close();
   },
 
   async mobile() {
     const e = await open({ viewport: { width: 390, height: 844 } });
-    await e.button("شعّل الكاميرا").click();
-    await until(async () => (await e.statusOf("camera-status")) === "خدّامة");
+    await e.button("Start camera").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
     const overflow = await e.page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
     check("phone width: no sideways scrolling", overflow <= 0, `${overflow}px`);
     const small = await e.page.evaluate(() => [...document.querySelectorAll("main button")].filter((b) => b.getBoundingClientRect().height < 48 && b.getBoundingClientRect().height > 0).map((b) => b.textContent));
@@ -459,20 +460,20 @@ const scenarios = {
 
   async sheetsAndThemes() {
     const e = await open();
-    await e.button("الإعدادات").click();
-    const sheet = e.page.getByRole("dialog", { name: "الإعدادات" });
+    await e.button("Settings").click();
+    const sheet = e.page.getByRole("dialog", { name: "Settings" });
     await sheet.waitFor();
     check("settings open as a dialog, with focus inside", await sheet.evaluate((d) => d.contains(document.activeElement)));
     await e.page.keyboard.press("KeyC");
     await sleep(300);
-    check("shortcuts don't fire behind an open dialog", (await e.statusOf("camera-status")) === "مطفية");
+    check("shortcuts don't fire behind an open dialog", (await e.statusOf("camera-status")) === "Off");
     await e.page.keyboard.press("Escape");
     await sleep(200);
-    check("Esc closes it and focus returns to the opener", (await sheet.isHidden()) && (await e.page.evaluate(() => document.activeElement?.textContent)) === "الإعدادات");
-    await e.button("الإعدادات").click();
-    await e.page.getByLabel("الألوان").selectOption("light");
+    check("Esc closes it and focus returns to the opener", (await sheet.isHidden()) && (await e.page.evaluate(() => document.activeElement?.textContent)) === "Settings");
+    await e.button("Settings").click();
+    await e.page.getByLabel("Colors").selectOption("light");
     check("the light theme applies and is remembered", (await e.page.evaluate(() => document.documentElement.dataset.theme + localStorage.getItem("theme"))) === "lightlight");
-    await e.page.getByRole("switch", { name: /وصف أوتوماتيكي/ }).uncheck();
+    await e.page.getByRole("switch", { name: /Describe my surroundings/ }).uncheck();
     check("settings are saved", (await e.page.evaluate(() => JSON.parse(localStorage.getItem("assistant.settings")).narration)) === false);
     await e.browser.close();
   },
@@ -480,14 +481,14 @@ const scenarios = {
   async independentApp() {
     const e = await open();
     const res = await e.page.goto(base + "/", { waitUntil: "domcontentloaded" });
-    check("the assistant is the home page", res.status() === 200 && (await e.page.locator("h1").innerText()) === "بصيرة");
+    check("the assistant is the home page", res.status() === 200 && (await e.page.locator("h1").innerText()) === "Basira");
     const policy = res.headers()["permissions-policy"];
     check("camera and microphone allowed for this site only", policy.includes("camera=(self)") && policy.includes("microphone=(self)") && policy.includes("geolocation=()"), policy);
     for (const path of ["/dictionary", "/practice", "/studio", "/vision", "/api/sentence"]) {
       check(`nothing of the sign-language app at ${path}`, (await e.page.request.get(base + path)).status() === 404);
     }
     const html = await (await e.page.request.get(base + "/")).text();
-    check("no API key and no old branding in the page", !/AIza|sk-or-|ترجمان|الإشارة/.test(html));
+    check("no API key and no old branding in the page", !/AIza|sk-or-|ترجمان|Sign Voice/.test(html));
     await e.browser.close();
   },
 };

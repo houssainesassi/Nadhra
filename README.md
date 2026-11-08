@@ -1,4 +1,4 @@
-# بصيرة (Basira): vision assistant for blind people
+# Basira (بصيرة): vision assistant for blind people
 
 A web app for blind and visually impaired people. Point a camera at your surroundings and hear them described in Tunisian Arabic, get warnings about hazards, have text read aloud, and ask questions with your voice.
 
@@ -16,7 +16,7 @@ cp .env.example .env.local   # then add at least GEMINI_API_KEY (skip if .env.lo
 npm run dev          # http://localhost:3000
 ```
 
-Open the address, press **شعّل الكاميرا**, and accept the privacy notice. The camera and microphone only work on `http://localhost` or HTTPS, so to test on a phone, use a deployed HTTPS address.
+Open the address, press **Start camera**, and accept the privacy notice. The camera and microphone only work on `http://localhost` or HTTPS, so to test on a phone, use a deployed HTTPS address.
 
 | Command | What it does |
 |---|---|
@@ -28,20 +28,20 @@ Open the address, press **شعّل الكاميرا**, and accept the privacy no
 
 ## Using it
 
-Everything can be done without seeing the screen. The assistant speaks every state change, and short tones mark events.
+The interface is in English. **The assistant always speaks Tunisian Arabic**, including its answers to questions typed in English, and voice commands are said in Tunisian. Everything can be done without seeing the screen. The assistant speaks every state change, and short tones mark events.
 
 | Action | Button | Key | Voice |
 |---|---|---|---|
-| Camera on or off | شعّل / سكّر الكاميرا | `C` | «شعّل الكاميرا»، «سكّر الكاميرا» |
-| Hands-free microphone on or off | شعّل / سكّر المساعد الصوتي | `V` | «سكّر الميكرو» |
-| Ask one question | اسأل بالصوت | `Q` | any question, with the assistant on |
-| Pause or resume analysis | وقّف / كمّل التحليل | `P` | «وقّف التحليل»، «كمّل» |
-| Repeat the last sentence | عاود آخر جملة | `R` | «عاود» |
-| Stop talking | اسكت | `Esc` | «اسكت» |
+| Camera on or off | Start / Stop camera | `C` | «شعّل الكاميرا»، «سكّر الكاميرا» |
+| Hands-free microphone on or off | Turn on / off voice assistant | `V` | «سكّر الميكرو» |
+| Ask one question | Ask by voice | `Q` | any question, with the assistant on |
+| Pause or resume analysis | Pause / Resume analysis | `P` | «وقّف التحليل»، «كمّل» |
+| Repeat the last sentence | Repeat last sentence | `R` | «عاود» |
+| Stop talking | Stop talking | `Esc` | «اسكت» |
 
 Questions can also be asked with the ready-made buttons or by typing. Screen readers often capture letter keys in browse mode, so use their pass-through mode for the shortcuts, or use the buttons.
 
-**Set the camera direction in Settings.** It decides whether left and right are correct. A laptop webcam normally looks at you, so it is treated as a mirror: what is on the image's left is on your right. If you point the webcam away from you, choose «تشوف قدّامي».
+**Set the camera direction in Settings.** It decides whether left and right are correct. A laptop webcam normally looks at you, so it is treated as a mirror: what is on the image's left is on your right. If you point the webcam away from you, choose "Ahead of me".
 
 ## Configuration
 
@@ -79,6 +79,6 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - **The Derja is written by an AI model and spoken by a synthetic voice.** It needs review by Tunisian blind users. Browser voices that aren't `ar-TN` will pronounce it less naturally.
 - **Offline, only on-device warnings work,** and the voice works only if the device has an Arabic voice installed.
 - **Free-tier services can be busy or change.** The Edge voice in particular is an unofficial endpoint with no guarantee.
-- **Speech recognition has only been tested on synthetic speech.** Real voices, accents and noise will do worse. Check «سمعت منك» on screen when an answer seems wrong.
+- **Speech recognition has only been tested on synthetic speech.** Real voices, accents and noise will do worse. Check "I heard" on screen when an answer seems wrong.
 - **Hands-free mode treats any nearby speech as a question,** which uses quota. Use the Ask button in noisy places.
 - **Smart glasses are not supported yet.** The camera input is modular so they can be added ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#adding-another-camera)), but nothing has been tested on real glasses.

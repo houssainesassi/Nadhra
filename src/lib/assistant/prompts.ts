@@ -61,7 +61,7 @@ const SCAN_RULES = `MODE: automatic description while the user moves around.
 - If you see text, do not read it all out: mention it and offer to read it, e.g. «فمّا كتابة على الحيط، تحب نقراهالك؟». Still put the full text in "texts".`;
 
 const QUESTION_RULES = `MODE: the user asked a question about what the camera sees right now.
-- "spoken": answer that question directly, at most three short sentences. Set "changed": true.
+- "spoken": answer that question directly, at most three short sentences, always in Derja even if the question is in another language. Set "changed": true.
 - If the question is about reading or text, read all visible text word for word in its original language, in "spoken" and in "texts". If part is unreadable, say so. Do not make up the missing part.
 - If the thing they ask about is not visible, say so plainly, e.g. «ما نشوفش باب في الصورة». Do not guess where it might be.
 - Left and right in the question mean the left and right of the image.

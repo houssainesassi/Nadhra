@@ -46,9 +46,8 @@ export const ShieldIcon = (p: Props) => (
 export const CloseIcon = (p: Props) => (
   <Svg {...p}><path d="m6 6 12 12" /><path d="M18 6 6 18" /></Svg>
 );
-/** Points left: "forward" in a right-to-left page. */
 export const ForwardIcon = (p: Props) => (
-  <Svg {...p}><path d="M19 12H5" /><path d="m11 18-6-6 6-6" /></Svg>
+  <Svg {...p}><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></Svg>
 );
 export const ChevronIcon = (p: Props) => (
   <Svg {...p}><path d="m6 9 6 6 6-6" /></Svg>
