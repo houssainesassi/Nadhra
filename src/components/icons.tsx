@@ -53,6 +53,24 @@ export const ChevronIcon = (p: Props) => (
   <Svg {...p}><path d="m6 9 6 6 6-6" /></Svg>
 );
 /** The brand mark: the iris reduced to its essentials. */
+export const DescribeIcon = (p: Props) => (
+  <Svg {...p}><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="3" /></Svg>
+);
+export const ReadIcon = (p: Props) => (
+  <Svg {...p}><path d="M4 5.5h16" /><path d="M4 10h16" /><path d="M4 14.5h10" /><path d="M4 19h7" /></Svg>
+);
+export const IdentifyIcon = (p: Props) => (
+  <Svg {...p}><path d="M3.5 12.6V4.5a1 1 0 0 1 1-1h8.1a1 1 0 0 1 .7.3l7.4 7.4a1 1 0 0 1 0 1.4l-8.1 8.1a1 1 0 0 1-1.4 0l-7.4-7.4a1 1 0 0 1-.3-.7z" /><circle cx="8.5" cy="8.5" r="1.5" /></Svg>
+);
+export const HelpIcon = (p: Props) => (
+  <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2.9-1.2 1.8" /><path d="M12 16.8v.01" /></Svg>
+);
+export const PhoneIcon = (p: Props) => (
+  <Svg {...p}><path d="M5 3.5h3.2l1.6 4.2-2.2 1.4a11 11 0 0 0 5.3 5.3l1.4-2.2 4.2 1.6V17a2 2 0 0 1-2 2A14.5 14.5 0 0 1 3 5.5a2 2 0 0 1 2-2z" /></Svg>
+);
+export const MessageIcon = (p: Props) => (
+  <Svg {...p}><path d="M4 5.5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4.5 3.5v-3.5H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" /><path d="M7.5 10h9" /><path d="M7.5 13.5h6" /></Svg>
+);
 export const LogoMark = () => (
   <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="shrink-0 text-glow" aria-hidden="true">
     <circle cx="20" cy="20" r="18.5" stroke="var(--edge)" />

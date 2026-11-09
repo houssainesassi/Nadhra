@@ -43,7 +43,7 @@ test("rgbaToGray and changedFraction", () => {
   assert.equal(changedFraction(new Uint8Array(4), new Uint8Array(8)), 1);
 });
 
-const base: ScanInput = { now: 100_000, lastScanAt: 90_000, changed: 0, quality: "ok", inFlight: false, paused: false, hidden: false, backoffUntil: 0, unchangedStreak: 0, speaking: false, newObject: false, blurSince: null };
+const base: ScanInput = { now: 100_000, lastScanAt: 90_000, changed: 0, quality: "ok", inFlight: false, paused: false, hidden: false, backoffUntil: 0, unchangedStreak: 0, newObject: false, blurSince: null };
 const decide = (p: Partial<ScanInput>) => decideScan({ ...base, ...p });
 
 test("scheduler: a still scene sends nothing until the heartbeat, a change sends at once", () => {
@@ -173,6 +173,37 @@ test("speech: an urgent warning interrupts at once, and an interrupted answer re
   engine.end();
   assert.deepEqual(engine.said, ["جواب.", "رد بالك.", "جواب."], "the answer resumes");
   assert.equal(engine.maxConcurrent, 1, "never two voices");
+});
+
+test("speech: a caution warning cuts into a long reading, which resumes; it never cuts an urgent one", () => {
+  const { engine, q } = queue();
+  q.say(Array.from({ length: 40 }, (_, i) => `هذا السطر رقم ${i} من الورقة.`).join(" "), "answer"); // several distinct chunks
+  const chunk = engine.said[0];
+  q.say("فمّا عبد قدّامك.", "warning");
+  assert.deepEqual(engine.said, [chunk, "فمّا عبد قدّامك."], "played at once, not after the whole reading");
+  engine.end();
+  assert.equal(engine.said[2], chunk, "the cut chunk is read again");
+  q.say("رد بالك، درج.", "urgent");
+  q.say("فمّا كرهبة.", "warning");
+  assert.equal(engine.said[engine.said.length - 1], "رد بالك، درج.", "a warning waits for the urgent one");
+  engine.end();
+  assert.equal(engine.said[engine.said.length - 1], "فمّا كرهبة.", "then plays before the rest of the reading");
+  assert.equal(engine.maxConcurrent, 1);
+});
+
+test("speech: a caution warning goes stale quickly: an old warning is wrong about now", () => {
+  const { engine, q, advance } = queue();
+  q.setHold(true); // the user is talking
+  q.say("فمّا عبد قدّامك.", "warning");
+  advance(9_000);
+  q.setHold(false);
+  assert.equal(engine.said.length, 0);
+});
+
+test("scheduler: speech playing never holds a scan back", () => {
+  // Formerly scans paused during any speech, so a long reading also paused stairs and drop warnings.
+  assert.equal(Object.hasOwn(base, "speaking"), false);
+  assert.deepEqual(decide({ changed: 0.2 }), { send: true, reason: "change" });
 });
 
 test("speech: narration is replaced by newer narration, and goes stale", () => {
@@ -338,7 +369,7 @@ test("voice commands: short phrases match, questions don't", () => {
   assert.equal(parseCommand("سكّر الكاميرا"), "camera-off");
   assert.equal(parseCommand("شعّل الكاميرا"), "camera-on");
   assert.equal(parseCommand("موافق"), "yes");
-  assert.equal(parseCommand("شنوة قدّامي؟"), null);
+  assert.equal(parseCommand("شنوة قدّامي؟"), "front", "a main task: it can start the camera first");
   assert.equal(parseCommand("وين الكاميرا اللي سكرتها"), null);
 });
 
@@ -358,7 +389,10 @@ test("WAV encoding: valid header, length, clipping and resampling", () => {
 });
 
 test("settings: corrupted values fall back to defaults", () => {
-  assert.deepEqual(sanitizeVisionSettings({ rate: "fast", facing: "up", narration: 1, screenReaderEcho: null }), { rate: 0.9, facing: "auto", narration: true, screenReaderEcho: false });
+  assert.deepEqual(
+    sanitizeVisionSettings({ rate: "fast", facing: "up", narration: 1, screenReaderEcho: null, volume: "max", language: 3, vibration: "yes", textScale: [], emergencyName: {}, emergencyPhone: 5 }),
+    { rate: 0.9, volume: 1, facing: "auto", narration: true, screenReaderEcho: false, language: "tn", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
+  );
   assert.equal(sanitizeVisionSettings({ rate: 99 }).rate, 1.5);
   assert.equal(sanitizeVisionSettings(null).facing, "auto");
 });

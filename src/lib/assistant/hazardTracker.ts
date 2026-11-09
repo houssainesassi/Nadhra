@@ -2,6 +2,8 @@
 // an object must persist, and "approaching" comes from its apparent size growing over at least a
 // second while the camera is still. Pure logic (tests/hazardTracker.test.ts).
 import type { CameraFacing, Confidence, Hazard, HazardKind, Motion, Proximity, Side } from "./types.ts";
+import type { SpeechLang } from "./lang.ts";
+import { LOCAL_LABELS } from "./phrases.ts";
 
 export interface RawDetection {
   /** COCO class name from the detector. */
@@ -113,7 +115,7 @@ export class HazardTracker {
   private tracks: Track[] = [];
   private nextId = 1;
 
-  update(detections: RawDetection[], t: number, opts: { cameraMoving: boolean; facing: CameraFacing }): TrackerUpdate {
+  update(detections: RawDetection[], t: number, opts: { cameraMoving: boolean; facing: CameraFacing; lang?: SpeechLang }): TrackerUpdate {
     const known = detections
       .filter((d) => CLASSES[d.label] && d.score >= CLASSES[d.label].minScore)
       .sort((a, b) => b.score - a.score);
@@ -157,7 +159,7 @@ export class HazardTracker {
       const confidence: Confidence = track.hits >= CONFIRMED_HITS && track.scoreSum / track.hits >= CONFIRMED_SCORE ? "confirmed" : "likely";
       hazards.push({
         kind: info.kind,
-        label: info.ar,
+        label: LOCAL_LABELS[track.label]?.[opts.lang ?? "tn"] ?? info.ar,
         side: sideOf(track.box, opts.facing),
         proximity: proximityOf(track.box, info.kind),
         confidence,

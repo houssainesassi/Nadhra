@@ -7,7 +7,7 @@ const latin = Inter({ subsets: ["latin"], variable: "--font-latin", display: "sw
 const arabic = IBM_Plex_Sans_Arabic({ subsets: ["arabic"], weight: ["400", "500", "600"], variable: "--font-arabic", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Basira: vision assistant",
+  title: "Nadhra: vision assistant",
   description: "A voice assistant for blind and visually impaired people. It describes what the camera sees and answers spoken questions in Tunisian Arabic.",
 };
 
@@ -18,7 +18,8 @@ export const viewport: Viewport = {
 };
 
 // Applies the saved theme before paint. Dark unless the user chose light.
-const themeScript = `(function(){var t='dark';try{t=localStorage.getItem('theme')==='light'?'light':'dark'}catch(e){}document.documentElement.dataset.theme=t})()`;
+// The text size too, so large text doesn't jump in after the page has drawn.
+const themeScript = `(function(){var d=document.documentElement,t='dark';try{t=localStorage.getItem('theme')==='light'?'light':'dark';var s=JSON.parse(localStorage.getItem('assistant.settings')||'{}').textScale;if(typeof s==='number'&&s>=1&&s<=2)d.style.setProperty('--text-scale',String(s))}catch(e){}d.dataset.theme=t})()`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

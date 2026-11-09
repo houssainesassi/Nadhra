@@ -1,5 +1,7 @@
 // When to send a frame to the vision model. A request is the expensive part (battery, latency, free
 // quota), so the frame is sent only when the scene changed, with a slow heartbeat otherwise. Pure logic.
+// Speech playing never holds a frame back: during a long reading the scans are what still warn about
+// stairs and drops (the controller then speaks only their warnings, not a new description).
 import type { LocalQuality } from "./frameAnalysis.ts";
 
 export const SCHEDULE = {
@@ -28,8 +30,6 @@ export interface ScanInput {
   backoffUntil: number;
   /** Results in a row where the model reported nothing new. */
   unchangedStreak: number;
-  /** Ordinary speech is playing, so a new description would have to wait anyway. */
-  speaking: boolean;
   /** The on-device detector just found something new. */
   newObject: boolean;
   /** When the current run of blurred frames began, or null. */
@@ -54,7 +54,6 @@ export function decideScan(s: ScanInput): ScanDecision {
   if (s.quality === "blurry" && s.blurSince !== null && s.now - s.blurSince < SCHEDULE.blurWaitMs) return { send: false, reason: "waiting-for-sharp" };
   if (s.lastScanAt === -Infinity) return { send: true, reason: "first" };
   if (s.newObject) return { send: true, reason: "new-object" };
-  if (s.speaking) return { send: false, reason: "speaking" };
   if (s.changed >= SCHEDULE.changeThreshold) return { send: true, reason: "change" };
   if (elapsed >= heartbeatFor(s.unchangedStreak)) return { send: true, reason: "heartbeat" };
   return { send: false, reason: "no-change" };

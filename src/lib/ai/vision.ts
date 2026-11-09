@@ -5,7 +5,8 @@
 import "server-only";
 import { HttpError, isFreeOpenRouterModel, postJson } from "./http.ts";
 import { parseModelJson, parseTranscript, sanitizeAnalysis, swapSides } from "../assistant/schema.ts";
-import { buildUserText, TRANSCRIBE_PROMPT, VISION_SYSTEM_PROMPT } from "../assistant/prompts.ts";
+import { buildUserText, transcribePrompt, visionSystemPrompt } from "../assistant/prompts.ts";
+import type { SpeechLang } from "../assistant/lang.ts";
 import type { SceneAnalysis, VisionRequestBody, VisionStatus } from "../assistant/types.ts";
 
 export interface VisionCall {
@@ -29,7 +30,7 @@ export interface VisionProvider {
   disabledReason: string | null;
   analyze(call: VisionCall): Promise<string>;
   /** Optional: speech to text, for browsers without speech recognition. */
-  transcribe?(wavBase64: string, signal: AbortSignal): Promise<string>;
+  transcribe?(wavBase64: string, signal: AbortSignal, lang?: SpeechLang): Promise<string>;
 }
 
 const num = (v: string | undefined, def: number) => {
@@ -69,9 +70,9 @@ export function getVisionProviders(): VisionProvider[] {
         }, signal);
         return geminiText(data);
       },
-      transcribe: async (wavBase64, signal) => {
+      transcribe: async (wavBase64, signal, lang) => {
         const data = await postJson(url, { "x-goog-api-key": geminiKey }, {
-          contents: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/wav", data: wavBase64 } }, { text: TRANSCRIBE_PROMPT }] }],
+          contents: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/wav", data: wavBase64 } }, { text: transcribePrompt(lang) }] }],
           generationConfig: { temperature: 0, maxOutputTokens: 300, responseMimeType: "application/json" },
         }, signal);
         return geminiText(data);
@@ -92,7 +93,7 @@ export function getVisionProviders(): VisionProvider[] {
         const data = await postJson("https://openrouter.ai/api/v1/chat/completions", {
           Authorization: `Bearer ${orKey}`,
           "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
-          "X-Title": "Basira",
+          "X-Title": "Nadhra",
         }, {
           model: orModel,
           temperature: 0.2,
@@ -182,16 +183,18 @@ export async function analyzeImage(req: VisionRequestBody): Promise<AnalyzeResul
     recent: req.recent,
     history: req.history,
     previousAgeMs: hasMotionEvidence ? req.previousAgeMs : undefined,
+    lang: req.lang,
   });
+  const system = visionSystemPrompt(req.lang);
   const images = req.previousImage ? [req.image, req.previousImage] : [req.image];
   const out = await withFallback(
     getVisionProviders(),
     num(process.env.VISION_TIMEOUT_MS, 9_000),
     num(process.env.VISION_TOTAL_BUDGET_MS, 22_000),
     async (p, signal) => {
-      const raw = await p.analyze({ system: VISION_SYSTEM_PROMPT, text, images, maxTokens: req.mode === "scan" ? 1200 : 2500, signal });
+      const raw = await p.analyze({ system, text, images, maxTokens: req.mode === "scan" ? 1200 : 2500, signal });
       // Unusable output counts as a provider failure: the next provider gets a chance, and nothing is made up.
-      return sanitizeAnalysis(parseModelJson(raw), { mode: req.mode, cameraFacing: req.cameraFacing, hasMotionEvidence, question: req.question });
+      return sanitizeAnalysis(parseModelJson(raw), { mode: req.mode, cameraFacing: req.cameraFacing, hasMotionEvidence, question: req.question, lang: req.lang });
     },
   );
   return out.result ? { ok: true, analysis: out.result, provider: out.provider, attempts: out.attempts } : { ok: false, attempts: out.attempts };
@@ -199,9 +202,9 @@ export async function analyzeImage(req: VisionRequestBody): Promise<AnalyzeResul
 
 export type TranscribeResult = { ok: true; text: string; attempts: Attempt[] } | { ok: false; attempts: Attempt[] };
 
-export async function transcribeAudio(wavBase64: string): Promise<TranscribeResult> {
+export async function transcribeAudio(wavBase64: string, lang: SpeechLang = "tn"): Promise<TranscribeResult> {
   const providers = getVisionProviders().filter((p) => p.transcribe);
-  const out = await withFallback(providers, num(process.env.VISION_TIMEOUT_MS, 9_000), 15_000, async (p, signal) => parseTranscript(await p.transcribe!(wavBase64, signal)));
+  const out = await withFallback(providers, num(process.env.VISION_TIMEOUT_MS, 9_000), 15_000, async (p, signal) => parseTranscript(await p.transcribe!(wavBase64, signal, lang)));
   return out.result !== null ? { ok: true, text: out.result, attempts: out.attempts } : { ok: false, attempts: out.attempts };
 }
 

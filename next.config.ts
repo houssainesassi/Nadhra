@@ -4,8 +4,10 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Frame-Options", value: "DENY" },
-  // The assistant needs the camera and microphone (the browser still asks the user). Never location.
-  { key: "Permissions-Policy", value: "camera=(self), microphone=(self), geolocation=()" },
+  // The assistant needs the camera and microphone (the browser still asks the user). Location only
+  // for the Emergency page: asked for when it opens, and put only into a message the user sends.
+  // It is never sent to this app's server.
+  { key: "Permissions-Policy", value: "camera=(self), microphone=(self), geolocation=(self)" },
 ];
 
 const nextConfig: NextConfig = {

@@ -552,3 +552,47 @@ test("client: dispose() removes every event listener and closes the AudioContext
     delete (FakeAudioContext.prototype as any).close;
   }
 });
+
+test("server: other languages use their own voice, from a fixed list only", async () => {
+  sockets.length = 0;
+  script = "ok";
+  for (const [lang, voice] of [["fr", "fr-FR-DeniseNeural"], ["en", "en-US-JennyNeural"], ["ar", "ar-SA-HamedNeural"], ["xx", "ar-TN-HediNeural"], [undefined, "ar-TN-HediNeural"]] as const) {
+    sockets.length = 0;
+    const res = await handleTtsPost(post({ text: "Bonjour.", rate: 1, lang, voice: "en-US-EvilNeural" }));
+    assert.equal(res.status, 200, String(lang));
+    assert.ok(sockets[0].sent[1].includes(`<voice name='${voice}'>`), `${lang} -> ${voice}`);
+  }
+});
+
+test("client: the voice follows the speech language, and the cloud gets the language", async () => {
+  resetClient();
+  browserVoices = [{ name: "Tunisia", lang: "ar-TN" }];
+  const tts = new HybridTts();
+  await tick();
+  assert.equal(tts.voiceInfo()?.name, "Tunisia");
+  tts.setLanguage("fr");
+  assert.equal(tts.voiceInfo()?.source, "cloud", "no French voice installed: the cloud voice");
+  assert.deepEqual(tts.voiceInfo(), { name: "Microsoft Edge fr-FR-DeniseNeural", lang: "fr-FR", exactDialect: true, source: "cloud" });
+  const bodies: unknown[] = [];
+  const base = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method) bodies.push(JSON.parse(String(init.body)));
+    return base(url, init);
+  }) as typeof fetch;
+  tts.speak("Une porte / un mur.", events().opts());
+  await tick(20);
+  assert.deepEqual(bodies, [{ text: "Une porte ou un mur.", rate: 1, lang: "fr" }]);
+});
+
+test("voice choice: by speech language", async () => {
+  const { pickVoice, speechText } = await import("../src/lib/speech/tts.ts");
+  const v = (name: string, lang: string, localService = false) => ({ name, lang, localService, default: false }) as unknown as SpeechSynthesisVoice;
+  const voices = [v("Thomas", "fr-CA"), v("Amélie", "fr-FR"), v("Samantha", "en-US"), v("Tunisia", "ar-TN"), v("Maged", "ar-SA")];
+  assert.equal(pickVoice(voices, "fr")?.name, "Amélie");
+  assert.equal(pickVoice(voices, "en")?.name, "Samantha");
+  assert.equal(pickVoice(voices, "ar")?.name, "Maged", "Standard Arabic prefers a Gulf or Levant voice to a Tunisian one");
+  assert.equal(pickVoice(voices, "tn")?.name, "Tunisia");
+  assert.equal(pickVoice([v("Samantha", "en-US")], "fr"), null, "never an English voice for French");
+  assert.equal(speechText("rouge / bleu", "fr"), "rouge ou bleu");
+  assert.equal(speechText("red / blue", "en"), "red or blue");
+});

@@ -1,4 +1,5 @@
-// Types shared by the browser and the /api/vision route. No runtime code, no dependencies.
+// Types shared by the browser and the /api/vision route. No runtime code.
+import type { SpeechLang } from "./lang.ts";
 
 /** Position from the USER's point of view (already corrected for a webcam that faces the user). */
 export type Side = "left" | "center" | "right" | "unknown";
@@ -62,6 +63,8 @@ export interface VisionRequestBody {
   recent?: string[];
   /** Last question/answer pairs, for follow-ups such as «إيه، اقراها». */
   history?: { q: string; a: string }[];
+  /** The language the user hears. Tunisian when missing. */
+  lang?: SpeechLang;
 }
 
 export interface VisionResponseBody {

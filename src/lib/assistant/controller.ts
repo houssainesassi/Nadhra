@@ -5,16 +5,17 @@ import { HybridTts, type TtsEngine, type VoiceInfo } from "../speech/tts.ts";
 import { FrameBudget } from "../camera/frameBudget.ts";
 import { CameraError } from "../camera/camera.ts";
 import { analyzeFrame, fetchVisionStatus, transcribeWav, VisionApiError } from "./client.ts";
-import { parseCommand } from "./commands.ts";
+import { parseCommand, type VoiceCommand } from "./commands.ts";
 import { createCameraSource, type CameraSource, type CapturedFrame } from "./cameraSource.ts";
-import { Earcons } from "./earcons.ts";
+import { Earcons, type Earcon } from "./earcons.ts";
 import { changedFraction, classifyQuality, frameStats, rgbaToGray, type LocalQuality } from "./frameAnalysis.ts";
 import { HazardTracker } from "./hazardTracker.ts";
 import { hazardUrgency, WarningGate } from "./hazards.ts";
 import { LocalDetector } from "./localDetector.ts";
-import { CAMERA_ERRORS, SPEECH, warningPhrase } from "./phrases.ts";
+import { cameraErrorText, speech, warningPhrase, type Phrases } from "./phrases.ts";
+import { LANGS, type SpeechLang } from "./lang.ts";
 import { backoffMs, decideScan } from "./scheduler.ts";
-import { hasConsent, loadVisionSettings, saveVisionSettings, setConsent, type VisionSettings } from "./settings.ts";
+import { DEFAULT_VISION_SETTINGS, hasConsent, loadVisionSettings, RATE_CHOICES, saveVisionSettings, setConsent, VOLUME_CHOICES, type VisionSettings } from "./settings.ts";
 import { isRepeat, SpeechQueue, type SpeechPriority } from "./speechQueue.ts";
 import type { CameraFacing, Detection, Hazard, SceneAnalysis, SceneText, VisionMode, VisionStatus } from "./types.ts";
 import { RecognitionInput, RecorderInput, recognitionSupported, recordingSupported, VoiceError, type VoiceInput } from "./voiceInput.ts";
@@ -38,9 +39,28 @@ export type CameraState = "off" | "starting" | "on" | "error";
 export type AnalysisState = "off" | "watching" | "analyzing" | "paused" | "unavailable" | "poor-image" | "hidden";
 export type MicState = "off" | "listening" | "processing" | "denied" | "unavailable";
 export type DetectorState = "off" | "loading" | "ready" | "failed";
+/** The panels over the main screen. The controller owns this so voice can open and close them. */
+export type SheetName = "none" | "settings" | "privacy" | "emergency";
+/** Something the user asked for that runs once the camera is on. */
+export type Task = "front" | "describe" | "read" | "identify";
+export type LocationState = { status: "idle" | "pending" | "failed" } | { status: "ready"; lat: number; lng: number; accuracy: number };
+
+/** Vibration patterns, in ms. Short and distinct, so they can be told apart by touch. */
+const HAPTICS: Partial<Record<Earcon, number[]>> = {
+  on: [40],
+  off: [40, 80, 40],
+  listen: [25],
+  urgent: [200, 100, 200, 100, 200],
+  error: [120, 80, 120],
+};
+const CAMERA_READY_WAIT_MS = 4_000;
+/** A detector that hasn't loaded by then is treated as failed: the user must not believe it runs. */
+const DETECTOR_LOAD_TIMEOUT_MS = 20_000;
+const LOCATION_TIMEOUT_MS = 15_000;
 
 export interface VisionState {
   camera: CameraState;
+  /** A camera error code ("denied", "lost", …), or "". */
   cameraError: string;
   analysis: AnalysisState;
   mic: MicState;
@@ -66,6 +86,11 @@ export interface VisionState {
   canSwitchCamera: boolean;
   lastLatencyMs: number | null;
   scansSent: number;
+  sheet: SheetName;
+  /** Asks the screen to move focus. The id changes on every request. */
+  focus: { target: "call" | "none"; id: number };
+  location: LocationState;
+  online: boolean;
 }
 
 const INITIAL: VisionState = {
@@ -88,11 +113,15 @@ const INITIAL: VisionState = {
   voice: null,
   ttsFailed: false,
   status: null,
-  settings: { rate: 0.9, facing: "auto", narration: true, screenReaderEcho: false },
+  settings: DEFAULT_VISION_SETTINGS,
   facing: "user",
   canSwitchCamera: false,
   lastLatencyMs: null,
   scansSent: 0,
+  sheet: "none",
+  focus: { target: "none", id: 0 },
+  location: { status: "idle" },
+  online: true,
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -144,6 +173,14 @@ export class SmartVisionController {
   private disclaimerDueAt = Infinity;
   /** The user pressed Ask: routine speech waits until they have finished. */
   private pushToTalkOpen = false;
+  /** Asked for while the camera was off: runs once it is on. */
+  private pendingTask: Task | null = null;
+  private locationWatch = 0;
+  /** The camera was released because the page was hidden: it comes back when the user does. */
+  private resumeOnReturn = false;
+  /** Replaceable in tests. */
+  protected makeSource: (video: HTMLVideoElement) => CameraSource = (video) => createCameraSource("webcam", video);
+  protected detectorLoadTimeoutMs = DETECTOR_LOAD_TIMEOUT_MS;
 
   get state() {
     return this.store.get();
@@ -153,12 +190,38 @@ export class SmartVisionController {
     this.store.set({ ...this.state, ...p });
   }
 
-  attach(video: HTMLVideoElement) {
+  private get lang(): SpeechLang {
+    return this.state.settings.language;
+  }
+
+  /** What the assistant says, in the current speech language. */
+  private get t(): Phrases {
+    return speech(this.lang);
+  }
+
+  /** Offline: only claims that on-device warnings work when the detector is actually running. */
+  private get offlineText(): string {
+    return this.state.detector === "ready" ? this.t.offline : this.t.analysisDown;
+  }
+
+  /** A tone, and a vibration where the device has one and the user hasn't turned it off. */
+  private feedback(name: Earcon) {
+    this.earcons.play(name, this.state.settings.volume);
+    const pattern = HAPTICS[name];
+    if (!pattern || !this.state.settings.vibration) return;
+    try {
+      navigator.vibrate?.(pattern);
+    } catch {}
+  }
+
+  /** `deps.tts` replaces the voice, for tests. */
+  attach(video: HTMLVideoElement, deps: { tts?: TtsEngine } = {}) {
     this.video = video;
     const refreshVoice = () => this.patch({ voice: this.tts?.voiceInfo() ?? null });
-    this.tts = new HybridTts(refreshVoice);
+    this.tts = deps.tts ?? new HybridTts(refreshVoice);
     this.queue = new SpeechQueue(this.tts, {
       rate: () => this.state.settings.rate,
+      volume: () => this.state.settings.volume,
       onSpeakingChange: (speaking) => {
         if (speaking) this.lastSoundAt = Date.now();
         this.patch({ speaking });
@@ -169,7 +232,7 @@ export class SmartVisionController {
       onUtterance: (text, priority) => {
         const urgent = priority === "urgent";
         // Counts as said only once it actually plays: a dropped description may be given again.
-        if (priority === "narration" && text !== SPEECH.thinking) {
+        if (priority === "narration" && text !== this.t.thinking) {
           this.recent = [...this.recent, text].slice(-RECENT_SPOKEN);
           this.sayDisclaimerOnce(); // right after the first description
         }
@@ -177,17 +240,48 @@ export class SmartVisionController {
       },
       onFailure: (text) => {
         // The voice failed, so the screen reader takes over this sentence and the following ones.
-        this.earcons.play("error");
+        this.feedback("error");
         this.patch({ ttsFailed: true, announce: { text, urgent: false, id: this.state.announce.id + 1 } });
       },
     });
-    this.patch({ settings: loadVisionSettings(), voice: this.tts.voiceInfo() });
+    const settings = loadVisionSettings();
+    this.tts.setLanguage?.(settings.language);
+    this.patch({ settings, voice: this.tts.voiceInfo(), online: navigator.onLine !== false });
     void fetchVisionStatus().then((status) => this.patch({ status }));
 
-    const onHide = () => this.shutdown();
-    const onVisibility = () => {
-      if (!document.hidden && this.state.camera === "on") void this.requestWakeLock();
+    // A lost connection stops the cloud analysis: the user must know, and frames aren't sent for nothing.
+    const onOffline = () => {
+      if (!this.state.online) return;
+      this.patch({ online: false });
+      if (this.state.camera === "on") {
+        this.scanCtrl?.abort();
+        this.feedback("error");
+        this.say(this.offlineText, "answer");
+      }
     };
+    const onOnline = () => {
+      if (this.state.online) return;
+      this.patch({ online: true });
+      this.failures = 0;
+      this.backoffUntil = 0;
+      this.downAnnounced = false;
+      void fetchVisionStatus().then((status) => status && this.patch({ status }));
+      if (this.state.camera === "on") {
+        this.feedback("on");
+        this.say(this.t.online, "status");
+      }
+    };
+    addEventListener("offline", onOffline);
+    addEventListener("online", onOnline);
+    this.cleanups.push(() => {
+      removeEventListener("offline", onOffline);
+      removeEventListener("online", onOnline);
+    });
+
+    const onHide = () => this.shutdown();
+    // Switching apps, changing tabs or locking the phone hides the page. The camera and microphone
+    // are released then, not only when the page closes, and the camera comes back with the user.
+    const onVisibility = () => (document.hidden ? this.leaveWhileHidden() : this.returnFromHidden());
     addEventListener("pagehide", onHide);
     document.addEventListener("visibilitychange", onVisibility);
     this.cleanups.push(() => {
@@ -209,7 +303,29 @@ export class SmartVisionController {
     this.store.set(INITIAL);
   }
 
+  private leaveWhileHidden() {
+    if (this.state.camera === "on" || this.state.camera === "starting") {
+      this.resumeOnReturn = true;
+      this.releaseCamera();
+    }
+    // An open microphone in the background would keep listening. Hands-free mode stays on and
+    // starts listening again once the page is visible.
+    if (this.listening) this.voiceInput?.abort();
+    // Nothing can be watched while away: speech shouldn't carry on over another app either.
+    this.queue?.stop();
+  }
+
+  private returnFromHidden() {
+    if (!this.resumeOnReturn) return;
+    this.resumeOnReturn = false;
+    if (this.state.camera !== "off") return;
+    this.say(this.t.wasAway, "status");
+    void this.startCamera();
+  }
+
   private shutdown() {
+    this.resumeOnReturn = false;
+    this.stopLocation();
     this.stopAssistantLoop();
     this.releaseCamera();
     this.queue?.stop();
@@ -231,37 +347,37 @@ export class SmartVisionController {
     this.unlockAudio();
     if (!this.video || this.state.camera === "on" || this.state.camera === "starting") return;
     if (!hasConsent()) {
-      this.patch({ needsConsent: true });
-      this.say(SPEECH.privacy, "answer");
+      this.patch({ needsConsent: true, sheet: "none" });
+      this.say(this.t.privacy, "answer");
       return;
     }
     this.patch({ camera: "starting", cameraError: "" });
-    const source = createCameraSource("webcam", this.video);
+    const source = this.makeSource(this.video);
     const session = this.session;
     try {
       await source.start();
     } catch (e) {
       const code = e instanceof CameraError ? e.code : "unknown";
-      const message = CAMERA_ERRORS[code] ?? CAMERA_ERRORS.unknown;
-      this.patch({ camera: "error", cameraError: message });
-      this.earcons.play("error");
-      this.say(message, "answer");
+      this.pendingTask = null;
+      this.patch({ camera: "error", cameraError: code });
+      this.feedback("error");
+      this.say(cameraErrorText(this.lang, code), "answer");
       return;
     }
     if (session !== this.session) return source.stop();
 
     source.onEnded(() => {
       this.releaseCamera();
-      this.patch({ camera: "error", cameraError: SPEECH.cameraLost });
-      this.earcons.play("error");
-      this.say(SPEECH.cameraLost, "urgent");
+      this.patch({ camera: "error", cameraError: "lost" });
+      this.feedback("error");
+      this.say(this.t.cameraLost, "urgent");
     });
     this.source = source;
     this.paused = false;
     this.resetAnalysisState();
     this.patch({ camera: "on", analysis: "watching", facing: this.resolveFacing(), canSwitchCamera: false });
-    this.earcons.play("on");
-    this.say(SPEECH.cameraOn, "status");
+    this.feedback("on");
+    this.say(this.t.cameraOn, "status");
     // The user came to hear what's in front of them, so the notice follows the first description,
     // but is never skipped if that description doesn't come.
     this.disclaimerDueAt = Date.now() + DISCLAIMER_LATEST_MS;
@@ -271,6 +387,10 @@ export class SmartVisionController {
     }).catch(() => {});
     this.tickTimer = setInterval(() => this.tick(), TICK_MS);
     void this.startDetector(session);
+    if (!this.state.online) this.say(this.offlineText, "answer");
+    const task = this.pendingTask;
+    this.pendingTask = null;
+    if (task) void this.askWhenReady(task, session);
   }
 
   acceptConsent() {
@@ -282,22 +402,25 @@ export class SmartVisionController {
   }
 
   declineConsent() {
+    this.pendingTask = null;
     this.patch({ needsConsent: false });
     this.queue?.stop();
-    this.say(SPEECH.consentRefused, "answer");
+    this.say(this.t.consentRefused, "answer");
   }
 
   stopCamera() {
     this.unlockAudio();
+    this.resumeOnReturn = false;
     if (this.state.camera !== "on" && this.state.camera !== "starting") return;
     this.releaseCamera();
-    this.earcons.play("off");
+    this.feedback("off");
     this.queue?.stop();
-    this.say(SPEECH.cameraOff, "status");
+    this.say(this.t.cameraOff, "status");
   }
 
   private releaseCamera() {
     this.session++;
+    this.pendingTask = null; // asked for before a camera that was then stopped: not for the next one
     if (this.tickTimer) clearInterval(this.tickTimer);
     this.tickTimer = null;
     if (this.detectTimer) clearTimeout(this.detectTimer);
@@ -324,7 +447,7 @@ export class SmartVisionController {
       this.resetAnalysisState();
       this.patch({ facing: this.resolveFacing() });
     } catch {
-      this.say(CAMERA_ERRORS.unknown, "answer");
+      this.say(cameraErrorText(this.lang, "unknown"), "answer");
     }
   }
 
@@ -355,7 +478,7 @@ export class SmartVisionController {
   private sayDisclaimerOnce() {
     if (this.spokeDisclaimer) return;
     this.spokeDisclaimer = true;
-    this.say(SPEECH.disclaimer, "status");
+    this.say(this.t.disclaimer, "status");
   }
 
   private async requestWakeLock() {
@@ -374,8 +497,8 @@ export class SmartVisionController {
     this.scanCtrl?.abort();
     this.tracker.clear();
     this.patch({ analysis: "paused", localHazards: [] });
-    this.earcons.play("off");
-    this.say(SPEECH.paused, "status");
+    this.feedback("off");
+    this.say(this.t.paused, "status");
   }
 
   resume() {
@@ -385,8 +508,8 @@ export class SmartVisionController {
     this.lastScanAt = -Infinity; // describe the scene right away
     this.backoffUntil = 0;
     this.patch({ analysis: "watching" });
-    this.earcons.play("on");
-    this.say(SPEECH.resumed, "status");
+    this.feedback("on");
+    this.say(this.t.resumed, "status");
   }
 
   get isPaused() {
@@ -413,8 +536,9 @@ export class SmartVisionController {
     this.trackQuality(quality, now);
 
     // The older frame sent with a request: the only evidence allowed for motion claims.
+    // Offline nothing can be sent, so it isn't encoded either.
     const newestMotion = this.motionFrames[this.motionFrames.length - 1];
-    if (!newestMotion || now - newestMotion.at >= MOTION_FRAME_EVERY_MS) {
+    if (this.state.online && (!newestMotion || now - newestMotion.at >= MOTION_FRAME_EVERY_MS)) {
       const frame = source.capture(MOTION_FRAME.maxSide, MOTION_FRAME.quality);
       if (frame) this.motionFrames.push(frame);
       if (this.motionFrames.length > 3) this.motionFrames.shift();
@@ -425,12 +549,12 @@ export class SmartVisionController {
       lastScanAt: this.lastScanAt,
       changed: this.lastScanGray ? changedFraction(this.lastScanGray, gray) : 1,
       quality,
-      inFlight: !!this.scanCtrl || !!this.questionCtrl,
+      // Offline, a frame can only fail: on-device warnings keep running without it.
+      inFlight: !!this.scanCtrl || !!this.questionCtrl || !this.state.online,
       paused: false,
       hidden: false,
       backoffUntil: this.backoffUntil,
       unchangedStreak: this.unchangedStreak,
-      speaking: !!this.queue?.busy,
       newObject: this.newObject,
       blurSince: this.blurSince,
     });
@@ -440,7 +564,7 @@ export class SmartVisionController {
     // A long silence shouldn't feel like the assistant has died: a soft tone says it's still running.
     if (now - this.lastSoundAt > ALIVE_AFTER_SILENCE_MS && !this.queue?.busy) {
       this.lastSoundAt = now;
-      this.earcons.play("alive");
+      this.earcons.play("alive", this.state.settings.volume);
     }
   }
 
@@ -448,7 +572,7 @@ export class SmartVisionController {
     const poor = quality === "dark" || quality === "bright" || quality === "flat";
     if (!poor) {
       if (this.poorQuality?.announced) {
-        this.say(SPEECH.imageBack, "status");
+        this.say(this.t.imageBack, "status");
         this.patch({ analysis: "watching" });
       }
       this.poorQuality = null;
@@ -458,7 +582,7 @@ export class SmartVisionController {
     if (!this.poorQuality.announced && now - this.poorQuality.since >= QUALITY_ANNOUNCE_AFTER_MS) {
       this.poorQuality.announced = true;
       this.patch({ analysis: "poor-image" });
-      this.say(quality === "dark" ? SPEECH.tooDark : SPEECH.obstructed, "answer");
+      this.say(quality === "dark" ? this.t.tooDark : this.t.obstructed, "answer");
     }
   }
 
@@ -485,6 +609,7 @@ export class SmartVisionController {
         image: frame.base64,
         ...this.pickMotionFrame(frame.at),
         cameraFacing: this.state.facing,
+        lang: this.lang,
         recent: this.recent,
       }, ctrl.signal);
       if (session !== this.session || ctrl.signal.aborted) return;
@@ -509,8 +634,8 @@ export class SmartVisionController {
     this.backoffUntil = 0;
     if (this.downAnnounced) {
       this.downAnnounced = false;
-      this.earcons.play("on");
-      this.say(SPEECH.analysisBack, "status");
+      this.feedback("on");
+      this.say(this.t.analysisBack, "status");
     }
   }
 
@@ -520,13 +645,14 @@ export class SmartVisionController {
     this.backoffUntil = Date.now() + backoffMs(this.failures, err.retryAfterMs);
     if (err.code === "not-configured") {
       this.backoffUntil = Date.now() + 5 * 60_000;
-      if (!this.downAnnounced) this.say(SPEECH.aiNotConfigured, "answer");
+      if (!this.downAnnounced) this.say(this.t.aiNotConfigured, "answer");
       this.downAnnounced = true;
-    } else if (this.failures >= FAILURES_BEFORE_ANNOUNCE && !this.downAnnounced) {
+    } else if (this.failures >= FAILURES_BEFORE_ANNOUNCE && !this.downAnnounced && this.state.online) {
       // The user must not believe they're still being watched over when they aren't.
+      // (Offline was already announced, with what still works.)
       this.downAnnounced = true;
-      this.earcons.play("error");
-      this.say(SPEECH.analysisDown, "answer");
+      this.feedback("error");
+      this.say(this.t.analysisDown, "answer");
     }
   }
 
@@ -537,6 +663,9 @@ export class SmartVisionController {
       this.say(analysis.spoken, "answer");
       return;
     }
+    // Scans keep running during a reading, for their warnings. Their description would only wait
+    // behind the reading and be stale by then, so it is dropped.
+    if (this.queue?.hasAtLeast("answer")) return;
     if (this.state.settings.narration && analysis.changed && analysis.spoken && !isRepeat(analysis.spoken, this.recent)) {
       this.say(analysis.spoken, "narration");
     }
@@ -549,28 +678,43 @@ export class SmartVisionController {
       if (urgentOnly && urgency !== "urgent") continue;
       if (!this.gate.admit(hazard, urgency, now)) continue;
       if (urgency === "urgent") {
-        this.earcons.play("urgent");
-        try {
-          navigator.vibrate?.([120, 60, 120]);
-        } catch {}
-        this.say(warningPhrase(hazard), "urgent");
+        this.feedback("urgent");
+        this.say(warningPhrase(hazard, this.lang), "urgent");
       } else {
-        this.say(warningPhrase(hazard), "answer");
+        this.say(warningPhrase(hazard, this.lang), "warning");
       }
     }
   }
 
   // --- on-device detector ----------------------------------------------------------------------
 
+  /**
+   * The detector stopped or never started. The cloud analysis may still work, so the page keeps
+   * running, but the user is told out loud: a blind user can't see the status list.
+   */
+  private detectorFailed(session: number, why: string) {
+    console.warn("[vision] on-device detector unavailable:", why);
+    this.detector.close(); // a broken instance isn't reused: the next camera start loads a new one
+    if (session !== this.session) return;
+    this.patch({ detector: "failed", localHazards: [] });
+    this.tracker.clear();
+    this.feedback("error");
+    this.say(this.state.online ? this.t.detectorFailed : this.t.analysisDown, "warning");
+  }
+
   private async startDetector(session: number) {
     this.patch({ detector: "loading" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await this.detector.load();
+      await Promise.race([
+        this.detector.load(),
+        new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("load timed out")), this.detectorLoadTimeoutMs))),
+      ]);
     } catch (e) {
-      // The cloud analysis still works without it, so the page keeps running.
-      console.warn("[vision] on-device detector unavailable:", (e as Error).message);
-      if (session === this.session) this.patch({ detector: "failed" });
+      this.detectorFailed(session, (e as Error).message);
       return;
+    } finally {
+      clearTimeout(timer);
     }
     if (session !== this.session) return;
     this.patch({ detector: "ready" });
@@ -582,13 +726,12 @@ export class SmartVisionController {
         try {
           const raw = this.detector.detect(video, now);
           this.budget.record(performance.now() - now, performance.now());
-          const { hazards, newObject } = this.tracker.update(raw, now, { cameraMoving: this.motion > CAMERA_MOVING_FRACTION, facing: this.state.facing });
+          const { hazards, newObject } = this.tracker.update(raw, now, { cameraMoving: this.motion > CAMERA_MOVING_FRACTION, facing: this.state.facing, lang: this.lang });
           if (newObject) this.newObject = true;
           this.speakHazards(hazards, false);
           if (JSON.stringify(hazards) !== JSON.stringify(this.state.localHazards)) this.patch({ localHazards: hazards });
         } catch (e) {
-          console.warn("[vision] on-device detection failed:", (e as Error).message);
-          this.patch({ detector: "failed" });
+          this.detectorFailed(session, (e as Error).message);
           return;
         }
       }
@@ -605,13 +748,18 @@ export class SmartVisionController {
     if (!q) return;
     const source = this.source;
     if (!source || this.state.camera !== "on") {
-      this.earcons.play("error");
-      this.say(SPEECH.cameraNeeded, "answer");
+      this.feedback("error");
+      this.say(this.t.cameraNeeded, "answer");
       return;
     }
     const frame = source.capture(QUESTION_FRAME.maxSide, QUESTION_FRAME.quality);
     if (!frame) {
-      this.say(SPEECH.questionFailed, "answer");
+      this.say(this.t.questionFailed, "answer");
+      return;
+    }
+    if (!this.state.online) {
+      this.feedback("error");
+      this.say(this.offlineText, "answer");
       return;
     }
     this.scanCtrl?.abort(); // the question is more important than the running description
@@ -621,7 +769,7 @@ export class SmartVisionController {
     this.questionCtrl = ctrl;
     this.lastScanAt = frame.at;
     this.queue?.stop();
-    this.say(SPEECH.thinking, "narration"); // the answer may cut this off
+    this.say(this.t.thinking, "narration"); // the answer may cut this off
     this.patch({ analysis: "analyzing", scansSent: this.state.scansSent + 1 });
     try {
       const res = await analyzeFrame({
@@ -629,6 +777,7 @@ export class SmartVisionController {
         image: frame.base64,
         ...this.pickMotionFrame(frame.at),
         cameraFacing: this.state.facing,
+        lang: this.lang,
         question: q,
         history: this.history,
       }, ctrl.signal);
@@ -638,9 +787,9 @@ export class SmartVisionController {
       this.history = [...this.history, { q, a: res.analysis.spoken }].slice(-3);
     } catch (e) {
       if (session !== this.session || ctrl.signal.aborted) return;
-      this.earcons.play("error");
+      this.feedback("error");
       const err = e instanceof VisionApiError ? e : null;
-      this.say(err?.code === "not-configured" ? SPEECH.aiNotConfigured : err?.status === 429 || err?.code === "rate-limited" ? SPEECH.rateLimited : SPEECH.questionFailed, "answer");
+      this.say(err?.code === "not-configured" ? this.t.aiNotConfigured : err?.status === 429 || err?.code === "rate-limited" ? this.t.rateLimited : this.t.questionFailed, "answer");
     } finally {
       if (this.questionCtrl === ctrl) this.questionCtrl = null;
       if (session === this.session && this.state.analysis === "analyzing") this.patch({ analysis: this.paused ? "paused" : "watching" });
@@ -655,7 +804,121 @@ export class SmartVisionController {
   repeat() {
     this.unlockAudio();
     this.queue?.stop();
-    this.say(this.state.lastSpoken || SPEECH.nothingToRepeat, "answer");
+    this.say(this.state.lastSpoken || this.t.nothingToRepeat, "answer");
+  }
+
+  // --- tasks, help, going back --------------------------------------------------------------------
+
+  /** One of the main actions. Starts the camera first when it is off, then asks. */
+  async runTask(task: Task) {
+    this.unlockAudio();
+    if (this.state.camera === "on") return this.ask(this.t.ask[task]);
+    this.pendingTask = task;
+    if (this.state.camera !== "starting") await this.startCamera();
+  }
+
+  /** The camera has just started: its first frames can take a moment to arrive. */
+  private async askWhenReady(task: Task, session: number) {
+    const until = Date.now() + CAMERA_READY_WAIT_MS;
+    while (session === this.session && !this.source?.capture(64, 0.5) && Date.now() < until) await sleep(150);
+    if (session === this.session) await this.ask(this.t.ask[task]);
+  }
+
+  help() {
+    this.unlockAudio();
+    this.queue?.stop();
+    this.say(this.t.help, "answer");
+  }
+
+  /** Closes the open panel, or cancels the question being answered, or stops the voice. */
+  goBack() {
+    this.unlockAudio();
+    if (this.state.sheet !== "none") {
+      this.closeSheet();
+      this.queue?.stop();
+      this.say(this.t.closed, "status");
+      return;
+    }
+    const busy = !!this.questionCtrl || this.listening || !!this.queue?.busy;
+    this.questionCtrl?.abort();
+    if (this.listening && !this.state.assistantOn) this.voiceInput?.abort();
+    this.queue?.stop();
+    if (busy) this.say(this.t.cancelled, "status");
+  }
+
+  openSheet(sheet: Exclude<SheetName, "none">) {
+    this.unlockAudio();
+    this.patch({ sheet });
+    if (sheet !== "emergency") return;
+    this.queue?.stop();
+    this.feedback("listen");
+    this.say(this.t.emergency, "answer");
+    if (!this.state.settings.emergencyPhone) this.say(this.t.noContact, "answer");
+    this.locate();
+  }
+
+  /**
+   * The screen calls this when a panel closes, however it was closed. A dialog's close event comes
+   * late, so it only counts when that panel is still the current one, not one opened just after.
+   */
+  closeSheet(which: SheetName = this.state.sheet) {
+    if (which !== this.state.sheet || which === "none") return;
+    if (which === "emergency") this.stopLocation();
+    this.patch({ sheet: "none" });
+  }
+
+  /**
+   * Browsers only open the phone app from a real tap, so a voice command can't place the call.
+   * It selects the call button, which a screen reader user activates with one double-tap.
+   */
+  requestCall() {
+    if (this.state.sheet !== "emergency") return this.openSheet("emergency");
+    if (!this.state.settings.emergencyPhone) return this.say(this.t.noContact, "answer");
+    this.patch({ focus: { target: "call", id: this.state.focus.id + 1 } });
+    this.queue?.stop();
+    this.say(this.t.calling, "answer");
+  }
+
+  /** The location is only put into the message on this device. It is never sent to our server. */
+  private locate() {
+    if (!("geolocation" in navigator)) return this.patch({ location: { status: "failed" } });
+    const watch = ++this.locationWatch;
+    this.patch({ location: { status: "pending" } });
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (watch !== this.locationWatch) return;
+        this.patch({ location: { status: "ready", lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy } });
+      },
+      () => {
+        if (watch !== this.locationWatch) return;
+        this.patch({ location: { status: "failed" } });
+      },
+      { enableHighAccuracy: true, timeout: LOCATION_TIMEOUT_MS, maximumAge: 60_000 },
+    );
+  }
+
+  private stopLocation() {
+    this.locationWatch++;
+    if (this.state.location.status !== "idle") this.patch({ location: { status: "idle" } });
+  }
+
+  /** The text of the emergency message, with a map link when the location is known. */
+  emergencyMessage(): string {
+    const loc = this.state.location;
+    return loc.status === "ready" ? `${this.t.sms} https://maps.google.com/?q=${loc.lat.toFixed(5)},${loc.lng.toFixed(5)}` : this.t.smsNoLocation;
+  }
+
+  /** Steps through the fixed choices, and says so at either end. */
+  private step(key: "rate" | "volume", direction: 1 | -1) {
+    const choices: readonly number[] = key === "rate" ? RATE_CHOICES : VOLUME_CHOICES;
+    const current = this.state.settings[key];
+    const index = choices.findIndex((c) => c >= current - 0.001);
+    const next = choices[Math.min(choices.length - 1, Math.max(0, (index < 0 ? choices.length - 1 : index) + direction))];
+    this.queue?.stop();
+    if (next === current) return this.say(this.t.limit, "answer");
+    this.updateSettings({ [key]: next });
+    const t = this.t;
+    this.say(key === "rate" ? (direction > 0 ? t.faster : t.slower) : direction > 0 ? t.louder : t.quieter, "answer");
   }
 
   // --- voice input -----------------------------------------------------------------------------
@@ -663,7 +926,7 @@ export class SmartVisionController {
   private pickVoiceInput(): VoiceInput | null {
     const wantRecorder = this.forceRecorder || !recognitionSupported();
     if (!wantRecorder) {
-      if (this.voiceInput?.kind !== "recognition") this.voiceInput = new RecognitionInput();
+      if (this.voiceInput?.kind !== "recognition") this.voiceInput = new RecognitionInput(() => LANGS[this.lang].recognition);
     } else if (recordingSupported() && this.state.status?.canTranscribe) {
       if (this.voiceInput?.kind !== "recording") this.voiceInput = new RecorderInput();
     } else {
@@ -672,23 +935,33 @@ export class SmartVisionController {
     return this.voiceInput;
   }
 
+  /** "Stop listening": only ever turns hands-free mode off, whichever way it was said. */
+  stopAssistant() {
+    this.unlockAudio();
+    if (this.state.assistantOn) {
+      this.stopAssistantLoop();
+      this.feedback("off");
+    }
+    this.say(this.t.assistantOff, "status");
+  }
+
   toggleAssistant() {
     this.unlockAudio();
     if (this.state.assistantOn) {
       this.stopAssistantLoop();
-      this.earcons.play("off");
-      this.say(SPEECH.assistantOff, "status");
+      this.feedback("off");
+      this.say(this.t.assistantOff, "status");
       return;
     }
     if (!this.pickVoiceInput()) {
       this.patch({ mic: "unavailable" });
-      this.earcons.play("error");
-      this.say(SPEECH.voiceUnavailable, "answer");
+      this.feedback("error");
+      this.say(this.t.voiceUnavailable, "answer");
       return;
     }
     this.patch({ assistantOn: true });
-    this.earcons.play("on");
-    this.say(SPEECH.assistantOn, "status");
+    this.feedback("on");
+    this.say(this.t.assistantOn, "status");
     void this.assistantLoop(++this.loopGen);
   }
 
@@ -702,6 +975,11 @@ export class SmartVisionController {
     while (gen === this.loopGen && this.state.assistantOn) {
       if (this.queue?.busy || this.questionCtrl || document.hidden || this.listening) {
         await sleep(200);
+        continue;
+      }
+      // Speech recognition is an online service: retrying it offline only fails, and drains the battery.
+      if (!this.state.online) {
+        await sleep(1_000);
         continue;
       }
       await this.listenOnce(false);
@@ -725,7 +1003,7 @@ export class SmartVisionController {
     const input = this.pickVoiceInput();
     if (!input) {
       this.patch({ mic: "unavailable" });
-      if (pushToTalk) this.say(SPEECH.voiceUnavailable, "answer");
+      if (pushToTalk) this.say(this.t.voiceUnavailable, "answer");
       return;
     }
     this.listening = true;
@@ -733,7 +1011,7 @@ export class SmartVisionController {
     if (pushToTalk) {
       this.pushToTalkOpen = true;
       this.queue?.setHold(true);
-      this.earcons.play("listen");
+      this.feedback("listen");
     }
     try {
       const result = await input.listen({
@@ -749,7 +1027,8 @@ export class SmartVisionController {
       this.listening = false;
       if (result.kind === "none") {
         this.patch({ mic: "off" });
-        if (pushToTalk) this.say(SPEECH.noQuestionHeard, "answer");
+        // Aborted because the user left the app: there is nobody to tell.
+        if (pushToTalk && !document.hidden) this.say(this.t.noQuestionHeard, "answer");
         return;
       }
       if (result.kind === "text") {
@@ -758,10 +1037,10 @@ export class SmartVisionController {
         return;
       }
       this.patch({ mic: "processing" });
-      const { text } = await transcribeWav(result.wavBase64);
+      const { text } = await transcribeWav(result.wavBase64, this.lang);
       this.patch({ mic: "off" });
       if (text) await this.handleUtterance(text);
-      else if (pushToTalk) this.say(SPEECH.noQuestionHeard, "answer");
+      else if (pushToTalk) this.say(this.t.noQuestionHeard, "answer");
     } catch (e) {
       this.listening = false;
       await this.handleVoiceError(e, pushToTalk);
@@ -775,69 +1054,110 @@ export class SmartVisionController {
 
   private async handleVoiceError(e: unknown, pushToTalk: boolean) {
     const code = e instanceof VoiceError ? e.code : e instanceof VisionApiError ? "api" : "unknown";
+    if ((code === "service" || code === "api") && (!this.state.online || navigator.onLine === false)) {
+      // Offline, not a browser without speech service: don't switch to recording for good.
+      this.patch({ mic: "off" });
+      if (pushToTalk) this.say(this.offlineText, "answer");
+      return;
+    }
     if (code === "service" && !this.forceRecorder && recordingSupported() && this.state.status?.canTranscribe) {
       // The browser has the API but its speech service doesn't answer (Brave, Chromium builds).
       this.forceRecorder = true;
       this.pushToTalkOpen = false;
       this.queue?.setHold(false);
-      this.say(SPEECH.voiceFallback, "status");
-      if (pushToTalk) {
-        // Records only after the notice, or it would record itself and be cut off by it.
-        while (this.queue?.busy) await sleep(100);
-        await this.listenOnce(true);
+      if (!pushToTalk) {
+        this.say(this.t.voiceFallback, "status");
+        return;
       }
+      // The user is waiting to talk: only this notice plays first. It must finish, or the recording
+      // would capture it, but routine speech must not keep the microphone closed behind it.
+      this.queue?.stop();
+      this.say(this.t.voiceFallback, "status");
+      this.queue?.setHold(true);
+      while (this.queue?.busy) await sleep(100);
+      await this.listenOnce(true);
       return;
     }
     if (code === "api") {
       this.patch({ mic: "off" });
-      if (pushToTalk || !this.queue?.busy) this.say(SPEECH.questionFailed, "answer");
+      if (pushToTalk || !this.queue?.busy) this.say(this.t.questionFailed, "answer");
       return;
     }
     if (code === "unknown") {
       // Usually a brief conflict with a recognition session that hasn't fully ended.
       this.patch({ mic: "off" });
-      if (pushToTalk) this.say(SPEECH.questionFailed, "answer");
+      if (pushToTalk) this.say(this.t.questionFailed, "answer");
       return;
     }
     const denied = code === "denied";
     this.stopAssistantLoop();
     this.patch({ mic: denied ? "denied" : "unavailable" });
-    this.earcons.play("error");
-    this.say(denied ? SPEECH.micDenied : code === "missing" ? SPEECH.micMissing : SPEECH.voiceUnavailable, "answer");
+    this.feedback("error");
+    this.say(denied ? this.t.micDenied : code === "missing" ? this.t.micMissing : this.t.voiceUnavailable, "answer");
   }
 
   private async handleUtterance(text: string) {
     const heard = text.trim();
     if (heard.length < 2) return;
     this.patch({ lastHeard: heard });
-    switch (parseCommand(heard)) {
-      case "stop-speech":
-        return this.stopSpeech();
-      case "repeat":
-        return this.repeat();
-      case "pause":
-        return this.pause();
-      case "resume":
-        return this.resume();
-      case "camera-off":
-        return this.stopCamera();
-      case "camera-on":
-        return this.startCamera();
-      case "assistant-off":
-        return this.toggleAssistant();
-      case "yes":
-        if (this.state.needsConsent) return this.acceptConsent();
-        break;
-    }
+    const command = parseCommand(heard);
+    if (command && this.runCommand(command)) return;
     await this.ask(heard);
+  }
+
+  /** False when the words should go to the model as a question after all. */
+  private runCommand(command: VoiceCommand): boolean {
+    switch (command) {
+      case "stop-speech": return (this.stopSpeech(), true);
+      case "repeat": return (this.repeat(), true);
+      case "pause": return (this.pause(), true);
+      case "resume": return (this.resume(), true);
+      case "camera-off": return (this.stopCamera(), true);
+      case "camera-on": return (void this.startCamera(), true);
+      case "assistant-off": return (this.stopAssistant(), true);
+      case "help": return (this.help(), true);
+      case "back": return (this.goBack(), true);
+      case "front":
+      case "describe":
+      case "read":
+      case "identify":
+        return (void this.runTask(command), true);
+      case "emergency": return (this.openSheet("emergency"), true);
+      case "call": return (this.requestCall(), true);
+      case "louder": return (this.step("volume", 1), true);
+      case "quieter": return (this.step("volume", -1), true);
+      case "faster": return (this.step("rate", 1), true);
+      case "slower": return (this.step("rate", -1), true);
+      case "yes":
+        // Otherwise a follow-up («yes, read it») for the model.
+        if (!this.state.needsConsent) return false;
+        this.acceptConsent();
+        return true;
+      default: {
+        const lang = command.slice(5) as SpeechLang;
+        this.updateSettings({ language: lang });
+        return true;
+      }
+    }
   }
 
   // --- settings --------------------------------------------------------------------------------
 
   updateSettings(p: Partial<VisionSettings>) {
-    const settings = { ...this.state.settings, ...p };
+    const before = this.state.settings;
+    const settings = { ...before, ...p };
     saveVisionSettings(settings);
     this.patch({ settings });
+    if (p.language && p.language !== before.language) {
+      // Earlier sentences were in the other language: the model mustn't continue in it.
+      this.recent = [];
+      this.history = [];
+      this.gate.clear();
+      this.queue?.stop();
+      this.tts?.setLanguage?.(p.language);
+      this.patch({ voice: this.tts?.voiceInfo() ?? null, ttsFailed: false });
+      this.say(this.t.languageSet, "answer");
+    }
     if (p.facing) {
       this.tracker.clear();
       this.gate.clear();

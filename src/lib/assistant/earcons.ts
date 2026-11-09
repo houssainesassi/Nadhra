@@ -24,11 +24,13 @@ export class Earcons {
     } catch {}
   }
 
-  play(name: Earcon) {
+  /** scale: the speech volume setting, so tones stay in proportion to the voice. */
+  play(name: Earcon, scale = 1) {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return;
     try {
-      const volume = name === "alive" ? 0.04 : 0.15;
+      // An urgent warning stays audible even at the lowest volume setting.
+      const volume = (name === "alive" ? 0.04 : 0.15) * (name === "urgent" ? Math.max(scale, 0.8) : scale);
       for (const [frequency, start, duration] of TONES[name]) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();

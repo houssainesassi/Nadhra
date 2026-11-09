@@ -1,8 +1,5 @@
-// Minimal external store for high-frequency values (live prediction ~10/s, fps): components
-// subscribe with useStore() so only the small widget that shows the value re-renders, not the
-// whole page.
-import { useSyncExternalStore } from "react";
-
+// Minimal external store. The controller writes to it; the screen subscribes with useStore()
+// (src/lib/useStore.ts). Kept free of React so the controller can run in unit tests.
 export interface Store<T> {
   get(): T;
   set(v: T): void;
@@ -24,8 +21,4 @@ export function createStore<T>(initial: T): Store<T> {
       return () => subs.delete(fn);
     },
   };
-}
-
-export function useStore<T>(store: Store<T>): T {
-  return useSyncExternalStore(store.subscribe, store.get, store.get);
 }

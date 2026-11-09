@@ -63,7 +63,9 @@
 html {
   background: var(--canvas);
   color: var(--ink);
-  font-size: 18px;
+  /* 18px at the browser default, and larger when the user has set a larger default font size there.
+     --text-scale is the app's own Text size setting. */
+  font-size: calc(112.5% * var(--text-scale, 1));
   scrollbar-gutter: stable;
 }
 
@@ -145,6 +147,18 @@ button {
 }
 .control-listening:hover {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--listen) 30%, transparent);
+}
+
+/* A thick red edge, not a red area: a large red area only ever means a warning. */
+.control-emergency {
+  border: 3px solid var(--alert-glow);
+  color: var(--ink);
+}
+.control-emergency svg {
+  color: var(--alert-glow);
+}
+.control-emergency:hover {
+  background: var(--raised);
 }
 
 .control-quiet {

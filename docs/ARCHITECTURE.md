@@ -30,11 +30,12 @@ Two layers on purpose. The **cloud model** understands the scene: rooms, stairs,
 | `src/lib/assistant/cameraSource.ts` | Camera interface and webcam implementation |
 | `src/lib/assistant/frameAnalysis.ts`, `scheduler.ts` | Is this frame usable, and is it worth sending? |
 | `src/lib/assistant/schema.ts` | Cleans model output, and enforces the safety rules |
-| `src/lib/assistant/hazards.ts`, `phrases.ts` | How serious a hazard is, and the wording of warnings |
+| `src/lib/assistant/hazards.ts`, `phrases.ts` | How serious a hazard is, and everything the assistant says, in each language |
 | `src/lib/assistant/hazardTracker.ts`, `localDetector.ts` | On-device detection across frames |
 | `src/lib/assistant/speechQueue.ts` | One voice at a time, by priority |
 | `src/lib/assistant/voiceInput.ts`, `commands.ts`, `wav.ts` | Hearing the user |
-| `src/lib/assistant/prompts.ts` | Model instructions |
+| `src/lib/assistant/prompts.ts` | Model instructions, per speech language |
+| `src/lib/assistant/lang.ts` | The four speech languages: recognition, voices, lang attributes |
 | `src/lib/ai/vision.ts` | Server only: providers and fallback |
 | `src/lib/speech/` | Voice output: browser voice first, Edge voice as fallback |
 | `src/lib/server/http.ts` | Body limits, same-origin check, rate limiter |
@@ -60,6 +61,8 @@ The prompt asks the model to behave, but these hold whatever it writes:
 - **The on-device detector needs persistence.** At least 3 sightings before anything is reported; "approaching" needs growth over at least a second with a still camera.
 - **Unusable or failed results are never filled in.** The user is told the analysis is down.
 
+The rules in `schema.ts` cover all four speech languages. Adding a language means adding its safety, distance and negation patterns there, and tests in `tests/languages.test.ts`.
+
 When you change these, add a test: they are the part of this app that can hurt someone if wrong.
 
 ## Left and right
@@ -76,11 +79,11 @@ Add an entry to `getVisionProviders()` in `src/lib/ai/vision.ts`. It must return
 
 ## Frame selection
 
-Frames go out at most every 4 s, when more than 8 % of pixels changed, when the detector finds something new, or on a heartbeat that slows from 20 s to 80 s while nothing changes. Dark, overexposed or featureless frames aren't sent. Blurred frames wait up to 6 s for a sharper one. Limits are in `scheduler.ts`.
+Frames go out at most every 4 s, when more than 8 % of pixels changed, when the detector finds something new, or on a heartbeat that slows from 20 s to 80 s while nothing changes. Dark, overexposed or featureless frames aren't sent. Blurred frames wait up to 6 s for a sharper one. Limits are in `scheduler.ts`. Speech playing never holds a frame back: during a long reading, scans keep running for their warnings, and their description is dropped.
 
 ## Speech priority
 
-`urgent` interrupts everything, and what it cuts off resumes afterwards (except narration). `answer` interrupts narration only. `status` waits and isn't lost. `narration` is replaced by newer narration and dropped when stale. While the user is talking, or has pressed Ask, only urgent warnings play.
+`urgent` interrupts everything, and what it cuts off resumes afterwards (except narration). `warning` (caution-level hazards) interrupts answers and below, never an urgent warning, and goes stale after 8 s. An interrupted reading resumes from the part that was cut, before the rest. `answer` interrupts narration only. `status` waits and isn't lost. `narration` is replaced by newer narration and dropped when stale. While the user is talking, or has pressed Ask, only urgent warnings play.
 
 ## Browser tests
 
@@ -91,6 +94,13 @@ Frames go out at most every 4 s, when more than 8 % of pixels changed, when the 
 python e2e/make_vision_camera.py photos fixtures
 npm run build && npx next start -p 3100
 npm run e2e -- fixtures http://localhost:3100 screenshots
+```
+
+Three scenarios mock every vision and voice request and need no photos and no quota: `hiddenReleasesCamera`, `detectorFailureSpoken` and `readingInterruptedByWarning`.
+
+```bash
+python3 e2e/make_synthetic_camera.py fixtures   # Pillow; ffmpeg for silence.mp3
+ONLY=hiddenReleasesCamera,detectorFailureSpoken,readingInterruptedByWarning npm run e2e -- fixtures http://localhost:3100
 ```
 
 Set `AXE=/path/to/axe.min.js` to include automated accessibility checks, and `ONLY=scenarioA,scenarioB` to run some scenarios.

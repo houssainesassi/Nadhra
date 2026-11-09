@@ -3,9 +3,12 @@
 //   CloudTts   – free Microsoft Edge neural voice (MP3) through our server route /api/tts (no key)
 //   HybridTts  – browser Arabic voice first, cloud voice when none is installed or it fails
 // Keep the interface small so another engine (e.g. a local neural TTS) can be plugged in.
+import { CLOUD_VOICES, LANGS, type SpeechLang } from "../assistant/lang.ts";
 
 export interface SpeakOptions {
   rate: number;
+  /** 0..1, default 1. */
+  volume?: number;
   /** false = queue after the current sentence instead of cutting it off (default true). */
   interrupt?: boolean;
   onPreparing?: () => void;
@@ -24,7 +27,7 @@ export interface VoiceInfo {
 export interface TtsEngine {
   readonly name: string;
   available(): boolean;
-  /** Best voice description for UI, or null if no Arabic voice is usable. */
+  /** Best voice description for UI, or null if no voice for the language is usable. */
   voiceInfo(): VoiceInfo | null;
   /** True while the engine is still finding out which voice it can use. */
   checking?(): boolean;
@@ -32,19 +35,19 @@ export interface TtsEngine {
   unlock?(): void;
   speak(text: string, opts: SpeakOptions): void;
   stop(): void;
+  /** The language to speak from now on. Tunisian until called. */
+  setLanguage?(lang: SpeechLang): void;
   /** Stop and release everything (event listeners, audio context). The engine is unusable afterwards. */
   dispose?(): void;
 }
-
-const PREFERRED = ["ar-TN", "ar-DZ", "ar-MA", "ar-LY", "ar-SA", "ar-EG", "ar"];
 
 /**
  * Text as it should be read aloud: labels like «خال / عم» are read «خال أو عم» (not "slash"),
  * Latin punctuation and symbols a voice would spell out are removed, whitespace collapsed.
  */
-export function speechText(text: string): string {
+export function speechText(text: string, lang: SpeechLang = "tn"): string {
   return text
-    .replace(/\s*\/\s*/g, " أو ")
+    .replace(/\s*\/\s*/g, ` ${LANGS[lang].or} `)
     .replace(/[()[\]{}<>«»"“”_*#|~^]/g, " ")
     .replace(/\s+([،؟.!,?])/g, "$1")
     .replace(/\s+/g, " ")
@@ -58,15 +61,18 @@ export class BrowserTts implements TtsEngine {
   readonly name = "browser-speechsynthesis";
   private voice: SpeechSynthesisVoice | null = null;
   private cleanup: (() => void)[] = [];
+  private lang: SpeechLang = "tn";
+  private repick: () => void = () => {};
 
   constructor(onVoicesChanged?: () => void) {
     if (!this.available()) return;
-    const pick = () => (this.voice = pickArabicVoice(speechSynthesis.getVoices(), { offline: typeof navigator !== "undefined" && navigator.onLine === false }));
+    const pick = () => (this.voice = pickVoice(speechSynthesis.getVoices(), this.lang, { offline: typeof navigator !== "undefined" && navigator.onLine === false }));
     pick();
     const repick = () => {
       pick();
       onVoicesChanged?.();
     };
+    this.repick = repick;
     // Voices often load asynchronously (Chrome/Android): notify when they arrive.
     if (typeof speechSynthesis.addEventListener === "function") {
       speechSynthesis.addEventListener("voiceschanged", repick);
@@ -88,13 +94,19 @@ export class BrowserTts implements TtsEngine {
     for (const fn of this.cleanup.splice(0)) fn();
   }
 
+  setLanguage(lang: SpeechLang) {
+    if (lang === this.lang) return;
+    this.lang = lang;
+    this.repick();
+  }
+
   available() {
     return typeof window !== "undefined" && "speechSynthesis" in window;
   }
 
   voiceInfo(): VoiceInfo | null {
     if (!this.voice) return null;
-    return { name: this.voice.name, lang: this.voice.lang, exactDialect: this.voice.lang.toLowerCase() === "ar-tn", source: "browser" };
+    return { name: this.voice.name, lang: this.voice.lang, exactDialect: exactDialect(this.voice.lang, this.lang), source: "browser" };
   }
 
   /** onFailure: return true when the caller handles a real synthesis failure (e.g. cloud fallback). */
@@ -102,10 +114,11 @@ export class BrowserTts implements TtsEngine {
     const { rate, onStart, onEnd, onError } = opts;
     if (!this.available()) return onError?.("Speech synthesis is not supported in this browser.");
     if (opts.interrupt !== false || !speechSynthesis.speaking) speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(speechText(text));
-    u.lang = this.voice?.lang ?? "ar-SA";
+    const u = new SpeechSynthesisUtterance(speechText(text, this.lang));
+    u.lang = this.voice?.lang ?? LANGS[this.lang].recognition;
     if (this.voice) u.voice = this.voice;
     u.rate = rate;
+    u.volume = clampVolume(opts.volume);
     u.onstart = () => onStart?.();
     u.onend = () => onEnd?.();
     u.onerror = (e) => {
@@ -121,17 +134,30 @@ export class BrowserTts implements TtsEngine {
   }
 }
 
-export function pickArabicVoice(voices: SpeechSynthesisVoice[], { offline = false } = {}): SpeechSynthesisVoice | null {
-  let ar = voices.filter((v) => v.lang.toLowerCase().replace("_", "-").startsWith("ar"));
-  // offline: only voices installed on the device can speak
-  if (offline && ar.some((v) => v.localService)) ar = ar.filter((v) => v.localService);
-  const norm = (l: string) => l.toLowerCase().replace("_", "-");
-  for (const pref of PREFERRED) {
-    const same = ar.filter((v) => norm(v.lang) === pref.toLowerCase());
-    if (same.length) return same.find((v) => v.default) ?? same.find((v) => v.localService) ?? same[0];
-  }
-  return ar[0] ?? null;
+const norm = (l: string) => l.toLowerCase().replace("_", "-");
+const clampVolume = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1);
+
+/** Tunisian needs an ar-TN voice to be exact. The other languages only need the same language. */
+function exactDialect(voiceLang: string, lang: SpeechLang): boolean {
+  const l = norm(voiceLang);
+  return lang === "tn" ? l === "ar-tn" : l.split("-")[0] === LANGS[lang].bcp47.split("-")[0];
 }
+
+/** The best installed voice for a speech language, or null when there is none in that language. */
+export function pickVoice(voices: SpeechSynthesisVoice[], lang: SpeechLang, { offline = false } = {}): SpeechSynthesisVoice | null {
+  const prefs = LANGS[lang].voices;
+  const base = prefs[prefs.length - 1];
+  let same = voices.filter((v) => norm(v.lang).split("-")[0] === base);
+  // offline: only voices installed on the device can speak
+  if (offline && same.some((v) => v.localService)) same = same.filter((v) => v.localService);
+  for (const pref of prefs) {
+    const match = same.filter((v) => norm(v.lang) === pref.toLowerCase());
+    if (match.length) return match.find((v) => v.default) ?? match.find((v) => v.localService) ?? match[0];
+  }
+  return same[0] ?? null;
+}
+
+export const pickArabicVoice = (voices: SpeechSynthesisVoice[], opts: { offline?: boolean } = {}) => pickVoice(voices, "tn", opts);
 
 // ---------------------------------------------------------------------------
 // Cloud voice
@@ -163,6 +189,7 @@ export class CloudTts implements TtsEngine {
   private state: CloudState = "checking";
   private voiceName = "";
   private lang = "ar";
+  private speechLang: SpeechLang = "tn";
   private readyPromise: Promise<void>;
   private ctx: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
@@ -237,7 +264,17 @@ export class CloudTts implements TtsEngine {
 
   voiceInfo(): VoiceInfo | null {
     if (this.state !== "ready") return null;
+    if (this.speechLang !== "tn") {
+      const voice = CLOUD_VOICES[this.speechLang];
+      return { name: `Microsoft Edge ${voice}`, lang: voice.split("-").slice(0, 2).join("-"), exactDialect: true, source: "cloud" };
+    }
     return { name: `Microsoft Edge ${this.voiceName}`, lang: this.lang, exactDialect: this.lang.toLowerCase() === "ar-tn", source: "cloud" };
+  }
+
+  setLanguage(lang: SpeechLang) {
+    if (lang === this.speechLang) return;
+    this.speechLang = lang;
+    this.onChange?.();
   }
 
   private context(): AudioContext {
@@ -263,7 +300,8 @@ export class CloudTts implements TtsEngine {
   }
 
   private fetchAudio(text: string, rate: number): Promise<ArrayBuffer> {
-    const key = `${rate.toFixed(1)}|${text}`;
+    const lang = this.speechLang;
+    const key = `${lang}|${rate.toFixed(1)}|${text}`;
     const hit = this.cache.get(key);
     if (hit) {
       this.cache.delete(key); // LRU: move to the end
@@ -277,7 +315,7 @@ export class CloudTts implements TtsEngine {
         res = await fetch(this.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: speechText(text), rate }),
+          body: JSON.stringify(lang === "tn" ? { text: speechText(text), rate } : { text: speechText(text, lang), rate, lang }),
           cache: "no-store",
           signal: AbortSignal.timeout(15_000),
         });
@@ -330,7 +368,14 @@ export class CloudTts implements TtsEngine {
         await new Promise<void>((resolve) => {
           const src = ctx.createBufferSource();
           src.buffer = buffer;
-          src.connect(ctx.destination);
+          const volume = clampVolume(opts.volume);
+          if (volume < 1) {
+            const gain = ctx.createGain();
+            gain.gain.value = volume;
+            src.connect(gain).connect(ctx.destination);
+          } else {
+            src.connect(ctx.destination);
+          }
           src.onended = () => {
             if (this.source === src) this.source = null;
             opts.onEnd?.();
@@ -406,6 +451,12 @@ export class HybridTts implements TtsEngine {
     this.cloud.unlock(); // also covers a later fallback from a failing browser voice
   }
 
+  setLanguage(lang: SpeechLang) {
+    this.stop();
+    this.browser.setLanguage(lang);
+    this.cloud.setLanguage(lang);
+  }
+
   speak(text: string, opts: SpeakOptions) {
     if (this.browser.voiceInfo()) {
       this.cloud.stop();
@@ -430,7 +481,7 @@ export class HybridTts implements TtsEngine {
       this.cloud.speak(text, opts);
       return;
     }
-    // No Arabic voice and no cloud voice: previous behaviour (browser default voice).
+    // No voice for the language and no cloud voice: the browser's default voice.
     this.browser.speak(text, opts);
   }
 

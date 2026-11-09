@@ -57,6 +57,12 @@ async function open({ camera = "street", audio, grant = true, device = grant, vi
     if (facing) localStorage.setItem("assistant.settings", JSON.stringify({ facing }));
     // Keeps a handle on the camera tracks, to prove they get released.
     window.__tracks = [];
+    // Every sentence the assistant starts to say, in order (the "Last said" caption).
+    window.__captions = [];
+    new MutationObserver(() => {
+      const t = document.querySelector('[data-testid="last-spoken"]')?.textContent?.trim();
+      if (t && t !== window.__captions[window.__captions.length - 1]) window.__captions.push(t);
+    }).observe(document, { subtree: true, childList: true, characterData: true });
     const orig = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
     if (orig) navigator.mediaDevices.getUserMedia = async (c) => {
       const s = await orig(c);
@@ -94,11 +100,44 @@ async function open({ camera = "street", audio, grant = true, device = grant, vi
 
 const said = (env, text) => env.tts.some((t) => t.includes(text));
 
+const scene = (p) => ({ spoken: "", changed: false, imageQuality: "good", environment: null, detections: [], hazards: [], texts: [], uncertain: false, ...p });
+
+/**
+ * Every vision and voice request answered in the browser: no Gemini quota, no Microsoft voice.
+ * The voice is a real 3 s silent MP3, so speech takes time as it does on a phone.
+ */
+async function mockServices(e, onPost = () => scene({})) {
+  const silence = existsSync(join(fixtures, "silence.mp3")) ? readFileSync(join(fixtures, "silence.mp3")) : null;
+  await e.ctx.route("**/api/vision", (route) => {
+    const r = route.request();
+    if (r.method() !== "POST") return route.fulfill({ json: { available: true, providers: [{ id: "mock", label: "Mock" }], canTranscribe: false } });
+    return route.fulfill({ json: { analysis: onPost(JSON.parse(r.postData())), provider: "mock", latencyMs: 1 } });
+  });
+  await e.ctx.route("**/api/tts", (route) => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: { configured: true, voice: "mock", languageCode: "ar-TN" } });
+    return silence ? route.fulfill({ body: silence, contentType: "audio/mpeg" }) : route.fulfill({ status: 503, json: { error: "mock" } });
+  });
+}
+
+/** What the browser does when the user switches apps or tabs. Headless Chromium can't really leave. */
+async function setHidden(page, hidden) {
+  await page.evaluate((hidden) => {
+    if (hidden) {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    } else {
+      delete document.hidden;
+      delete document.visibilityState;
+    }
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+}
+
 const scenarios = {
   async consentAndPrivacy() {
     const e = await open({ consent: false });
     const focused = await e.page.evaluate(() => document.activeElement?.textContent);
-    check("page opens with focus on the Start button", focused === "Start camera", focused);
+    check("page opens with focus on the Start button", focused === "Start assistance", focused);
     await e.page.keyboard.press("Enter");
     const dialog = e.page.getByRole("dialog");
     await dialog.waitFor();
@@ -109,7 +148,7 @@ const scenarios = {
     await e.button("I don't agree").click();
     await sleep(800);
     check("refusing keeps the camera off", (await e.statusOf("camera-status")) === "Off" && (await e.page.evaluate(() => window.__tracks.length)) === 0);
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await e.button("I agree").click();
     check("accepting starts the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "On")));
     await e.browser.close();
@@ -127,7 +166,7 @@ const scenarios = {
     check(`no automated accessibility violations${process.env.AXE ? "" : " (axe not supplied, skipped)"}`, violations.length === 0, violations.join(" | "));
 
     const t0 = Date.now();
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
     check("camera status is on", (await e.statusOf("camera-status")) === "On");
     const firstInfo = await until(() => e.tts.some((t) => /شارع|كرهب|كراهب|موتور|عباد|شخص/.test(t)), 15_000);
@@ -207,7 +246,7 @@ const scenarios = {
 
   async leavingReleasesCamera() {
     const e = await open();
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
     // The event a browser fires when the user leaves. The page is gone after a real navigation, so
     // its tracks can't be inspected then.
@@ -237,7 +276,7 @@ const scenarios = {
 
   async permissionDenied() {
     const e = await open({ grant: false, device: true });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     const alert = await until(async () => { const a = e.page.locator('[role="alert"]', { hasText: "permission" }); return (await a.count()) ? a.first().innerText() : null; }, 10_000);
     check("a refused camera is explained", !!alert, alert);
     check("status shows the problem", (await e.statusOf("camera-status")) === "Problem");
@@ -248,7 +287,7 @@ const scenarios = {
 
   async noCamera() {
     const e = await open({ grant: true, device: false });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     const said = await until(() => e.tts.some((t) => t.includes("ما لقيتش كاميرا")), 10_000);
     check("a missing camera is explained", !!said, e.tts.join(" | "));
     await e.browser.close();
@@ -256,7 +295,7 @@ const scenarios = {
 
   async darkRoom() {
     const e = await open({ camera: "dark" });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     const warned = await until(() => e.tts.some((t) => t.includes("مظلمة")), 15_000);
     check("too dark: the user is told", !!warned, e.tts.join(" | "));
     await sleep(6000);
@@ -269,7 +308,7 @@ const scenarios = {
     const analysis = { spoken: "إنت في بلاصة كبيرة وفيها برشة حاجات.", changed: true, imageQuality: "good", environment: null, detections: [], texts: [], uncertain: false,
       hazards: [{ kind: "stairs", label: "درج", side: "center", proximity: "near", confidence: "confirmed", motion: "unknown" }, { kind: "stairs", label: "درج", side: "left", proximity: "near", confidence: "uncertain", motion: "unknown" }] };
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST" ? route.fulfill({ json: { analysis, provider: "mock", latencyMs: 1 } }) : route.continue()));
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     const ok = await until(() => e.tts.some((t) => t.includes("رد بالك، فمّا درج قدّامك")), 20_000);
     check("(mocked API) a confirmed hazard gives the firm warning", !!ok, e.tts.join(" | "));
     // Right away: the next sentence replaces it on screen once it has been spoken.
@@ -286,7 +325,7 @@ const scenarios = {
   async aiFailure() {
     const e = await open();
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST" ? route.fulfill({ status: 503, json: { error: "ai-unavailable" } }) : route.continue()));
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     const warned = await until(() => e.tts.some((t) => t.includes("التحليل واقف")), 35_000);
     check("(mocked API) when the AI is down, the user is told not to rely on it", !!warned, e.tts.join(" | "));
     check("(mocked API) nothing is made up", !e.tts.some((t) => /قدّامك|شارع/.test(t)), e.tts.join(" | "));
@@ -300,7 +339,7 @@ const scenarios = {
   async approaching() {
     const e = await open({ camera: "approaching", facing: "outward" });
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST" ? route.fulfill({ status: 503, json: { error: "ai-unavailable" } }) : route.continue()));
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     const seen = [];
     const hit = await until(async () => {
       const box = e.page.getByTestId("local-hazards");
@@ -338,18 +377,19 @@ const scenarios = {
       };
     };
     const e = await open({ init, facing: "outward" });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
-    await e.button("Turn on voice assistant").click();
+    await e.button("Voice commands").click();
     const q = await until(() => e.api.find((a) => a.mode === "question"), 45_000); // the mic waits for speech to finish
     check("voice question reaches the vision API with a frame", q?.question === "شنوة قدّامي؟", JSON.stringify(q));
     check("recognition language is Tunisian Arabic", (await e.page.evaluate(() => window.__rec.lang)) === "ar-TN");
-    check("the interface is English while the assistant speaks Tunisian", (await e.page.locator("html").getAttribute("lang")) === "en" && (await e.page.getByTestId("last-spoken").getAttribute("lang")) === "ar");
+    check("the interface is English while the assistant speaks Tunisian", (await e.page.locator("html").getAttribute("lang")) === "en" && (await e.page.getByTestId("last-spoken").getAttribute("lang")) === "ar-TN");
     check("what was heard is shown", (await e.page.locator("text=I heard").innerText().catch(() => "")).includes("شنوة قدّامي"));
     const answered = await until(() => e.tts.some((t) => /شارع|كراهب|كرهبة|موتور|عباد/.test(t)), 25_000);
     check("the spoken answer follows", !!answered, e.tts.join(" | "));
     check("the loop keeps listening", (await e.page.evaluate(() => window.__rec.started)) >= 2 || !!(await until(() => e.page.evaluate(() => window.__rec.started >= 2), 20_000)));
-    await e.button("Turn off voice assistant").click();
+    check("the voice commands toggle reports its state", (await e.button("Voice commands").getAttribute("aria-pressed")) === "true");
+    await e.button("Voice commands").click();
     await sleep(500);
     check("the mic can be turned off", (await e.statusOf("mic-status")) === "Off");
     await e.browser.close();
@@ -393,14 +433,14 @@ const scenarios = {
     const e = await open({ audio, facing: "outward", init });
     const transcribes = [];
     e.page.on("response", async (r) => { if (r.url().endsWith("/api/vision/transcribe")) transcribes.push(`${r.status()} ${await r.text().catch(() => "")}`); });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
     await e.button("Ask by voice").click();
     const fell = await until(() => e.tts.some((t) => t.includes("نسجّل صوتك")), 15_000);
     check("without a speech service it falls back to recording, and says so", !!fell, e.tts.join(" | "));
     const q = await until(() => e.api.find((a) => a.mode === "question"), 40_000);
     console.log("      transcribe:", transcribes.join(" | "));
-    check("recorded speech is transcribed and asked with a frame", !!q, JSON.stringify(q));
+    check("recorded speech is transcribed and asked with a frame", !!q, q ? JSON.stringify(q) : `spoken: ${e.tts.join(" | ")}; mic: ${await e.statusOf("mic-status")}`);
     check("the transcript matches the spoken question", /شنو/.test(q?.question ?? "") && /قد.?ام/.test(q?.question ?? ""), q?.question);
     const tracks = await until(() => e.page.evaluate(() => { const a = window.__tracks.filter((t) => t.kind === "audio"); return a.length > 0 && a.every((t) => t.readyState === "ended"); }), 8000);
     check("the microphone is released after the question", !!tracks);
@@ -421,7 +461,7 @@ const scenarios = {
     await e.ctx.route("**/api/vision", (route) => (route.request().method() === "POST"
       ? route.fulfill({ json: { analysis: { spoken: JSON.parse(route.request().postData()).mode === "question" ? "الباب على يمينك." : "إنت في شارع.", changed: true, imageQuality: "good", environment: null, detections: [], hazards: [], texts: [], uncertain: false }, provider: "mock", latencyMs: 1 } })
       : route.continue()));
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
     await e.button("Ask by voice").click();
     const q = await until(() => e.api.find((a) => a.mode === "question"), 15_000);
@@ -439,16 +479,16 @@ const scenarios = {
       };
     };
     const e = await open({ audio: join(fixtures, "question.wav"), facing: "outward", init });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
-    await e.button("Turn on voice assistant").click();
+    await e.button("Voice commands").click();
     check("a service that ends instantly falls back to recording", !!(await until(() => e.tts.some((t) => t.includes("نسجّل صوتك")), 50_000)), e.tts.join(" | "));
     await e.browser.close();
   },
 
   async mobile() {
     const e = await open({ viewport: { width: 390, height: 844 } });
-    await e.button("Start camera").click();
+    await e.button("Start assistance").click();
     await until(async () => (await e.statusOf("camera-status")) === "On");
     const overflow = await e.page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
     check("phone width: no sideways scrolling", overflow <= 0, `${overflow}px`);
@@ -478,12 +518,77 @@ const scenarios = {
     await e.browser.close();
   },
 
+  // --- Safety and lifecycle, fully mocked: run with fixtures from make_synthetic_camera.py ------
+
+  async hiddenReleasesCamera() {
+    const e = await open({ camera: "synthetic", facing: "outward" });
+    await mockServices(e);
+    await e.button("Start assistance").click();
+    check("(mocked API) camera starts", !!(await until(async () => (await e.statusOf("camera-status")) === "On")));
+    await setHidden(e.page, true); // switching apps, changing tabs or locking the phone
+    await sleep(500);
+    const states = await e.page.evaluate(() => window.__tracks.map((t) => t.readyState));
+    check("hiding the page releases the camera hardware", states.length > 0 && states.every((s) => s === "ended"), states.join(","));
+    check("the screen says the camera is off", (await e.statusOf("camera-status")) === "Off");
+    const sent = e.api.length;
+    await sleep(5000);
+    check("no frame is sent while hidden", e.api.length === sent, `${e.api.length - sent} sent`);
+    await setHidden(e.page, false);
+    check("returning turns the camera back on", !!(await until(async () => (await e.statusOf("camera-status")) === "On", 10_000)));
+    const live = await e.page.evaluate(() => window.__tracks.filter((t) => t.readyState === "live").length);
+    check("with a new camera stream", live === 1, `${live} live`);
+    check("and the user is told the camera was off", !!(await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("الكاميرا تسكّرت وقت اللي خرجت"))), 10_000)));
+    await e.browser.close();
+  },
+
+  async detectorFailureSpoken() {
+    const e = await open({ camera: "synthetic", facing: "outward" });
+    await mockServices(e);
+    await e.ctx.route("**/mediapipe/**", (route) => route.abort());
+    await e.button("Start assistance").click();
+    const told = await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("التحذيرات اللي في الجهاز ما تخدمش"))), 25_000);
+    check("(mocked API) a detector that can't load is announced out loud", !!told, (await e.page.evaluate(() => window.__captions)).join(" | "));
+    check("(mocked API) and the status says so", (await until(async () => (await e.page.getByText("Failed, cloud analysis only").count()) > 0, 5000)) !== null);
+    await e.browser.close();
+  },
+
+  async readingInterruptedByWarning() {
+    const e = await open({ camera: "synthetic", facing: "outward" });
+    const reading = Array.from({ length: 30 }, (_, i) => `هذا السطر رقم ${i + 1} من الورقة اللي قدّامك ومكتوب فيه كلام طويل شوية.`).join(" ");
+    let readingStarted = false;
+    const stairs = { kind: "stairs", label: "درج", side: "center", proximity: "near", confidence: "confirmed", motion: "unknown" };
+    await mockServices(e, (body) =>
+      body.mode === "question"
+        ? scene({ spoken: reading, changed: true })
+        : scene({ hazards: readingStarted ? [stairs] : [], spoken: readingStarted ? "وصف جديد ما لازمش يتقال." : "", changed: true }),
+    );
+    await e.button("Start assistance").click();
+    await until(async () => (await e.statusOf("camera-status")) === "On");
+    await sleep(1500);
+    await e.button("Read text").click();
+    readingStarted = !!(await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("السطر رقم 1 "))), 30_000));
+    check("(mocked API) the reading starts", readingStarted);
+    const scansBefore = e.api.filter((a) => a.mode === "scan").length;
+    const warned = await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("رد بالك، فمّا درج قدّامك"))), 25_000, 100);
+    const caps = await e.page.evaluate(() => window.__captions);
+    check("(mocked API) frames are still sent while the reading plays", e.api.filter((a) => a.mode === "scan").length > scansBefore);
+    const w = caps.findIndex((c) => c.includes("رد بالك، فمّا درج قدّامك"));
+    check("(mocked API) the urgent warning is spoken during the reading", !!warned, caps.join(" | ").slice(0, 300));
+    check("(mocked API) before the reading had finished", w > 0 && !caps.slice(0, w).some((c) => c.includes("السطر رقم 30 ")), caps.slice(0, w + 1).map((c) => c.slice(0, 25)).join(" | "));
+    await until(() => e.page.evaluate((w) => window.__captions.slice(w + 1).some((c) => c.includes("السطر رقم")), w), 20_000);
+    const after = await e.page.evaluate(() => window.__captions);
+    const resumed = after.slice(w + 1).find((c) => c.includes("السطر رقم"));
+    check("(mocked API) the reading then resumes from the interrupted part", !!resumed && resumed === after.slice(0, w).reverse().find((c) => c.includes("السطر رقم")), resumed?.slice(0, 40));
+    check("(mocked API) a new description isn't queued behind the reading", !after.some((c) => c.includes("وصف جديد")));
+    await e.browser.close();
+  },
+
   async independentApp() {
     const e = await open();
     const res = await e.page.goto(base + "/", { waitUntil: "domcontentloaded" });
-    check("the assistant is the home page", res.status() === 200 && (await e.page.locator("h1").innerText()) === "Basira");
+    check("the assistant is the home page", res.status() === 200 && (await e.page.locator("h1").innerText()) === "Nadhra");
     const policy = res.headers()["permissions-policy"];
-    check("camera and microphone allowed for this site only", policy.includes("camera=(self)") && policy.includes("microphone=(self)") && policy.includes("geolocation=()"), policy);
+    check("camera, microphone and location (Emergency page) allowed for this site only", policy.includes("camera=(self)") && policy.includes("microphone=(self)") && policy.includes("geolocation=(self)") && !/\*/.test(policy), policy);
     for (const path of ["/dictionary", "/practice", "/studio", "/vision", "/api/sentence"]) {
       check(`nothing of the sign-language app at ${path}`, (await e.page.request.get(base + path)).status() === 404);
     }

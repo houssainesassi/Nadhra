@@ -1,5 +1,5 @@
 // Hearing the user. Two implementations behind one interface:
-//   RecognitionInput  the browser's SpeechRecognition, set to Tunisian Arabic (Chrome, Edge, Safari)
+//   RecognitionInput  the browser's SpeechRecognition, in the chosen speech language (Chrome, Edge, Safari)
 //   RecorderInput     records with the microphone and lets the server transcribe (Firefox, Brave,
 //                     Chromium builds whose speech service doesn't answer)
 import { bytesToBase64, downsample, encodeWav } from "./wav.ts";
@@ -69,6 +69,12 @@ export class RecognitionInput implements VoiceInput {
   private active: RecognitionLike | null = null;
   private aborted = false;
   private instantEnds = 0;
+  private lang: () => string;
+
+  /** lang: read at each listen(), so a language change applies to the next sentence. */
+  constructor(lang: () => string = () => "ar-TN") {
+    this.lang = lang;
+  }
 
   listen(hooks: ListenHooks = {}): Promise<VoiceResult> {
     const Ctor = recognitionClass();
@@ -76,7 +82,7 @@ export class RecognitionInput implements VoiceInput {
     return new Promise((resolve, reject) => {
       const rec = new Ctor();
       this.active = rec;
-      rec.lang = "ar-TN";
+      rec.lang = this.lang();
       rec.continuous = false;
       rec.interimResults = false;
       rec.maxAlternatives = 1;

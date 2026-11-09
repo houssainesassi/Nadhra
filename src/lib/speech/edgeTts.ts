@@ -8,6 +8,7 @@
 import "server-only";
 import { CHROMIUM_MAJOR_VERSION, SEC_MS_GEC_VERSION, TRUSTED_CLIENT_TOKEN, secMsGec } from "./edgeDrm.ts";
 import { clientKey, isSameOrigin, RateLimiter, readJsonBody } from "../server/http.ts";
+import { CLOUD_VOICES, isSpeechLang } from "../assistant/lang.ts";
 
 export const MAX_TTS_CHARS = 500; // a recognized sentence is far shorter; the service splits at 4096 bytes
 export const DEFAULT_VOICE = "ar-TN-HediNeural"; // Tunisian Arabic (male); ar-TN-ReemNeural = female
@@ -236,12 +237,16 @@ export async function handleTtsPost(req: Request): Promise<Response> {
   const c = ttsConfig();
   if (!c.enabled) return json(503, { error: "not-configured" });
   if (!isSameOrigin(req)) return json(403, { error: "forbidden" });
-  const parsed = await readJsonBody<{ text?: unknown; rate?: unknown } | null>(req, 4096);
+  const parsed = await readJsonBody<{ text?: unknown; rate?: unknown; lang?: unknown } | null>(req, 4096);
   if (!parsed.ok) return json(parsed.status, { error: parsed.error });
   const body = parsed.value;
   const v = validateTtsText(body?.text);
   if (!v.ok) return json(400, { error: v.error });
   const rate = normalizeRate(body?.rate);
+  // Only voices from a fixed list: the client chooses a language, never a voice name.
+  const lang = isSpeechLang(body?.lang) ? body.lang : "tn";
+  const voice = lang === "tn" ? c.voice : CLOUD_VOICES[lang];
+  const vc: TtsConfig = { ...c, voice, languageCode: voice.split("-").slice(0, 2).join("-") };
 
   const now = Date.now();
   if (cooldownUntil > now) {
@@ -254,11 +259,11 @@ export async function handleTtsPost(req: Request): Promise<Response> {
   try {
     let audio: Uint8Array;
     try {
-      audio = await synthesize(v.text, rate, c, ctrl.signal);
+      audio = await synthesize(v.text, rate, vc, ctrl.signal);
     } catch (e) {
       // A refused handshake is often transient (or a token window edge): one fresh attempt.
       if (!(e instanceof UpstreamError && e.kind === "handshake")) throw e;
-      audio = await synthesize(v.text, rate, c, ctrl.signal);
+      audio = await synthesize(v.text, rate, vc, ctrl.signal);
     }
     consecutiveFailures = 0;
     return new Response(audio as BodyInit, {

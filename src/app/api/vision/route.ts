@@ -2,6 +2,7 @@
 import { analyzeImage, visionStatus, type Attempt } from "../../../lib/ai/vision.ts";
 import { clientKey, isSameOrigin, RateLimiter, readJsonBody } from "../../../lib/server/http.ts";
 import type { CameraFacing, VisionMode, VisionRequestBody } from "../../../lib/assistant/types.ts";
+import { isSpeechLang } from "../../../lib/assistant/lang.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,7 @@ export async function POST(req: Request) {
     previousImage: isJpegBase64(raw.previousImage) && previousAgeMs ? raw.previousImage : undefined,
     previousAgeMs,
     cameraFacing,
+    lang: isSpeechLang(raw.lang) ? raw.lang : "tn",
     question: question || undefined,
     recent: shortStrings(raw.recent, 4),
     history: Array.isArray(raw.history)

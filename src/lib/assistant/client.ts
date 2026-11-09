@@ -1,5 +1,6 @@
 // Browser side of the API routes.
 import type { VisionRequestBody, VisionResponseBody, VisionStatus } from "./types.ts";
+import type { SpeechLang } from "./lang.ts";
 
 export class VisionApiError extends Error {
   status: number;
@@ -37,7 +38,7 @@ async function postJson<T>(url: string, body: unknown, signal: AbortSignal | und
 
 export const analyzeFrame = (body: VisionRequestBody, signal?: AbortSignal) => postJson<VisionResponseBody>("/api/vision", body, signal, 27_000);
 
-export const transcribeWav = (wavBase64: string) => postJson<{ text: string }>("/api/vision/transcribe", { audio: wavBase64 }, undefined, 19_000);
+export const transcribeWav = (wavBase64: string, lang: SpeechLang = "tn") => postJson<{ text: string }>("/api/vision/transcribe", { audio: wavBase64, lang }, undefined, 19_000);
 
 export async function fetchVisionStatus(): Promise<VisionStatus | null> {
   try {

@@ -1,13 +1,15 @@
 // One voice at a time, most important sentence first. Sits on top of any TtsEngine.
 //   urgent    interrupts everything; whatever it cut off (except narration) resumes afterwards
+//   warning   a caution-level hazard: interrupts answers (a long reading) and below, which then
+//             resume; it never interrupts an urgent warning, and goes stale fast
 //   answer    interrupts narration only
 //   status    waits its turn, and isn't lost: it can be the safety notice or "the analysis is back"
 //   narration waits, is replaced by a newer description, and is dropped once stale
 import { normalizeArabic, splitSentences } from "./schema.ts";
 import type { TtsEngine } from "../speech/tts.ts";
 
-export type SpeechPriority = "urgent" | "answer" | "status" | "narration";
-const RANK: Record<SpeechPriority, number> = { narration: 0, status: 1, answer: 2, urgent: 3 };
+export type SpeechPriority = "urgent" | "warning" | "answer" | "status" | "narration";
+const RANK: Record<SpeechPriority, number> = { narration: 0, status: 1, answer: 2, warning: 3, urgent: 4 };
 
 interface Item {
   text: string;
@@ -17,6 +19,8 @@ interface Item {
 
 export interface SpeechQueueOptions {
   rate: () => number;
+  /** 0..1, default 1. */
+  volume?: () => number;
   onSpeakingChange?: (speaking: boolean) => void;
   /** A sentence starts playing. */
   onUtterance?: (text: string, priority: SpeechPriority) => void;
@@ -63,7 +67,7 @@ export class SpeechQueue {
     this.engine = engine;
     this.opts = opts;
     this.now = opts.now ?? Date.now;
-    this.ttl = { narration: 15_000, status: 20_000, answer: 120_000, urgent: 6_000, ...opts.ttlMs };
+    this.ttl = { narration: 15_000, status: 20_000, answer: 120_000, warning: 8_000, urgent: 6_000, ...opts.ttlMs };
   }
 
   get busy() {
@@ -91,12 +95,14 @@ export class SpeechQueue {
     this.pending.splice(index, 0, ...items);
 
     const current = this.current;
-    const interrupts = priority === "urgent" ? current?.priority !== "urgent" : priority === "answer" && current?.priority === "narration";
+    // Safety first: a warning never waits behind a reading. Below that, only narration gets cut.
+    const interrupts = !!current && (rank >= RANK.warning ? RANK[current.priority] < rank : priority === "answer" && current.priority === "narration");
     if (current && interrupts) {
       this.cancelCurrent();
-      // Resumes after the warning, in order. Interrupted narration is simply dropped.
+      // Resumes after the warning, in order: before the rest of its own reading, not after it.
+      // Interrupted narration is simply dropped.
       if (current.priority !== "narration") {
-        const after = this.pending.findIndex((i) => RANK[i.priority] < RANK[current.priority]);
+        const after = this.pending.findIndex((i) => RANK[i.priority] <= RANK[current.priority]);
         this.pending.splice(after < 0 ? this.pending.length : after, 0, current);
       }
     }
@@ -167,6 +173,7 @@ export class SpeechQueue {
     try {
       this.engine.speak(item.text, {
         rate,
+        volume: this.opts.volume?.() ?? 1,
         interrupt: true,
         onEnd: finish,
         onError: (message) => {
