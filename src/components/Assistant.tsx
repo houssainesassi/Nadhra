@@ -122,7 +122,7 @@ function irisState(s: VisionState): IrisState {
   if (s.lastUrgent && s.speaking) return "urgent";
   if (s.mic === "listening") return "listening";
   if (s.speaking) return "speaking";
-  if (s.analysis === "analyzing" || s.mic === "processing") return "thinking";
+  if (s.analysis === "analyzing" || s.mic === "processing" || s.answer.live) return "thinking";
   if (s.camera === "on" && s.analysis !== "paused") return "watching";
   return "idle";
 }
@@ -305,6 +305,13 @@ export default function Assistant() {
               </p>
             )}
             {s.lastHeard && <p className="quiet-text mt-3 text-base text-ink-2">I heard: <span dir="auto">«{s.lastHeard}»</span></p>}
+            {/* The whole answer, growing while it streams in. Not a live region: the voice already says it. */}
+            {s.answer.text && (s.answer.live || s.answer.text !== shownSentence) && (
+              <div className="mt-3 text-base text-ink-2" data-testid="answer-text" data-live={s.answer.live}>
+                <span className="quiet-text">{s.answer.live ? "Answer so far" : s.answer.web ? "Answer (from a web search)" : "Answer"}: </span>
+                <span lang={LANGS[s.answer.lang ?? s.settings.language].bcp47} dir={LANGS[s.answer.lang ?? s.settings.language].dir} className={LANGS[s.answer.lang ?? s.settings.language].dir === "rtl" ? "arabic" : ""}>{s.answer.text}</span>
+              </div>
+            )}
           </section>
 
           {s.cameraError && <p role="alert" className="rounded-2xl bg-alert p-4 text-lg font-medium text-alert-ink">{CAMERA_ERROR_LABEL[s.cameraError] ?? CAMERA_ERROR_LABEL.unknown}</p>}

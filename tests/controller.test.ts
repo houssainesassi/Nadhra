@@ -366,3 +366,164 @@ test("closing the page releases everything and nothing restarts", async () => {
   await flush();
   assert.equal(h.sources.length, 1);
 });
+
+// --- questions: answered at the time they are asked, streamed, cancellable ----------------------
+
+/** A server reply as server-sent events, written in the given pieces with a pause between them. */
+function sseResponse(events: unknown[], opts: { endWithoutDone?: boolean } = {}) {
+  const enc = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(c) {
+      for (const e of events) {
+        c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      c.close();
+    },
+  }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+async function withFetch(fake: typeof fetch, run: () => Promise<void>) {
+  const real = g.fetch;
+  g.fetch = fake;
+  try {
+    await run();
+  } finally {
+    g.fetch = real;
+  }
+}
+const until = async (cond: () => boolean, ms = 1000) => {
+  const end = Date.now() + ms;
+  while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5));
+};
+
+test("camera off: a general question is answered by the model without a picture", async () => {
+  const h = setup();
+  replies.push(scene({ spoken: "عاصمة تونس هي مدينة تونس.", changed: true }));
+  await h.c.ask("شنية عاصمة تونس؟");
+  const sent = posts[0] as Record<string, unknown>;
+  assert.equal(sent.mode, "chat");
+  assert.equal(sent.image, undefined, "no frame is sent with the camera off");
+  assert.equal(sent.stream, true);
+  assert.ok(h.engine.said.includes(T.thinkingNoCamera), "it doesn't claim to be looking");
+  h.drain();
+  assert.ok(h.engine.said.includes("عاصمة تونس هي مدينة تونس."));
+  assert.equal(h.c.state.answer.text, "عاصمة تونس هي مدينة تونس.");
+});
+
+test("camera off: a question about the surroundings asks for the camera instead of guessing", async () => {
+  const h = setup();
+  replies.push(scene({ spoken: "", needsCamera: true }));
+  await h.c.ask("شنوة الحاجة اللي في يدي؟");
+  h.drain();
+  assert.ok(h.engine.said.includes(T.cameraNeeded));
+  assert.equal(h.c.state.answer.text, "");
+});
+
+test("camera on: the frame captured for the question goes with it, and the answer streams sentence by sentence", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const bodies: Record<string, unknown>[] = [];
+  const analysis = scene({ spoken: "قدّامك باب. فوقه كتابة EXIT.", changed: true });
+  await withFetch((async (_url: string, init?: { body?: string }) => {
+    bodies.push(JSON.parse(init?.body ?? "{}"));
+    return sseResponse([{ type: "sentence", text: "قدّامك باب." }, { type: "sentence", text: "فوقه كتابة EXIT." }, { type: "done", analysis, provider: "fake", latencyMs: 1, rest: "" }]);
+  }) as typeof fetch, async () => {
+    const asking = h.c.ask("شنوة قدّامي؟");
+    await until(() => h.engine.said.includes("قدّامك باب."));
+    assert.equal(h.c.state.answer.live, true, "the first sentence plays while the rest is still coming");
+    assert.ok(!h.engine.said.includes("فوقه كتابة EXIT."));
+    await asking;
+  });
+  assert.equal(bodies[0].mode, "question");
+  assert.equal(bodies[0].image, "/9j/AAAA");
+  h.drain();
+  assert.deepEqual(h.engine.said.filter((t) => t.startsWith("قدّامك") || t.startsWith("فوقه")), ["قدّامك باب.", "فوقه كتابة EXIT."], "each sentence once, in order");
+  assert.equal(h.c.state.answer.live, false);
+});
+
+test("a new question cancels the previous one, here and on the server; the old answer is never spoken", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const signals: AbortSignal[] = [];
+  await withFetch((async (_url: string, init?: { body?: string; signal?: AbortSignal }) => {
+    const body = JSON.parse(init?.body ?? "{}");
+    signals.push(init!.signal!);
+    if (body.question === "first") {
+      return new Promise<Response>((_, reject) => init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+    }
+    return sseResponse([{ type: "done", analysis: scene({ spoken: "جواب جديد." }), provider: "fake", latencyMs: 1, rest: "جواب جديد." }]);
+  }) as typeof fetch, async () => {
+    const first = h.c.ask("first");
+    await flush();
+    await h.c.ask("second");
+    await first;
+  });
+  assert.equal(signals[0].aborted, true, "the first request was aborted");
+  h.drain();
+  assert.ok(h.engine.said.includes("جواب جديد."));
+  assert.equal(h.engine.said.filter((t) => t === T.questionFailed).length, 0, "a cancelled question isn't reported as a failure");
+});
+
+test("an answer cut off part-way (connection lost) says so after what was already said", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  await withFetch((async () => sseResponse([{ type: "sentence", text: "قدّامك طاولة." }])) as typeof fetch, () => h.c.ask("صفلي الصورة"));
+  h.drain();
+  const i = h.engine.said.indexOf("قدّامك طاولة.");
+  assert.ok(i >= 0);
+  assert.equal(h.engine.said[i + 1], T.answerCut);
+  assert.ok(!h.engine.said.includes(T.questionFailed));
+});
+
+test("a connection that fails before any answer is retried once, then reported", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  let calls = 0;
+  await withFetch((async () => {
+    calls++;
+    throw new TypeError("Failed to fetch");
+  }) as typeof fetch, () => h.c.ask("شنوة مكتوب هنا؟"));
+  assert.equal(calls, 2);
+  h.drain();
+  assert.ok(h.engine.said.includes(T.questionFailed));
+});
+
+test("a question in French gets a French answer request and a French 'one moment', with Derja chosen", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  replies.push(scene({ spoken: "Il y a une porte devant vous.", changed: true }));
+  await h.c.ask("Qu'est-ce qu'il y a devant moi ?");
+  assert.equal((posts.at(-1) as Record<string, unknown>).lang, "fr");
+  assert.ok(h.engine.said.includes(speech("fr").thinking));
+  assert.equal(h.c.state.answer.lang, "fr");
+});
+
+test("a phone that doesn't say which camera it opened is not treated as a mirror", async () => {
+  const h = setup();
+  const prevMatch = g.matchMedia;
+  g.matchMedia = () => ({ matches: true });
+  Object.defineProperty(globalThis.navigator, "maxTouchPoints", { configurable: true, get: () => 5 });
+  h.any.makeSource = () => Object.assign(new FakeSource(), { facing: "unknown" });
+  try {
+    await h.start();
+    assert.equal(h.c.state.facing, "outward", "left and right must not be swapped on a phone");
+  } finally {
+    g.matchMedia = prevMatch;
+    Object.defineProperty(globalThis.navigator, "maxTouchPoints", { configurable: true, get: () => 0 });
+  }
+});
+
+test("a task asked with the camera off waits for the camera to settle before capturing", async () => {
+  const h = setup();
+  replies.push(scene({ spoken: "قدّامك باب.", changed: true }));
+  const t0 = Date.now();
+  await h.c.runTask("describe");
+  const asked = () => posts.some((p) => (p as Record<string, unknown>).mode === "question");
+  await until(asked, 3000);
+  assert.ok(asked() && Date.now() - t0 >= 750, `question captured after ${Date.now() - t0} ms`);
+});

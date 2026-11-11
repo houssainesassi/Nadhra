@@ -45,7 +45,14 @@ export async function attachStream(video: HTMLVideoElement, stream: MediaStream)
   video.playsInline = true;
   await video.play();
   if (!video.videoWidth) {
-    await new Promise<void>((r) => video.addEventListener("loadeddata", () => r(), { once: true }));
+    // Some phones fire loadeddata before the listener is in place: don't wait for it forever.
+    // Frames are only captured once the video has a size (WebcamSource.ready), so this is safe.
+    await new Promise<void>((r) => {
+      const done = () => r();
+      video.addEventListener("loadeddata", done, { once: true });
+      video.addEventListener("resize", done, { once: true });
+      setTimeout(done, 3_000);
+    });
   }
 }
 

@@ -77,6 +77,20 @@ Implement `CameraSource` and register it in `createCameraSource`. Glasses that s
 
 Add an entry to `getVisionProviders()` in `src/lib/ai/vision.ts`. It must return the model's text, and may implement `transcribe`. Everything else, including fallback, cooldowns and validation, is shared. `label` is shown to users as a recipient of their images, so it must be accurate.
 
+## Questions: streamed, at request time
+
+Every answer is made by the model when the question is asked. Nothing is cached or prepared in advance.
+
+- **Camera on** (`mode: "question"`): the frame captured for this question (1280 px), plus an older small frame for motion, goes to the vision model with the last three question/answer pairs and the current Tunisian date and time.
+- **Camera off** (`mode: "chat"`): no image. The model answers general questions. A question about the surroundings comes back as `[CAMERA]`, and the assistant asks for the camera instead of guessing.
+- **Live information**: chat questions may use Google Search grounding. With the camera on, the model sets `needs_web` when the answer depends on current facts, and a search answer replaces its "I can't know" when search is available. A key without search quota (HTTP 429) answers without search, and search rests for `SEARCH_COOLDOWN_MS`.
+- **Streaming**: with `stream: true` the route answers with server-sent events (`sentence`, then `done` with `rest`, or `error`). `SentenceStreamer` (schema.ts) sends a sentence early only if the final checks would keep it exactly as it is. A sentence those checks might drop, change or follow with a caveat stops early sending, and the rest comes in `done`. Path questions are never streamed. Early sentences plus `rest` are always the checked answer (tests/streaming.test.ts).
+- **Cancelling**: a new question aborts the previous request. The route passes the abort on to the provider call. A provider that fails after a sentence was sent ends the answer as `interrupted` ("the answer was cut off"), and no other model's answer follows half of one. The browser retries once on a network failure if nothing has arrived yet.
+
+- **Language**: the answer comes in the question's language when it is clearly one of the four (`questionLang` in lang.ts: Derja words or Arabizi give Derja, two standard-Arabic signs give MSA, French or English words give those). The voice switches for that answer only (`SpeechQueue` items carry a language). Warnings and status stay in the chosen language.
+- **Web search** needs a billed Gemini project. It is not in the free tier. `GEMINI_SEARCH_API_KEY` can be a billed key used only for search calls. The search model gets the question and the text of the picture analysis, never the image, and it is told not to add visual details. `usedWeb` is set only when Gemini returns grounding metadata.
+- **Timing**: the `done` event carries `timing` (first token, first sentence, total, all from the request reaching the server).
+
 ## Frame selection
 
 Frames go out at most every 4 s, when more than 8 % of pixels changed, when the detector finds something new, or on a heartbeat that slows from 20 s to 80 s while nothing changes. Dark, overexposed or featureless frames aren't sent. Blurred frames wait up to 6 s for a sharper one. Limits are in `scheduler.ts`. Speech playing never holds a frame back: during a long reading, scans keep running for their warnings, and their description is dropped.

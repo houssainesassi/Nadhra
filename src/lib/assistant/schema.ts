@@ -8,7 +8,7 @@ import type { CameraFacing, Category, Confidence, Detection, Hazard, HazardKind,
 const MAX_ITEMS = 12;
 const MAX_LABEL = 60;
 const MAX_TEXT = 1500;
-const MAX_SPOKEN: Record<VisionMode, number> = { scan: 320, question: 1800 };
+const MAX_SPOKEN: Record<VisionMode, number> = { scan: 320, question: 1800, chat: 1800 };
 
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[], def: T): T => (allowed.includes(v as T) ? (v as T) : def);
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
@@ -103,6 +103,24 @@ export const impliesClearWay = (spoken: string) =>
     const n = normalizeArabic(s);
     return ABSENCE.test(n) && AHEAD.test(n) && !NEGATED_SAFETY.test(n);
   });
+
+// "According to a web search…": only true when the answer was grounded in one (usedWeb). Matched
+// on normalizeArabic() text, so alef forms and Latin accents are already unified.
+const SEARCH_CLAIM = new RegExp(
+  "(?:حسب|على حساب|بحسب|وفق)\\s*(?:ال)?(?:بحث|انترنت|الانترنت|نتائج البحث)|(?:بحثت?|لوجت|قلبت|لقيت|شفت)\\s+(?:في|على|فى)\\s+(?:ال)?(?:انترنت|ويب|جوجل|غوغل|قوقل)|في (?:ال)?انترنت لقيت|نتائج البحث|البحث في (?:ال)?انترنت" +
+    "|selon (?:une |ma |la |les |mes )?recherches?|d'apres (?:internet|le web|une recherche|mes recherches)|j'ai (?:cherche|recherche|verifie|trouve) (?:sur|en ligne|dans)|resultats? de (?:la |ma )?recherche|recherche (?:sur|en) (?:internet|ligne|google)" +
+    "|according to (?:a |my |the |an )?(?:web |online |internet |google )?search|\\bi (?:searched|looked (?:it |this )?up|checked online|googled)|search results|according to (?:the )?(?:web|internet)|i found online|a (?:web|online|quick) search",
+  "i",
+);
+export const claimsWebSearch = (sentence: string) => SEARCH_CLAIM.test(normalizeArabic(sentence));
+
+/** Removes sentences that say the answer comes from a web search, when it doesn't (usedWeb false). */
+export function dropFalseSearchClaims(spoken: string, texts: SceneText[] = []): string {
+  const quoted = texts.map((t) => normalizeArabic(t.content)).filter((t) => t.length >= 2);
+  return splitSentences(spoken)
+    .filter((sentence) => quoted.some((q) => normalizeArabic(sentence).includes(q)) || !claimsWebSearch(sentence))
+    .join(" ");
+}
 
 export function splitSentences(text: string): string[] {
   return (text.match(/[^.!؟?\n]+[.!؟?]*/g) ?? []).map((s) => s.trim()).filter(Boolean);
@@ -220,7 +238,8 @@ export function sanitizeAnalysis(raw: Record<string, unknown>, ctx: SanitizeCont
   const env = raw.environment && typeof raw.environment === "object" ? (raw.environment as Record<string, unknown>) : null;
   const envLabel = env ? str(env.label, MAX_LABEL) : "";
 
-  let spoken = guardSpoken(str(raw.spoken, MAX_SPOKEN[ctx.mode]), texts);
+  // The vision model has no web search: any "according to the internet" in its answer is false.
+  let spoken = dropFalseSearchClaims(guardSpoken(str(raw.spoken, MAX_SPOKEN[ctx.mode]), texts), texts);
   if (mirrored) spoken = swapSidesOutsideQuotes(spoken, texts);
 
   const question = ctx.question ?? "";
@@ -244,4 +263,135 @@ export function sanitizeAnalysis(raw: Record<string, unknown>, ctx: SanitizeCont
     texts,
     uncertain: raw.uncertain === true,
   };
+}
+
+// --- streamed answers -------------------------------------------------------------------------
+// A streamed answer is spoken sentence by sentence while the model is still writing. Each sentence
+// sent early must be one the final check (sanitizeAnalysis / sanitizeChat) keeps exactly as it is,
+// so the early sentences are always the start of the final answer. Anything the checks might change,
+// drop or follow with a caveat stops the early sentences; the rest then comes with the final check.
+
+/** Only the "needs camera" marker, never spoken. */
+const CAMERA_MARKER = /\[\s*camera\s*\]/i;
+/** Markdown and links don't belong in speech. Character-level, so it gives the same result on a prefix. */
+const cleanChatText = (text: string) => text.replace(/[*#`_~>|]/g, " ").replace(/^\s*[-•]\s+/gm, " ");
+
+/**
+ * The value of a JSON string field in possibly unfinished JSON, decoded so far. `complete` once its
+ * closing quote has arrived. An escape cut in half is left out until the rest of it arrives.
+ */
+export function partialJsonString(raw: string, field: string): { text: string; complete: boolean } | null {
+  const m = new RegExp(`"${field}"\\s*:\\s*"`).exec(raw);
+  if (!m) return null;
+  let text = "";
+  for (let i = m.index + m[0].length; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '"') return { text, complete: true };
+    if (c !== "\\") {
+      text += c;
+      continue;
+    }
+    const e = raw[i + 1];
+    if (e === undefined) break;
+    if (e === "u") {
+      const hex = raw.slice(i + 2, i + 6);
+      if (hex.length < 4) break;
+      text += String.fromCharCode(parseInt(hex, 16) || 32);
+      i += 5;
+      continue;
+    }
+    text += ({ n: "\n", t: "\t", r: "\r", b: "", f: "" } as Record<string, string>)[e] ?? e;
+    i++;
+  }
+  return { text, complete: false };
+}
+
+export interface StreamContext {
+  mode: VisionMode;
+  cameraFacing: CameraFacing;
+  question?: string;
+  /** Hold everything for the final answer, given the raw output so far (e.g. it will be replaced by a web search). */
+  holdAll?: (raw: string) => boolean;
+}
+
+/** Feeds on the model's raw output as it arrives, and gives back sentences that are safe to speak now. */
+export class SentenceStreamer {
+  private raw = "";
+  private stopped = false;
+  readonly sent: string[] = [];
+  private ctx: StreamContext;
+
+  constructor(ctx: StreamContext) {
+    this.ctx = ctx;
+    // A path question always gets its caveat with the answer: a broken stream mustn't leave it out.
+    if (ctx.mode !== "scan" && isPathQuestion(ctx.question ?? "")) this.stopped = true;
+  }
+
+  /** Adds raw model text. Returns the sentences that became final with it. */
+  push(delta: string): string[] {
+    this.raw += delta;
+    if (this.stopped) return [];
+    if (this.ctx.holdAll?.(this.raw)) {
+      this.stopped = true;
+      return [];
+    }
+    const part = this.ctx.mode === "chat" ? { text: cleanChatText(this.raw), complete: false } : partialJsonString(this.raw, "spoken");
+    if (!part) return [];
+    // The same steps as str(): spaces collapsed, length capped.
+    const text = part.text.replace(/\s+/g, " ").trimStart().slice(0, MAX_SPOKEN[this.ctx.mode]);
+    const sentences = splitSentences(text);
+    // The last sentence may still grow, unless the field is closed and nothing was cut.
+    const ready = part.complete && text.length < MAX_SPOKEN[this.ctx.mode] ? sentences : sentences.slice(0, -1);
+    const out: string[] = [];
+    for (const sentence of ready.slice(this.sent.length)) {
+      if (!this.safeEarly(sentence)) {
+        this.stopped = true;
+        break;
+      }
+      this.sent.push(sentence);
+      out.push(sentence);
+    }
+    return out;
+  }
+
+  private safeEarly(sentence: string): boolean {
+    // Whether a search really happened is only known at the end (grounding metadata): held until then.
+    if (claimsWebSearch(sentence)) return false;
+    // Chat answers have no picture, so the scene rules (distances, "the way is clear") don't apply,
+    // except to path questions, which the constructor already holds back.
+    if (this.ctx.mode === "chat") return !CAMERA_MARKER.test(sentence) && !/\[|https?:|www\./i.test(sentence);
+    if (guardSpoken(sentence, []) !== sentence) return false; // a quote from the scene may still keep it; the final check decides
+    if (impliesClearWay(sentence)) return false; // needs the "this doesn't mean it's safe" reminder right after it
+    if (this.ctx.cameraFacing === "user" && swapSides(sentence) !== sentence) return false;
+    return true;
+  }
+}
+
+/** What is left to say once the final answer is known, given the sentences already sent. */
+export function remainingSpeech(finalSpoken: string, sent: string[]): string {
+  const sentences = splitSentences(finalSpoken);
+  let i = 0;
+  while (i < sent.length && i < sentences.length && sentences[i] === sent[i]) i++;
+  return sentences.slice(i).join(" ");
+}
+
+/**
+ * A chat answer (no image): no links or markdown. Distances and facts are fine here ("Sousse is
+ * 140 km away"), but a question about the user's way gets the walking-safety rules: without a camera
+ * nothing can be said about it.
+ */
+export function sanitizeChat(raw: string, ctx: { question?: string; lang?: SpeechLang; usedWeb?: boolean }): SceneAnalysis {
+  const say = speech(ctx.lang ?? "tn");
+  const base: SceneAnalysis = { spoken: "", changed: true, imageQuality: "good", environment: null, detections: [], hazards: [], texts: [], uncertain: false, usedWeb: !!ctx.usedWeb };
+  if (CAMERA_MARKER.test(raw)) return { ...base, needsCamera: true };
+  const text = str(cleanChatText(raw).replace(/https?:\/\/\S+|www\.\S+/gi, " "), MAX_SPOKEN.chat);
+  let spoken = ctx.usedWeb ? text : dropFalseSearchClaims(text);
+  // Everything it said rested on a search that never happened: say so instead of a made-up answer.
+  if (!spoken && text) spoken = say.noLiveInfo;
+  if (isPathQuestion(ctx.question ?? "")) {
+    spoken = guardSpoken(text, []);
+    spoken = spoken ? `${spoken} ${say.pathCaveat}` : say.pathUnknown;
+  }
+  if (!spoken) throw new Error("empty chat answer"); // counts as a provider failure: nothing is made up
+  return { ...base, spoken };
 }

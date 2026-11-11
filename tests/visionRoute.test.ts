@@ -137,6 +137,7 @@ test("paid models are refused and status names the receivers", async () => {
     available: true,
     providers: [{ id: "gemini", label: "Google Gemini" }, { id: "openrouter", label: "OpenRouter" }],
     canTranscribe: true,
+    canSearch: true,
   });
   process.env.OPENROUTER_VISION_MODEL = "openai/gpt-paid";
   process.env.GEMINI_VISION_MODELS = "gemini-3-pro";

@@ -12,7 +12,9 @@ export type HazardKind = "stairs" | "drop" | "vehicle" | "person" | "obstacle";
 export type ImageQuality = "good" | "dark" | "blurry" | "obstructed";
 /** "outward": the user stands behind the camera (phone, glasses). "user": the webcam looks at the user, like a mirror. */
 export type CameraFacing = "outward" | "user";
-export type VisionMode = "scan" | "question";
+/** "scan": automatic description. "question": a question about the current frame. "chat": a question
+ * with the camera off, answered without any image (general knowledge, or the web when available). */
+export type VisionMode = "scan" | "question" | "chat";
 
 export interface Detection {
   label: string;
@@ -48,12 +50,16 @@ export interface SceneAnalysis {
   hazards: Hazard[];
   texts: SceneText[];
   uncertain: boolean;
+  /** Chat mode: the question is about the surroundings, so it needs the camera. "spoken" is then "". */
+  needsCamera?: boolean;
+  /** The answer was grounded in a live web search. */
+  usedWeb?: boolean;
 }
 
 export interface VisionRequestBody {
   mode: VisionMode;
-  /** JPEG, base64 without the data: prefix. */
-  image: string;
+  /** JPEG, base64 without the data: prefix. Absent only in chat mode. */
+  image?: string;
   /** Older, smaller frame: the only evidence allowed for motion claims. */
   previousImage?: string;
   previousAgeMs?: number;
@@ -65,17 +71,33 @@ export interface VisionRequestBody {
   history?: { q: string; a: string }[];
   /** The language the user hears. Tunisian when missing. */
   lang?: SpeechLang;
+  /** Answer as server-sent events, sentence by sentence (questions only). */
+  stream?: boolean;
 }
 
 export interface VisionResponseBody {
   analysis: SceneAnalysis;
   provider: string;
   latencyMs: number;
+  /** Streamed answers: ms from the request reaching the server to the model's first text, and to the first sentence sent. */
+  timing?: { firstTokenMs?: number; firstSentenceMs?: number; totalMs: number };
 }
+
+/**
+ * Server-sent events of a streamed answer. "sentence" events are final and in order: the client can
+ * speak them at once. "done" carries the whole checked analysis and the part not yet sent ("rest"),
+ * which may be a safety caveat. "error" means the answer stopped; nothing more will come.
+ */
+export type VisionStreamEvent =
+  | { type: "sentence"; text: string }
+  | ({ type: "done"; rest: string } & VisionResponseBody)
+  | { type: "error"; error: string };
 
 export interface VisionStatus {
   available: boolean;
   /** Companies that receive the images, in fallback order: shown in the privacy notice. */
   providers: { id: string; label: string }[];
   canTranscribe: boolean;
+  /** Questions that need current information can be looked up on the web. */
+  canSearch?: boolean;
 }

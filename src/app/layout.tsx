@@ -6,9 +6,15 @@ import "./globals.css";
 const latin = Inter({ subsets: ["latin"], variable: "--font-latin", display: "swap" });
 const arabic = IBM_Plex_Sans_Arabic({ subsets: ["arabic"], weight: ["400", "500", "600"], variable: "--font-arabic", display: "swap" });
 
+const DESCRIPTION = "A voice assistant for blind and visually impaired people. It describes what the camera sees and answers spoken questions in Tunisian Arabic.";
+
 export const metadata: Metadata = {
   title: "Nadhra: vision assistant",
-  description: "A voice assistant for blind and visually impaired people. It describes what the camera sees and answers spoken questions in Tunisian Arabic.",
+  description: DESCRIPTION,
+  applicationName: "Nadhra",
+  appleWebApp: { capable: true, title: "Nadhra", statusBarStyle: "black-translucent" },
+  openGraph: { type: "website", siteName: "Nadhra", title: "Nadhra (نظرة): vision assistant", description: DESCRIPTION },
+  twitter: { card: "summary", title: "Nadhra (نظرة): vision assistant", description: DESCRIPTION },
 };
 
 export const viewport: Viewport = {

@@ -7,6 +7,7 @@
 //   narration waits, is replaced by a newer description, and is dropped once stale
 import { normalizeArabic, splitSentences } from "./schema.ts";
 import type { TtsEngine } from "../speech/tts.ts";
+import type { SpeechLang } from "./lang.ts";
 
 export type SpeechPriority = "urgent" | "warning" | "answer" | "status" | "narration";
 const RANK: Record<SpeechPriority, number> = { narration: 0, status: 1, answer: 2, warning: 3, urgent: 4 };
@@ -15,6 +16,8 @@ interface Item {
   text: string;
   priority: SpeechPriority;
   at: number;
+  /** Spoken in this language's voice (an answer in the question's language). Default: lang(). */
+  lang?: SpeechLang;
 }
 
 export interface SpeechQueueOptions {
@@ -22,6 +25,8 @@ export interface SpeechQueueOptions {
   /** 0..1, default 1. */
   volume?: () => number;
   onSpeakingChange?: (speaking: boolean) => void;
+  /** The voice's language for items that don't name one. */
+  lang?: () => SpeechLang;
   /** A sentence starts playing. */
   onUtterance?: (text: string, priority: SpeechPriority) => void;
   /** The engine could not speak. The text must then reach the user another way. */
@@ -62,6 +67,8 @@ export class SpeechQueue {
   private watchdog: ReturnType<typeof setTimeout> | null = null;
   private hold = false;
   private wasSpeaking = false;
+  /** The language last given to the engine; undefined when unknown (someone else changed it). */
+  private engineLang: SpeechLang | undefined;
 
   constructor(engine: TtsEngine, opts: SpeechQueueOptions) {
     this.engine = engine;
@@ -80,7 +87,12 @@ export class SpeechQueue {
     return (!!this.current && RANK[this.current.priority] >= rank) || this.pending.some((i) => RANK[i.priority] >= rank);
   }
 
-  say(text: string, priority: SpeechPriority) {
+  /** The engine's language was changed elsewhere: the next sentence sets it again. */
+  resetLanguage() {
+    this.engineLang = undefined;
+  }
+
+  say(text: string, priority: SpeechPriority, lang?: SpeechLang) {
     const chunks = speechChunks(text);
     if (!chunks.length) return;
     const at = this.now();
@@ -88,7 +100,7 @@ export class SpeechQueue {
     const same = normalizeArabic(text);
     if (normalizeArabic(this.current?.text ?? "") === same || this.pending.some((i) => normalizeArabic(i.text) === same)) return;
 
-    const items = chunks.map((chunk) => ({ text: chunk, priority, at }));
+    const items = chunks.map((chunk) => ({ text: chunk, priority, at, lang }));
     const rank = RANK[priority];
     let index = this.pending.findIndex((i) => RANK[i.priority] < rank);
     if (index < 0) index = this.pending.length;
@@ -170,6 +182,11 @@ export class SpeechQueue {
     // Long enough for the cloud voice to download and play the whole sentence.
     this.watchdog = setTimeout(finish, (this.opts.watchdogBaseMs ?? 18_000) + (item.text.length * 170) / rate);
     this.opts.onUtterance?.(item.text, item.priority);
+    const lang = item.lang ?? this.opts.lang?.();
+    if (lang && lang !== this.engineLang) {
+      this.engineLang = lang;
+      this.engine.setLanguage?.(lang);
+    }
     try {
       this.engine.speak(item.text, {
         rate,
