@@ -29,9 +29,9 @@ export const LANGS: Record<SpeechLang, LangInfo> = {
   en: { label: "English", bcp47: "en", dir: "ltr", recognition: "en-US", voices: ["en-US", "en-GB", "en-AU", "en-CA", "en-IN", "en"], or: "or" },
 };
 
-/** Cloud voices for languages other than Tunisian (whose voice the server reads from EDGE_TTS_VOICE). */
+/** Cloud voices for languages other than Tunisian (whose voice the server reads from EDGE_TTS_VOICE). All female. */
 export const CLOUD_VOICES: Record<Exclude<SpeechLang, "tn">, string> = {
-  ar: "ar-SA-HamedNeural",
+  ar: "ar-SA-ZariyahNeural",
   fr: "fr-FR-DeniseNeural",
   en: "en-US-JennyNeural",
 };

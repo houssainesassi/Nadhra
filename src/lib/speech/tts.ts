@@ -1,7 +1,8 @@
 // Text-to-speech engine interface + implementations:
 //   BrowserTts – browser SpeechSynthesis (offline, free; needs an installed Arabic voice)
 //   CloudTts   – free Microsoft Edge neural voice (MP3) through our server route /api/tts (no key)
-//   HybridTts  – browser Arabic voice first, cloud voice when none is installed or it fails
+//   HybridTts  – the female cloud voice first; the browser's installed voice only when the cloud
+//                voice can't be used (offline, service down), preferring a female one
 // Keep the interface small so another engine (e.g. a local neural TTS) can be plugged in.
 import { CLOUD_VOICES, LANGS, type SpeechLang } from "../assistant/lang.ts";
 
@@ -134,6 +135,9 @@ export class BrowserTts implements TtsEngine {
   }
 }
 
+const FEMALE_VOICE = /female|femme|\b(?:reem|hoda|salma|zariyah|laila|layla|amina|amany|mariam|maryam|fatima|sana|iman|mouna|rana|noura|sara|amira|hala|denise|julie|hortense|amelie|am[ée]lie|aurelie|aur[ée]lie|marie|virginie|jenny|aria|samantha|zira|susan|karen|moira|tessa|victoria|serena|allison|ava|joanna|kendra|kimberly|salli|ivy|emma|libby|sonia|natasha|google (?:us|uk english female))\b/i;
+const MALE_VOICE = /\bmale\b|homme|\b(?:hedi|hamed|naayf|tarik|tarek|shakir|majed|maged|omar|ali|hamdan|rami|moaz|taim|bassel|jamal|laith|fahed|saleh|henri|paul|claude|thomas|nicolas|daniel|guy|david|mark|james|george|alex|fred|ryan|christopher|eric|matthew|brian|joey|justin|google uk english male)\b/i;
+
 const norm = (l: string) => l.toLowerCase().replace("_", "-");
 const clampVolume = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1);
 
@@ -150,11 +154,19 @@ export function pickVoice(voices: SpeechSynthesisVoice[], lang: SpeechLang, { of
   let same = voices.filter((v) => norm(v.lang).split("-")[0] === base);
   // offline: only voices installed on the device can speak
   if (offline && same.some((v) => v.localService)) same = same.filter((v) => v.localService);
+  // The assistant's voice is female: among voices of the same language, a female one wins, and a
+  // known male one comes last. Browsers don't report gender, so this goes by the voice's name.
+  const rank = (v: SpeechSynthesisVoice) => (FEMALE_VOICE.test(v.name) ? 0 : MALE_VOICE.test(v.name) ? 2 : 1);
   for (const pref of prefs) {
     const match = same.filter((v) => norm(v.lang) === pref.toLowerCase());
-    if (match.length) return match.find((v) => v.default) ?? match.find((v) => v.localService) ?? match[0];
+    if (!match.length) continue;
+    const best = Math.min(...match.map(rank));
+    const top = match.filter((v) => rank(v) === best);
+    // A known male voice of the exact dialect loses to a female voice of a close one.
+    if (best === 2 && same.some((v) => rank(v) < 2)) continue;
+    return top.find((v) => v.default) ?? top.find((v) => v.localService) ?? top[0];
   }
-  return same[0] ?? null;
+  return [...same].sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
 
 export const pickArabicVoice = (voices: SpeechSynthesisVoice[], opts: { offline?: boolean } = {}) => pickVoice(voices, "tn", opts);
@@ -436,19 +448,19 @@ export class HybridTts implements TtsEngine {
   }
 
   available() {
-    return !!this.browser.voiceInfo() || this.cloud.available();
+    return this.cloud.available() || !!this.browser.voiceInfo();
   }
 
   voiceInfo() {
-    return this.browser.voiceInfo() ?? this.cloud.voiceInfo();
+    return (this.cloud.usable() ? this.cloud.voiceInfo() : null) ?? this.browser.voiceInfo();
   }
 
   checking() {
-    return !this.browser.voiceInfo() && this.cloud.checking();
+    return this.cloud.checking();
   }
 
   unlock() {
-    this.cloud.unlock(); // also covers a later fallback from a failing browser voice
+    this.cloud.unlock();
   }
 
   setLanguage(lang: SpeechLang) {
@@ -458,15 +470,6 @@ export class HybridTts implements TtsEngine {
   }
 
   speak(text: string, opts: SpeakOptions) {
-    if (this.browser.voiceInfo()) {
-      this.cloud.stop();
-      this.browser.speak(text, opts, () => {
-        if (!this.cloud.usable()) return false;
-        this.cloud.speak(text, opts); // installed voice failed: cloud voice instead
-        return true;
-      });
-      return;
-    }
     if (this.cloud.checking()) {
       // Startup race: wait for the availability check, then decide.
       const gen = this.gen;
@@ -477,11 +480,18 @@ export class HybridTts implements TtsEngine {
       return;
     }
     if (this.cloud.usable()) {
+      // The female cloud voice. If it fails (network, service), the installed voice says it instead.
       this.browser.stop();
-      this.cloud.speak(text, opts);
+      this.cloud.speak(text, {
+        ...opts,
+        onError: (e) => {
+          if (this.browser.voiceInfo()) this.browser.speak(text, opts);
+          else opts.onError?.(e);
+        },
+      });
       return;
     }
-    // No voice for the language and no cloud voice: the browser's default voice.
+    // No cloud voice: the installed voice for the language (female when there is one), or the default.
     this.browser.speak(text, opts);
   }
 

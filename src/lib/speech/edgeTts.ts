@@ -11,7 +11,14 @@ import { clientKey, isSameOrigin, RateLimiter, readJsonBody } from "../server/ht
 import { CLOUD_VOICES, isSpeechLang } from "../assistant/lang.ts";
 
 export const MAX_TTS_CHARS = 500; // a recognized sentence is far shorter; the service splits at 4096 bytes
-export const DEFAULT_VOICE = "ar-TN-HediNeural"; // Tunisian Arabic (male); ar-TN-ReemNeural = female
+/** Tunisian Arabic, female. The assistant speaks with a female voice only. */
+export const DEFAULT_VOICE = "ar-TN-ReemNeural";
+/**
+ * The only voices this server will use: all female (pitch measured Nov 2026: Reem 183 Hz, Zariyah
+ * 211 Hz; the male ar-TN-HediNeural measured 121 Hz and is refused). EDGE_TTS_VOICE outside this
+ * list is ignored.
+ */
+export const FEMALE_EDGE_VOICES = ["ar-TN-ReemNeural", "ar-SA-ZariyahNeural", "ar-EG-SalmaNeural", "fr-FR-DeniseNeural", "en-US-JennyNeural"] as const;
 const EDGE_WSS_URL = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}`;
 const VOICE_RE = /^[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]{1,40}Neural$/;
 const FAILURES_BEFORE_COOLDOWN = 3;
@@ -28,7 +35,7 @@ export interface TtsConfig {
 
 export function ttsConfig(): TtsConfig {
   const envVoice = process.env.EDGE_TTS_VOICE?.trim() ?? "";
-  const voice = VOICE_RE.test(envVoice) ? envVoice : DEFAULT_VOICE;
+  const voice = VOICE_RE.test(envVoice) && (FEMALE_EDGE_VOICES as readonly string[]).includes(envVoice) ? envVoice : DEFAULT_VOICE;
   return {
     enabled: !/^(1|true|yes)$/i.test(process.env.EDGE_TTS_DISABLED?.trim() ?? ""),
     voice,

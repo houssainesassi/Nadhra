@@ -19,6 +19,9 @@ import { DEFAULT_VISION_SETTINGS, hasConsent, loadVisionSettings, RATE_CHOICES, 
 import { isRepeat, SpeechQueue, type SpeechPriority } from "./speechQueue.ts";
 import type { CameraFacing, Detection, Hazard, SceneAnalysis, SceneText, VisionMode, VisionStatus } from "./types.ts";
 import { RecognitionInput, RecorderInput, recognitionSupported, recordingSupported, VoiceError, type VoiceInput } from "./voiceInput.ts";
+import { LiveSession, type LiveStatus } from "../live/session.ts";
+import { LiveAudio, MicError } from "../live/audioIO.ts";
+import { LIVE_CHANGE_THRESHOLD, LIVE_FRAME, LIVE_HEARTBEAT_FRAME_MS, LIVE_MIN_FRAME_GAP_MS, LIVE_SPEECH_FRAME_GAP_MS } from "../live/config.ts";
 
 const TICK_MS = 500;
 const THUMB = { width: 160, height: 120 };
@@ -95,7 +98,28 @@ export interface VisionState {
   online: boolean;
   /** The latest answer as it arrives, for the screen. `live` while it is still coming. */
   answer: { text: string; live: boolean; web: boolean; lang?: SpeechLang };
+  /** Live conversation: microphone and camera stream to the model, which answers by voice. */
+  live: LiveState;
 }
+
+export interface LiveState {
+  status: "off" | LiveStatus;
+  /** What the user last said, as recognized. */
+  user: string;
+  /** What the assistant is saying or last said. */
+  ai: string;
+  /** The assistant's voice is playing. */
+  playing: boolean;
+  /** The user is talking (by the on-device level detector). */
+  userTalking: boolean;
+  /** End of the user's speech to the first sound of the answer, for the last answer. */
+  latencyMs: number | null;
+  model: string;
+  voice: string;
+  framesSent: number;
+}
+
+const LIVE_OFF: LiveState = { status: "off", user: "", ai: "", playing: false, userTalking: false, latencyMs: null, model: "", voice: "", framesSent: 0 };
 
 const INITIAL: VisionState = {
   camera: "off",
@@ -127,6 +151,7 @@ const INITIAL: VisionState = {
   location: { status: "idle" },
   online: true,
   answer: { text: "", live: false, web: false },
+  live: LIVE_OFF,
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -186,6 +211,16 @@ export class SmartVisionController {
   private locationWatch = 0;
   /** The camera was released because the page was hidden: it comes back when the user does. */
   private resumeOnReturn = false;
+  private liveSession: LiveSession | null = null;
+  private liveAudio: LiveAudio | null = null;
+  private liveGen = 0;
+  private lastLiveFrameAt = -Infinity;
+  private lastLiveGray: Uint8Array | null = null;
+  /** The next recognized words start a new user turn / a new answer on screen. */
+  private liveNewUserTurn = true;
+  private liveNewAnswer = true;
+  /** Consent was asked for on the way to a live conversation: it starts once given. */
+  private pendingLive = false;
   /** Replaceable in tests. */
   protected makeSource: (video: HTMLVideoElement) => CameraSource = (video) => createCameraSource("webcam", video);
   protected detectorLoadTimeoutMs = DETECTOR_LOAD_TIMEOUT_MS;
@@ -237,6 +272,9 @@ export class SmartVisionController {
         // So an open microphone doesn't hear the assistant. While the user is talking it stays open.
         // After Ask, only an urgent warning can get here (see listenOnce), and that takes priority.
         if (speaking && this.listening && !this.userTalking) this.voiceInput?.abort();
+        // A warning cuts the live answer off. The live microphone stays open: echo cancellation
+        // keeps this voice out of it, and muting it would lose what the user says meanwhile.
+        if (speaking && this.liveAudio && this.queue?.hasAtLeast("warning")) this.liveAudio.flush();
       },
       onUtterance: (text, priority) => {
         const urgent = priority === "urgent";
@@ -313,6 +351,8 @@ export class SmartVisionController {
   }
 
   private leaveWhileHidden() {
+    // The microphone mustn't keep streaming from the background.
+    if (this.liveSession) this.stopLive(true);
     if (this.state.camera === "on" || this.state.camera === "starting") {
       this.resumeOnReturn = true;
       this.releaseCamera();
@@ -334,6 +374,7 @@ export class SmartVisionController {
 
   private shutdown() {
     this.resumeOnReturn = false;
+    if (this.liveSession) this.stopLive(true);
     this.stopLocation();
     this.stopAssistantLoop();
     this.releaseCamera();
@@ -353,7 +394,8 @@ export class SmartVisionController {
 
   // --- camera ---------------------------------------------------------------------------------
 
-  async startCamera() {
+  /** `quiet`: a tone instead of the spoken "camera on" (the live conversation says its own). */
+  async startCamera(quiet = false) {
     this.unlockAudio();
     if (!this.video || this.state.camera === "on" || this.state.camera === "starting") return;
     if (!hasConsent()) {
@@ -387,7 +429,7 @@ export class SmartVisionController {
     this.resetAnalysisState();
     this.patch({ camera: "on", analysis: "watching", facing: this.resolveFacing(), canSwitchCamera: false });
     this.feedback("on");
-    this.say(this.t.cameraOn, "status");
+    if (!quiet) this.say(this.t.cameraOn, "status");
     // The user came to hear what's in front of them, so the notice follows the first description,
     // but is never skipped if that description doesn't come.
     this.disclaimerDueAt = Date.now() + DISCLAIMER_LATEST_MS;
@@ -408,11 +450,17 @@ export class SmartVisionController {
     setConsent(true);
     this.patch({ needsConsent: false });
     this.queue?.stop();
+    if (this.pendingLive) {
+      this.pendingLive = false;
+      void this.startLive();
+      return;
+    }
     void this.startCamera();
   }
 
   declineConsent() {
     this.pendingTask = null;
+    this.pendingLive = false;
     this.patch({ needsConsent: false });
     this.queue?.stop();
     this.say(this.t.consentRefused, "answer");
@@ -549,6 +597,11 @@ export class SmartVisionController {
     this.lastGray = gray;
     this.blurSince = quality === "blurry" ? (this.blurSince ?? now) : null;
     this.trackQuality(quality, now);
+
+    if (this.liveSession) {
+      this.liveFrameTick(gray, now);
+      return;
+    }
 
     // The older frame sent with a request: the only evidence allowed for motion claims.
     // Offline nothing can be sent, so it isn't encoded either.
@@ -768,6 +821,17 @@ export class SmartVisionController {
     this.unlockAudio();
     const q = question.trim();
     if (!q) return;
+    // In a live conversation the question goes into it, with a fresh view of the camera.
+    if (this.liveSession?.isOpen) {
+      this.queue?.stop();
+      this.liveAudio?.flush();
+      this.sendLiveFrame(true);
+      this.liveNewUserTurn = true;
+      this.liveNewAnswer = true;
+      this.patch({ live: { ...this.state.live, user: q, ai: "" } });
+      this.liveSession.sendText(q);
+      return;
+    }
     // Answered in the language it was asked in, when that is clearly one the assistant speaks.
     const lang = questionLang(q, this.lang);
     const t = speech(lang);
@@ -841,6 +905,7 @@ export class SmartVisionController {
   stopSpeech() {
     this.unlockAudio();
     this.queue?.stop();
+    this.liveAudio?.flush();
   }
 
   repeat() {
@@ -990,6 +1055,8 @@ export class SmartVisionController {
 
   toggleAssistant() {
     this.unlockAudio();
+    // Voice commands and the live conversation would both need the microphone.
+    if (this.liveSession && !this.state.assistantOn) this.stopLive(true);
     if (this.state.assistantOn) {
       this.stopAssistantLoop();
       this.feedback("off");
@@ -1033,6 +1100,11 @@ export class SmartVisionController {
   /** The Ask button. With the assistant on, the microphone is already open: this only makes room. */
   async askByVoice() {
     this.unlockAudio();
+    // Live: the microphone is always open. Ask only stops the answer so the user can talk.
+    if (this.liveSession) {
+      this.liveAudio?.flush();
+      return;
+    }
     if (this.listening) {
       this.voiceInput?.finish();
       return;
@@ -1184,6 +1256,199 @@ export class SmartVisionController {
     }
   }
 
+  // --- live conversation ---------------------------------------------------------------------------
+  // Microphone audio and camera frames stream to Gemini Live; it answers with a female Tunisian
+  // voice as it thinks. The on-device detector keeps giving its warnings meanwhile.
+
+  toggleLive() {
+    if (this.liveSession) this.stopLive();
+    else void this.startLive();
+  }
+
+  /** Must start in a click or key press: the audio output is unlocked there. */
+  async startLive() {
+    this.unlockAudio();
+    if (this.liveSession) return;
+    if (!hasConsent()) {
+      this.pendingLive = true;
+      this.patch({ needsConsent: true, sheet: "none" });
+      this.say(this.t.privacy, "answer");
+      return;
+    }
+    let audio: LiveAudio;
+    try {
+      audio = new LiveAudio((playing) => this.patch({ live: { ...this.state.live, playing } })); // in the gesture
+    } catch {
+      this.say(this.t.liveFailed, "answer");
+      return;
+    }
+    // The microphone is the live session's now.
+    if (this.state.assistantOn) this.stopAssistantLoop();
+    this.voiceInput?.abort();
+    this.scanCtrl?.abort();
+    this.questionCtrl?.abort();
+    this.queue?.stop();
+    const gen = ++this.liveGen;
+    audio.setVolume(this.state.settings.volume);
+    this.liveAudio = audio;
+    this.lastLiveFrameAt = -Infinity;
+    this.lastLiveGray = null;
+    this.liveNewUserTurn = true;
+    this.liveNewAnswer = true;
+    this.patch({ live: { ...LIVE_OFF, status: "connecting" } });
+
+    if (this.state.camera !== "on") await this.startCamera(true);
+    if (gen !== this.liveGen) return;
+
+    const session = new LiveSession({ lang: this.lang, facing: this.state.facing }, {
+      status: (status) => this.onLiveStatus(gen, status),
+      audio: (pcm) => {
+        if (gen !== this.liveGen || !this.liveAudio) return;
+        if (this.liveNewAnswer) {
+          this.liveNewAnswer = false;
+          this.patch({ live: { ...this.state.live, ai: "" } });
+        }
+        this.liveAudio.play(pcm);
+      },
+      interrupted: () => this.liveAudio?.flush(),
+      userSpeechStart: () => this.sendLiveFrame(false),
+      userText: (piece) => {
+        if (gen !== this.liveGen) return;
+        const user = this.liveNewUserTurn ? piece.trimStart() : this.state.live.user + piece;
+        this.liveNewUserTurn = false;
+        this.liveNewAnswer = true;
+        this.patch({ live: { ...this.state.live, user }, lastHeard: user });
+      },
+      aiText: (piece) => {
+        if (gen !== this.liveGen) return;
+        const ai = this.liveNewAnswer ? piece.trimStart() : this.state.live.ai + piece;
+        this.liveNewAnswer = false;
+        this.patch({ live: { ...this.state.live, ai } });
+      },
+      turnComplete: () => {
+        if (gen !== this.liveGen) return;
+        this.liveNewUserTurn = true;
+        this.liveNewAnswer = true;
+        const text = this.state.live.ai.trim();
+        // "Repeat" and the screen reader get the answer; the voice already said it.
+        if (text) this.patch({ lastSpoken: text, ...(this.state.settings.screenReaderEcho ? { announce: { text, urgent: false, id: this.state.announce.id + 1 } } : {}) });
+      },
+      latency: (ms) => gen === this.liveGen && this.patch({ live: { ...this.state.live, latencyMs: ms } }),
+    });
+    this.liveSession = session;
+
+    try {
+      await audio.startMic({
+        chunk: (pcm) => session.sendAudio(pcm),
+        speechStart: () => {
+          if (gen !== this.liveGen) return;
+          // Talking over the answer: quieter at once; Gemini confirms and it stops (`interrupted`).
+          if (this.liveAudio?.isPlaying) this.liveAudio.setDucked(true);
+          // The user's words come first: a status sentence stops, and the rest waits (warnings don't).
+          if (this.queue?.busy && !this.queue.hasAtLeast("warning")) this.queue.stop();
+          this.queue?.setHold(true);
+          this.sendLiveFrame(false);
+          this.patch({ live: { ...this.state.live, userTalking: true } });
+        },
+        speechEnd: (at) => {
+          if (gen !== this.liveGen) return;
+          session.markSpeechEnd(at);
+          this.liveAudio?.setDucked(false); // a cough isn't an interruption
+          this.queue?.setHold(false);
+          this.patch({ live: { ...this.state.live, userTalking: false } });
+        },
+      });
+    } catch (e) {
+      if (gen !== this.liveGen) return;
+      const code = e instanceof MicError ? e.code : "unknown";
+      this.stopLive(true);
+      this.patch({ mic: code === "denied" ? "denied" : this.state.mic });
+      this.feedback("error");
+      this.say(code === "denied" ? this.t.micDenied : code === "not-found" ? this.t.micMissing : this.t.liveFailed, "answer");
+      return;
+    }
+    if (gen !== this.liveGen) return;
+    try {
+      await session.start();
+    } catch {
+      if (gen !== this.liveGen) return;
+      this.stopLive(true);
+      this.feedback("error");
+      this.say(this.t.liveFailed, "answer");
+    }
+  }
+
+  private onLiveStatus(gen: number, status: LiveStatus) {
+    if (gen !== this.liveGen) return;
+    const before = this.state.live.status;
+    this.patch({ live: { ...this.state.live, status, model: this.liveSession?.model ?? "", voice: this.liveSession?.voice ?? "" } });
+    if (status === "open") {
+      // A new connection has no current view yet (after a reconnect, an old one at best).
+      this.lastLiveFrameAt = -Infinity;
+      this.sendLiveFrame(true);
+      if (before === "connecting") {
+        this.feedback("on");
+        this.say(this.t.liveOn, "status");
+      } else if (before === "reconnecting") {
+        this.say(this.t.liveBack, "status");
+      }
+    } else if (status === "reconnecting" && before === "open") {
+      this.liveAudio?.flush();
+      // The routine reconnect every ~10 minutes is announced by the server and is seamless.
+      if (this.liveSession && this.state.online) setTimeout(() => {
+        if (gen === this.liveGen && this.state.live.status === "reconnecting") this.say(this.t.liveReconnecting, "status");
+      }, 2_500);
+      else this.say(this.t.liveReconnecting, "status");
+    } else if (status === "failed") {
+      this.stopLive(true);
+      this.feedback("error");
+      this.say(this.t.liveFailed, "answer");
+    }
+  }
+
+  /** `quiet`: no tone or sentence (the page is hidden, or another message follows). */
+  stopLive(quiet = false) {
+    this.liveGen++;
+    this.pendingLive = false;
+    const had = !!this.liveSession || !!this.liveAudio;
+    this.liveSession?.stop();
+    this.liveSession = null;
+    this.liveAudio?.close();
+    this.liveAudio = null;
+    this.queue?.setHold(false);
+    this.patch({ live: LIVE_OFF });
+    if (had && !quiet) {
+      this.feedback("off");
+      this.say(this.t.liveOff, "status");
+    }
+  }
+
+  /**
+   * Called on every camera tick while live. At most one frame a second (the API's limit), and only
+   * when the view changed or the last one is getting old, so a still scene costs almost nothing.
+   */
+  private liveFrameTick(gray: Uint8Array, now: number) {
+    const since = now - this.lastLiveFrameAt;
+    if (since < LIVE_MIN_FRAME_GAP_MS) return;
+    const changed = this.lastLiveGray ? changedFraction(this.lastLiveGray, gray) : 1;
+    if (changed < LIVE_CHANGE_THRESHOLD && since < LIVE_HEARTBEAT_FRAME_MS) return;
+    if (this.sendLiveFrame(true)) this.lastLiveGray = gray;
+  }
+
+  /** `force`: send even if the last frame was sent a moment ago (but never twice in 500 ms). */
+  private sendLiveFrame(force: boolean): boolean {
+    const session = this.liveSession;
+    const source = this.source;
+    if (!session?.isOpen || !source || this.state.camera !== "on" || document.hidden) return false;
+    const now = Date.now();
+    if (now - this.lastLiveFrameAt < (force ? LIVE_SPEECH_FRAME_GAP_MS : LIVE_MIN_FRAME_GAP_MS / 2)) return false;
+    const frame = source.capture(LIVE_FRAME.maxSide, LIVE_FRAME.quality);
+    if (!frame || !session.sendFrame(frame.base64)) return false;
+    this.lastLiveFrameAt = now;
+    this.patch({ live: { ...this.state.live, framesSent: this.state.live.framesSent + 1 } });
+    return true;
+  }
+
   // --- settings --------------------------------------------------------------------------------
 
   updateSettings(p: Partial<VisionSettings>) {
@@ -1201,6 +1466,12 @@ export class SmartVisionController {
       this.queue?.resetLanguage();
       this.patch({ voice: this.tts?.voiceInfo() ?? null, ttsFailed: false });
       this.say(this.t.languageSet, "answer");
+    }
+    if (typeof p.volume === "number") this.liveAudio?.setVolume(p.volume);
+    // The instructions are fixed for a live session: a new language needs a new one.
+    if (p.language && p.language !== before.language && this.liveSession) {
+      this.stopLive(true);
+      void this.startLive();
     }
     if (p.facing) {
       this.tracker.clear();

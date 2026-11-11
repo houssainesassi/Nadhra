@@ -32,6 +32,7 @@ The interface is in English. **The assistant speaks and listens in the language 
 
 | Action | Button | Key | Voice (examples) |
 |---|---|---|---|
+| Live conversation on or off | Talk live / End live conversation | `L` | |
 | Camera on or off | Start assistance / Stop camera | `C` | «شعّل الكاميرا», "Open camera", « Allume la caméra » |
 | Describe the surroundings | Describe surroundings | `D` | «وصفلي البلاصة», "Describe my surroundings" |
 | Read text aloud | Read text | `T` | «اقرالي الكتابة», "Read this text", « Lis le texte » |
@@ -46,6 +47,8 @@ The interface is in English. **The assistant speaks and listens in the language 
 | Volume and speed | Settings | | "Louder", "Quieter", "Faster", "Slower" |
 | Change language | Settings | | "Speak French", «احكي بالتونسي», « Parle anglais » |
 | Emergency page | Emergency assistance | | «نجدة», "Emergency", « Au secours » |
+
+**Talk live** is a spoken conversation, like a phone call. It turns the camera on, and from then on you just talk: ask about what the camera shows, follow up, or interrupt the answer whenever you like. The assistant answers in a female voice, in Tunisian Derja by default, and starts speaking about a second after you stop. The microphone and camera stream to Google's Gemini Live service while it is on. On-device warnings for people and vehicles keep working, and cut the conversation off when they speak. Press it again, or press `L`, to end it. The quick-question buttons and the typed question go into the same conversation.
 
 Describe, Read and Identify start the camera first if it is off. The full list of voice commands is in Settings.
 
@@ -85,7 +88,11 @@ Set these in `.env.local`, or in the Vercel project settings. Keys are read only
 | `GEMINI_API_KEY` | Main vision provider, and speech-to-text for browsers without speech recognition |
 | `OPENROUTER_API_KEY` | Optional last-resort fallback, free models only |
 | `GEMINI_VISION_MODELS` | Models to try, in order |
-| `EDGE_TTS_VOICE` | Fallback voice. Default is the Tunisian `ar-TN-HediNeural` |
+| `EDGE_TTS_VOICE` | Voice outside the live conversation. Default is the Tunisian female `ar-TN-ReemNeural`. Only female voices are accepted |
+| `GEMINI_LIVE_MODELS` | Live conversation models, tried in order. Default `gemini-3.1-flash-live-preview,gemini-3.8-live` |
+| `GEMINI_LIVE_VOICE` | Live conversation voice: `Sulafat` (default), `Kore`, `Leda`, `Despina`, `Achernar` or `Zephyr`. Only female voices are accepted |
+| `GEMINI_LIVE_SILENCE_MS` | Silence that ends your turn in a live conversation (default 500) |
+| `GEMINI_LIVE_DISABLED` | `1` turns the live conversation off |
 
 Paid models are refused by design, so a misconfiguration can't produce a bill. To use a paid tier, change this check in [src/lib/ai/vision.ts](src/lib/ai/vision.ts).
 
@@ -101,6 +108,7 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - The browser asks permission for the camera and microphone, and the app asks for consent first.
 - No video is recorded and no image or audio is stored by this app. Frames are held in memory only long enough to send.
 - **Camera images go to an external AI service** (Google Gemini, or OpenRouter as the fallback). Under free-tier terms, these services may keep the content and use it to improve their products, and it may be seen by human reviewers. Check the current terms before offering this to real users, and consider a paid tier that excludes this. People around the user appear in these images too.
+- **In a live conversation,** microphone audio and camera frames (at most one a second, fewer when nothing changes) go straight from the browser to Google Gemini Live. This app's server only hands out a one-time token that expires within minutes; the API key never reaches the browser, and no audio or image passes through the server.
 - **Spoken questions** go to the browser's speech service (Google, in Chrome), or to Gemini when recording is used.
 - Text sent to the fallback voice goes to Microsoft's online service.
 - The camera and microphone are released when turned off or when the page is left.
@@ -108,6 +116,8 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 
 ## Known limits
 
+- **Live answers start about 1–1.5 s after you stop talking** (measured Nov 2026 with Gemini 3.1 Flash Live: median 1.07 s on our connection, occasionally 3 s). About half of that is the service waiting to be sure you have finished. The live model can still be wrong, including about left and right: in one of our test runs it answered about the wrong side. It was also told never to invent movement it can't see; check what matters.
+- **The live voice's Tunisian accent was checked by a second AI model and by pitch measurement, not yet by Tunisian listeners.**
 - **Warnings are not instant.** The on-device detector reacts in under a second, but only knows common objects. Stairs, floor-level changes and other hazards rely on the cloud model, which takes about 2–3 s when healthy and more when busy. A fast car can arrive before any warning.
 - **"Near" and "far" are judged from the picture,** never measured. No distances are given, because a single camera can't measure them reliably.
 - **The French, English and Standard Arabic wording, and the Derja,** were written without native-speaker review. The Derja is also written by an AI model and spoken by a synthetic voice. It needs review by Tunisian blind users. Browser voices that aren't `ar-TN` will pronounce it less naturally.

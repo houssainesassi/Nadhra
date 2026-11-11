@@ -111,7 +111,7 @@ test("server: synthesizes MP3 with the Tunisian voice, no key, Edge handshake", 
   assert.match(s.sent[0], /Path:speech\.config/);
   assert.match(s.sent[0], /audio-24khz-48kbitrate-mono-mp3/);
   assert.match(s.sent[1], /Path:ssml\r\n\r\n<speak /);
-  assert.ok(s.sent[1].includes("<voice name='ar-TN-HediNeural'><prosody pitch='+0Hz' rate='-10%' volume='+0%'>عسلامة لاباس.</prosody>"));
+  assert.ok(s.sent[1].includes("<voice name='ar-TN-ReemNeural'><prosody pitch='+0Hz' rate='-10%' volume='+0%'>عسلامة لاباس.</prosody>"));
 });
 
 test("server: SSML escapes markup in the sentence; rate maps to prosody", () => {
@@ -124,12 +124,17 @@ test("server: SSML escapes markup in the sentence; rate maps to prosody", () => 
 });
 
 test("server: status reports enabled + voice; custom voice honoured, invalid ignored; can be disabled", async () => {
-  assert.deepEqual(ttsStatus(), { configured: true, provider: "edge", voice: "ar-TN-HediNeural", languageCode: "ar-TN", maxChars: MAX_TTS_CHARS });
+  assert.deepEqual(ttsStatus(), { configured: true, provider: "edge", voice: "ar-TN-ReemNeural", languageCode: "ar-TN", maxChars: MAX_TTS_CHARS });
   process.env.EDGE_TTS_VOICE = "ar-SA-ZariyahNeural";
   assert.equal(ttsStatus().voice, "ar-SA-ZariyahNeural");
   assert.equal(ttsStatus().languageCode, "ar-SA");
   process.env.EDGE_TTS_VOICE = "x'/><evil";
-  assert.equal(ttsStatus().voice, "ar-TN-HediNeural");
+  assert.equal(ttsStatus().voice, "ar-TN-ReemNeural");
+  // The assistant's voice is female: a male voice in the environment is refused.
+  for (const male of ["ar-TN-HediNeural", "ar-SA-HamedNeural", "fr-FR-HenriNeural"]) {
+    process.env.EDGE_TTS_VOICE = male;
+    assert.equal(ttsStatus().voice, "ar-TN-ReemNeural", male);
+  }
   process.env.EDGE_TTS_DISABLED = "1";
   assert.equal(ttsStatus().configured, false);
   const res = await handleTtsPost(post({ text: "مرحبا" }));
@@ -291,7 +296,7 @@ let clientCalls: string[] = [];
 let clientConfigured = true;
 let clientPostStatus = 200;
 const clientFetch = (async (_url: string, init?: RequestInit) => {
-  if (!init?.method) return new Response(JSON.stringify({ configured: clientConfigured, voice: "ar-TN-HediNeural", languageCode: "ar-TN" }));
+  if (!init?.method) return new Response(JSON.stringify({ configured: clientConfigured, voice: "ar-TN-ReemNeural", languageCode: "ar-TN" }));
   const { text } = JSON.parse(String(init.body));
   clientCalls.push(text);
   if (clientPostStatus !== 200) return new Response(JSON.stringify({ error: clientPostStatus === 503 ? "not-configured" : "upstream-error" }), { status: clientPostStatus });
@@ -329,9 +334,23 @@ function resetClient() {
   FakeAudioContext.allowResume = true;
 }
 
-test("client: Arabic browser voice is used first; cloud is not called", async () => {
+test("client: the female cloud voice is used first, even with an Arabic voice installed", async () => {
   resetClient();
   browserVoices = [{ name: "Majed", lang: "ar-SA" }];
+  const tts = new HybridTts();
+  await tick();
+  assert.deepEqual(tts.voiceInfo(), { name: "Microsoft Edge ar-TN-ReemNeural", lang: "ar-TN", exactDialect: true, source: "cloud" });
+  const ev = events();
+  tts.speak("عسلامة.", ev.opts());
+  await tick(20);
+  assert.deepEqual(clientCalls, ["عسلامة."]);
+  assert.deepEqual(browserSpoken, []);
+});
+
+test("client: without the cloud voice, the installed voice speaks", async () => {
+  resetClient();
+  clientConfigured = false;
+  browserVoices = [{ name: "Hoda", lang: "ar-EG" }];
   const tts = new HybridTts();
   await tick();
   assert.equal(tts.voiceInfo()?.source, "browser");
@@ -343,6 +362,20 @@ test("client: Arabic browser voice is used first; cloud is not called", async ()
   assert.deepEqual(ev.log, ["start", "end"]);
 });
 
+test("client: a failing cloud voice hands the sentence to the installed voice", async () => {
+  resetClient();
+  browserVoices = [{ name: "Hoda", lang: "ar-EG" }];
+  clientPostStatus = 502;
+  const tts = new HybridTts();
+  await tick();
+  const ev = events();
+  tts.speak("عسلامة.", ev.opts());
+  await tick(30);
+  assert.deepEqual(clientCalls, ["عسلامة."]);
+  assert.deepEqual(browserSpoken, ["عسلامة."]);
+  assert.ok(!ev.log.some((e) => e.startsWith("error")), ev.log.join());
+});
+
 test("client: no Arabic browser voice -> cloud voice plays", async () => {
   resetClient();
   browserVoices = [{ name: "English", lang: "en-US" }];
@@ -351,7 +384,7 @@ test("client: no Arabic browser voice -> cloud voice plays", async () => {
   await tick();
   assert.equal(tts.checking(), false);
   assert.equal(tts.voiceInfo()?.source, "cloud");
-  assert.deepEqual(tts.voiceInfo(), { name: "Microsoft Edge ar-TN-HediNeural", lang: "ar-TN", exactDialect: true, source: "cloud" });
+  assert.deepEqual(tts.voiceInfo(), { name: "Microsoft Edge ar-TN-ReemNeural", lang: "ar-TN", exactDialect: true, source: "cloud" });
   const ev = events();
   tts.speak("عسلامة لاباس.", ev.opts());
   await tick(20);
@@ -556,7 +589,7 @@ test("client: dispose() removes every event listener and closes the AudioContext
 test("server: other languages use their own voice, from a fixed list only", async () => {
   sockets.length = 0;
   script = "ok";
-  for (const [lang, voice] of [["fr", "fr-FR-DeniseNeural"], ["en", "en-US-JennyNeural"], ["ar", "ar-SA-HamedNeural"], ["xx", "ar-TN-HediNeural"], [undefined, "ar-TN-HediNeural"]] as const) {
+  for (const [lang, voice] of [["fr", "fr-FR-DeniseNeural"], ["en", "en-US-JennyNeural"], ["ar", "ar-SA-ZariyahNeural"], ["xx", "ar-TN-ReemNeural"], [undefined, "ar-TN-ReemNeural"]] as const) {
     sockets.length = 0;
     const res = await handleTtsPost(post({ text: "Bonjour.", rate: 1, lang, voice: "en-US-EvilNeural" }));
     assert.equal(res.status, 200, String(lang));
@@ -569,7 +602,7 @@ test("client: the voice follows the speech language, and the cloud gets the lang
   browserVoices = [{ name: "Tunisia", lang: "ar-TN" }];
   const tts = new HybridTts();
   await tick();
-  assert.equal(tts.voiceInfo()?.name, "Tunisia");
+  assert.equal(tts.voiceInfo()?.name, "Microsoft Edge ar-TN-ReemNeural");
   tts.setLanguage("fr");
   assert.equal(tts.voiceInfo()?.source, "cloud", "no French voice installed: the cloud voice");
   assert.deepEqual(tts.voiceInfo(), { name: "Microsoft Edge fr-FR-DeniseNeural", lang: "fr-FR", exactDialect: true, source: "cloud" });
@@ -590,8 +623,13 @@ test("voice choice: by speech language", async () => {
   const voices = [v("Thomas", "fr-CA"), v("Amélie", "fr-FR"), v("Samantha", "en-US"), v("Tunisia", "ar-TN"), v("Maged", "ar-SA")];
   assert.equal(pickVoice(voices, "fr")?.name, "Amélie");
   assert.equal(pickVoice(voices, "en")?.name, "Samantha");
-  assert.equal(pickVoice(voices, "ar")?.name, "Maged", "Standard Arabic prefers a Gulf or Levant voice to a Tunisian one");
+  assert.equal(pickVoice(voices, "ar")?.name, "Tunisia", "a known male voice loses to any other Arabic voice");
   assert.equal(pickVoice(voices, "tn")?.name, "Tunisia");
+  // Female first, by name: browsers don't report a voice's gender.
+  assert.equal(pickVoice([v("Microsoft Naayf", "ar-SA"), v("Microsoft Hoda", "ar-EG")], "tn")?.name, "Microsoft Hoda");
+  assert.equal(pickVoice([v("Microsoft Naayf", "ar-SA"), v("Microsoft Hoda", "ar-EG")], "ar")?.name, "Microsoft Hoda");
+  assert.equal(pickVoice([v("Microsoft Hamed", "ar-SA"), v("Zariyah", "ar-SA")], "ar")?.name, "Zariyah");
+  assert.equal(pickVoice([v("Maged", "ar-SA")], "ar")?.name, "Maged", "a male voice only when it is the only one");
   assert.equal(pickVoice([v("Samantha", "en-US")], "fr"), null, "never an English voice for French");
   assert.equal(speechText("rouge / bleu", "fr"), "rouge ou bleu");
   assert.equal(speechText("red / blue", "en"), "red or blue");

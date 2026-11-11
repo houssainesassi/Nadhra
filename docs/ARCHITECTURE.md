@@ -19,6 +19,21 @@ Camera (CameraSource)
 
 Two layers on purpose. The **cloud model** understands the scene: rooms, stairs, text, questions. The **on-device detector** (MediaPipe EfficientDet-Lite0) is fast, private and keeps working when the cloud is slow or down, but only knows common objects.
 
+## Live conversation
+
+```
+Microphone ─ AudioWorklet ─ 16 kHz PCM ─┐
+Camera ─ ≤1 frame/s (on change, every 3 s, and when the user starts talking) ─┤ one WebSocket ─ Gemini Live
+Speaker ◄─ 24 kHz PCM, played as it arrives, flushed on `interrupted` ◄───────┘    (token from /api/live/token)
+```
+
+- `src/lib/live/session.ts`: the WebSocket client. Gets a token, sends the setup locked into it, falls back to the next model if one can't be reached, keeps the resumption handle, reconnects into the same conversation after a drop or a `goAway` (buffering up to 3 s of microphone audio meanwhile), and reports latency from the end of the user's speech.
+- `src/lib/live/audioIO.ts`: microphone capture with echo cancellation, gapless playback, ducking while the user talks over an answer, and a level-based voice detector.
+- `src/lib/live/config.ts`: female voices, models, frame limits and the system prompt (Derja by default, the same safety rules as the rest of the app).
+- `src/lib/server/liveToken.ts`: mints a one-use token whose whole setup (model, voice, instructions) is locked, so a page script can't use it for anything else.
+- The controller pauses cloud scans while live, keeps the on-device detector running, and lets a warning cut the live answer off. The live microphone is never muted: the user's words stop status sentences instead.
+- Tests: `tests/live.test.ts` (no network); `e2e/live/latency.ts` and `e2e/live/browser.mjs` use the real service (see their headers).
+
 ## Code map
 
 | Path | Responsibility |

@@ -141,7 +141,7 @@ The safety design is the strongest part of the codebase:
 ### 2.6 Text-to-speech (`src/lib/speech/tts.ts`, `edgeTts.ts`, `speechQueue.ts`)
 
 - **`HybridTts`** (`tts.ts:427-499`) uses the best installed browser voice for the language (`pickVoice`, `tts.ts:147-158`). When there is none, or it fails, it uses `CloudTts`, which posts each sentence to `/api/tts` and plays the MP3 through WebAudio.
-- **The server** (`edgeTts.ts:236`) speaks Microsoft Edge's "Read aloud" WebSocket protocol, with a built-in client token and a computed `Sec-MS-GEC` token (`edgeDrm.ts:8,176`). Voices are fixed per language: `ar-TN-HediNeural` (or `EDGE_TTS_VOICE`), `ar-SA-HamedNeural`, `fr-FR-DeniseNeural` and `en-US-JennyNeural` (`lang.ts:33-37`). The client picks a language, never a voice name.
+- **The server** (`edgeTts.ts:236`) speaks Microsoft Edge's "Read aloud" WebSocket protocol, with a built-in client token and a computed `Sec-MS-GEC` token (`edgeDrm.ts:8,176`). Voices are fixed per language: `ar-TN-ReemNeural` (or `EDGE_TTS_VOICE`, female voices only), `ar-SA-ZariyahNeural`, `fr-FR-DeniseNeural` and `en-US-JennyNeural` (`lang.ts:33-37`). The client picks a language, never a voice name.
 - **`SpeechQueue`** (`speechQueue.ts`) has four priorities: urgent, answer, status and narration. It handles pre-emption, resuming, a time-to-live per priority, de-duplication, a "hold" while the user talks, and a watchdog for engines that never report the end of a sentence (`speechQueue.ts:167`). Long text is split into chunks of 400 characters or less (`speechQueue.ts:34-50`).
 
 ### 2.7 Local processing

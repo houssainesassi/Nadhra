@@ -77,6 +77,7 @@ const CAMERA_ERROR_LABEL: Record<string, string> = {
 };
 
 const SHORTCUTS = [
+  ["L", "Start or end a live conversation"],
   ["C", "Start or stop assistance (the camera)"],
   ["D", "Describe my surroundings"],
   ["T", "Read text"],
@@ -118,8 +119,30 @@ const EMERGENCY_NUMBERS = [
 /** A warning stays readable this long, even if the voice fails or the next sentence follows at once. */
 const WARNING_HOLD_MS = 5_000;
 
+const LIVE_LABEL: Record<VisionState["live"]["status"], string> = {
+  off: "Off",
+  idle: "Off",
+  connecting: "Connecting…",
+  open: "Listening",
+  reconnecting: "Reconnecting…",
+  closed: "Off",
+  failed: "Not available",
+};
+
+function liveLabel(s: VisionState): string {
+  if (s.live.status !== "open") return LIVE_LABEL[s.live.status];
+  if (s.live.playing) return "Speaking";
+  if (s.live.userTalking) return "Hearing you";
+  return "Listening";
+}
+
 function irisState(s: VisionState): IrisState {
   if (s.lastUrgent && s.speaking) return "urgent";
+  if (s.live.status !== "off" && s.live.status !== "closed" && s.live.status !== "failed") {
+    if (s.live.playing || s.speaking) return "speaking";
+    if (s.live.status === "connecting" || s.live.status === "reconnecting") return "thinking";
+    return "listening";
+  }
   if (s.mic === "listening") return "listening";
   if (s.speaking) return "speaking";
   if (s.analysis === "analyzing" || s.mic === "processing" || s.answer.live) return "thinking";
@@ -224,6 +247,7 @@ export default function Assistant() {
         KeyT: () => void controller.runTask("read"),
         KeyI: () => void controller.runTask("identify"),
         KeyV: () => controller.toggleAssistant(),
+        KeyL: () => controller.toggleLive(),
         KeyQ: () => void controller.askByVoice(),
         KeyP: () => (controller.isPaused ? controller.resume() : controller.pause()),
         KeyR: () => controller.repeat(),
@@ -255,6 +279,7 @@ export default function Assistant() {
       : `Looking for a ${lang.label} voice…`;
   const hasFindings = !!s.environment || s.detections.length > 0 || s.localHazards.length > 0 || s.texts.length > 0;
   const examples = commandExamples(s.settings.language);
+  const liveOn = s.live.status !== "off" && s.live.status !== "closed" && s.live.status !== "failed";
   const contact = s.settings.emergencyPhone;
   const contactName = s.settings.emergencyName || "my emergency contact";
 
@@ -301,10 +326,24 @@ export default function Assistant() {
               </p>
             ) : (
               <p data-testid="last-spoken" data-urgent="false" className="caption mt-5 min-h-[6.5rem] text-[clamp(1.55rem,1.25rem+1.1vw,2.1rem)] leading-[1.35] font-medium tracking-tight">
-                Press Start assistance to begin, or press H for help.
+                Press Talk live to talk with me, Start assistance to begin, or H for help.
               </p>
             )}
-            {s.lastHeard && <p className="quiet-text mt-3 text-base text-ink-2">I heard: <span dir="auto">«{s.lastHeard}»</span></p>}
+            {liveOn ? (
+              <div className="mt-3 flex flex-col gap-1.5 text-base text-ink-2" data-testid="live-transcript">
+                {s.live.user && <p>You: <span dir="auto" data-testid="live-user">«{s.live.user.trim()}»</span></p>}
+                {s.live.ai && (
+                  <p>
+                    Nadhra:{" "}
+                    <span dir="auto" lang={lang.bcp47} data-testid="live-ai" className={rtl ? "arabic" : ""}>
+                      {s.live.ai.trim()}
+                    </span>
+                  </p>
+                )}
+              </div>
+            ) : (
+              s.lastHeard && <p className="quiet-text mt-3 text-base text-ink-2">I heard: <span dir="auto">«{s.lastHeard}»</span></p>
+            )}
             {/* The whole answer, growing while it streams in. Not a live region: the voice already says it. */}
             {s.answer.text && (s.answer.live || s.answer.text !== shownSentence) && (
               <div className="mt-3 text-base text-ink-2" data-testid="answer-text" data-live={s.answer.live}>
@@ -330,6 +369,24 @@ export default function Assistant() {
               </button>
             )}
             <p id="start-hint" className="sr-only">Turns on the camera. The assistant then describes what it sees and warns about hazards.</p>
+
+            <button type="button" onClick={() => controller.toggleLive()} aria-pressed={liveOn} aria-keyshortcuts="L" aria-describedby="live-hint" data-testid="live-toggle" data-live-status={s.live.status} className={`control ${liveOn ? "control-listening" : "control-primary"}`}>
+              {liveOn ? <MicIcon /> : <AskIcon />}
+              <span className="min-w-0">{liveOn ? "End live conversation" : "Talk live"}</span>
+              {liveOn && (
+                <span aria-hidden="true" data-testid="live-status" className="ms-auto shrink-0 rounded-full border border-current px-3 py-0.5 text-base font-medium">
+                  {liveLabel(s)}
+                </span>
+              )}
+            </button>
+            <p id="live-hint" className="sr-only">A spoken conversation, like a phone call: talk any time while showing the camera, and interrupt whenever you like. The assistant answers in a female Tunisian voice.</p>
+            {liveOn && (
+              <p role="status" className="text-base text-ink-2" data-testid="live-meta">
+                {liveLabel(s)}
+                {s.live.latencyMs != null && <> · answered in {(s.live.latencyMs / 1000).toFixed(2)} s</>}
+                {s.live.voice && <> · voice {s.live.voice}</>}
+              </p>
+            )}
 
             <h2 className="sr-only">Main actions</h2>
             {/* One column at large text sizes: three labels side by side would be cut off. */}
@@ -405,7 +462,7 @@ export default function Assistant() {
               {cameraOn ? (
                 <p className="chip top-4 left-1/2 -translate-x-1/2">
                   <i aria-hidden="true" data-paused={paused} />
-                  {paused ? "Paused" : "Live"}
+                  {liveOn ? `Live conversation · ${s.live.framesSent} frames sent` : paused ? "Paused" : "Live"}
                 </p>
               ) : (
                 <div className="absolute inset-0 grid place-items-center p-6 text-center">
@@ -422,12 +479,12 @@ export default function Assistant() {
 
             <dl className="mt-5 grid grid-cols-1 gap-x-10 sm:grid-cols-2">
               <Status term="Camera" testId="camera-status" value={CAMERA_LABEL[s.camera]} />
-              <Status term="Microphone" testId="mic-status" value={s.assistantOn && s.mic === "off" ? "Waiting" : MIC_LABEL[s.mic]} />
-              <Status term="Analysis" testId="analysis-status" value={!s.online && cameraOn ? "Offline" : ANALYSIS_LABEL[s.analysis]} />
+              <Status term="Microphone" testId="mic-status" value={liveOn ? `Live: ${liveLabel(s).toLowerCase()}` : s.assistantOn && s.mic === "off" ? "Waiting" : MIC_LABEL[s.mic]} />
+              <Status term="Analysis" testId="analysis-status" value={liveOn ? "Live conversation (on-device warnings still on)" : !s.online && cameraOn ? "Offline" : ANALYSIS_LABEL[s.analysis]} />
               <Status term="On-device detection" value={!cameraOn ? "Stopped" : s.detector === "ready" ? "Running" : s.detector === "loading" ? "Loading…" : s.detector === "failed" ? "Failed, cloud analysis only" : "Stopped"} />
               <Status term="Speaks" value={lang.label} />
               <Status term="Internet" value={s.online ? "Connected" : "Offline"} />
-              <Status term="Voice" testId="voice-status" value={voiceText} wide />
+              <Status term="Voice" testId="voice-status" value={liveOn && s.live.voice ? `Gemini ${s.live.voice}, female (live); warnings: ${voiceText}` : voiceText} wide />
               {s.status && !s.status.available && <Status term="Service" value="The AI key isn't set on the server." wide />}
             </dl>
           </section>
