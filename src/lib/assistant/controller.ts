@@ -10,11 +10,13 @@ import { createCameraSource, type CameraSource, type CapturedFrame } from "./cam
 import { Earcons, type Earcon } from "./earcons.ts";
 import { changedFraction, classifyQuality, frameStats, rgbaToGray, type LocalQuality } from "./frameAnalysis.ts";
 import { HazardTracker } from "./hazardTracker.ts";
-import { hazardUrgency, WarningGate } from "./hazards.ts";
+import { hazardKey, hazardUrgency, WarningGate } from "./hazards.ts";
 import { LocalDetector } from "./localDetector.ts";
 import { cameraErrorText, PHRASES, speech, warningPhrase, type Phrases } from "./phrases.ts";
 import { LANGS, questionLang, type SpeechLang } from "./lang.ts";
 import { backoffMs, decideScan } from "./scheduler.ts";
+import { flushReports, report } from "./api.ts";
+import { isSafetyClaim, splitSentences } from "./schema.ts";
 import { DEFAULT_VISION_SETTINGS, hasConsent, loadVisionSettings, RATE_CHOICES, saveVisionSettings, setConsent, VOLUME_CHOICES, type VisionSettings } from "./settings.ts";
 import { isRepeat, SpeechQueue, type SpeechPriority } from "./speechQueue.ts";
 import type { CameraFacing, Detection, Hazard, SceneAnalysis, SceneText, VisionMode, VisionStatus } from "./types.ts";
@@ -37,6 +39,14 @@ const FAILURES_BEFORE_ANNOUNCE = 2;
 const ALIVE_AFTER_SILENCE_MS = 45_000;
 const RECENT_SPOKEN = 4;
 const DISCLAIMER_LATEST_MS = 20_000;
+/**
+ * During a live conversation the cloud scans keep running for their hazards only (stairs, drops,
+ * obstacles the on-device detector can't see), at a slower pace: the conversation itself already
+ * describes the scene, and each scan costs quota.
+ */
+const LIVE_HAZARD_SCAN_MS = 8_000;
+/** A spent daily budget doesn't come back soon: scans wait this long before trying again. */
+const QUOTA_BACKOFF_MS = 15 * 60_000;
 
 export type CameraState = "off" | "starting" | "on" | "error";
 export type AnalysisState = "off" | "watching" | "analyzing" | "paused" | "unavailable" | "poor-image" | "hidden";
@@ -72,6 +82,8 @@ export interface VisionState {
   assistantOn: boolean;
   speaking: boolean;
   needsConsent: boolean;
+  /** Consent to send camera images has been given (and not withdrawn). */
+  consentGiven: boolean;
   lastSpoken: string;
   lastUrgent: boolean;
   lastHeard: string;
@@ -129,6 +141,7 @@ const INITIAL: VisionState = {
   assistantOn: false,
   speaking: false,
   needsConsent: false,
+  consentGiven: false,
   lastSpoken: "",
   lastUrgent: false,
   lastHeard: "",
@@ -221,6 +234,14 @@ export class SmartVisionController {
   private liveNewAnswer = true;
   /** Consent was asked for on the way to a live conversation: it starts once given. */
   private pendingLive = false;
+  /** Open Camera was pressed: hands-free listening starts once the camera is on (after consent, if asked). */
+  private pendingVoice = false;
+  /** How much of the live answer was already checked for safety promises. */
+  private liveCheckedChars = 0;
+  /** The rest of this live answer is not played: it promised safety and was corrected. */
+  private liveMuted = false;
+  /** The user's last live turn was already checked for an emergency command. */
+  private liveCommandChecked = false;
   /** Replaceable in tests. */
   protected makeSource: (video: HTMLVideoElement) => CameraSource = (video) => createCameraSource("webcam", video);
   protected detectorLoadTimeoutMs = DETECTOR_LOAD_TIMEOUT_MS;
@@ -287,13 +308,20 @@ export class SmartVisionController {
       },
       onFailure: (text) => {
         // The voice failed, so the screen reader takes over this sentence and the following ones.
+        if (!this.state.ttsFailed) report("tts-failed");
         this.feedback("error");
         this.patch({ ttsFailed: true, announce: { text, urgent: false, id: this.state.announce.id + 1 } });
+      },
+      // A warning that was never heard mustn't be held back as "already said": the next detection
+      // of the same hazard says it again, if it is still there.
+      onDropped: (key) => {
+        this.gate.forget(key);
+        report("warning-expired");
       },
     });
     const settings = loadVisionSettings();
     this.tts.setLanguage?.(settings.language);
-    this.patch({ settings, voice: this.tts.voiceInfo(), online: navigator.onLine !== false });
+    this.patch({ settings, voice: this.tts.voiceInfo(), online: navigator.onLine !== false, consentGiven: hasConsent() });
     void fetchVisionStatus().then((status) => this.patch({ status }));
 
     // A lost connection stops the cloud analysis: the user must know, and frames aren't sent for nothing.
@@ -325,7 +353,10 @@ export class SmartVisionController {
       removeEventListener("online", onOnline);
     });
 
-    const onHide = () => this.shutdown();
+    const onHide = () => {
+      this.shutdown();
+      flushReports();
+    };
     // Switching apps, changing tabs or locking the phone hides the page. The camera and microphone
     // are released then, not only when the page closes, and the camera comes back with the user.
     const onVisibility = () => (document.hidden ? this.leaveWhileHidden() : this.returnFromHidden());
@@ -382,8 +413,8 @@ export class SmartVisionController {
   }
 
   /** `lang`: speak in that language's voice (an answer in the question's language). */
-  private say(text: string, priority: SpeechPriority, lang?: SpeechLang) {
-    this.queue?.say(text, priority, lang && lang !== this.lang ? lang : undefined);
+  private say(text: string, priority: SpeechPriority, lang?: SpeechLang, key?: string) {
+    this.queue?.say(text, priority, lang && lang !== this.lang ? lang : undefined, key);
   }
 
   /** Must run inside a click or key press: browsers keep audio locked until then. */
@@ -411,7 +442,9 @@ export class SmartVisionController {
     } catch (e) {
       const code = e instanceof CameraError ? e.code : "unknown";
       this.pendingTask = null;
+      this.pendingVoice = false;
       this.patch({ camera: "error", cameraError: code });
+      report("camera-error", code);
       this.feedback("error");
       this.say(cameraErrorText(this.lang, code), "answer");
       return;
@@ -419,6 +452,7 @@ export class SmartVisionController {
     if (session !== this.session) return source.stop();
 
     source.onEnded(() => {
+      report("camera-error", "lost");
       this.releaseCamera();
       this.patch({ camera: "error", cameraError: "lost" });
       this.feedback("error");
@@ -443,12 +477,54 @@ export class SmartVisionController {
     const task = this.pendingTask;
     this.pendingTask = null;
     if (task) void this.askWhenReady(task, session);
+    if (this.pendingVoice) {
+      this.pendingVoice = false;
+      this.startHandsFree();
+    }
+  }
+
+  /**
+   * The Open Camera button: the camera, the on-device warnings and the cloud analysis, then
+   * hands-free voice commands, in one press. Nothing is bypassed: the consent notice comes first
+   * when it hasn't been given, and the browser asks for the camera and microphone itself.
+   */
+  async startAssistance() {
+    this.unlockAudio();
+    if (this.state.camera === "on" || this.state.camera === "starting") return this.startHandsFree();
+    this.pendingVoice = true;
+    await this.startCamera();
+  }
+
+  /** The Stop button: camera, voice commands and any live conversation all end. */
+  stopAssistance() {
+    this.unlockAudio();
+    this.pendingVoice = false;
+    this.pendingTask = null;
+    if (this.liveSession) this.stopLive(true);
+    if (this.state.assistantOn) this.stopAssistantLoop();
+    if (this.state.camera === "on" || this.state.camera === "starting") return this.stopCamera();
+    this.resumeOnReturn = false;
+    if (this.state.camera === "error") this.patch({ camera: "off", cameraError: "" });
+    this.feedback("off");
+    this.queue?.stop();
+    this.say(this.t.assistantOff, "status");
+  }
+
+  /** Voice commands on, without a second "on" sentence: the camera has just said it is on. */
+  private startHandsFree() {
+    if (this.state.assistantOn || this.liveSession) return;
+    if (!this.pickVoiceInput()) {
+      this.patch({ mic: "unavailable" });
+      return;
+    }
+    this.patch({ assistantOn: true });
+    void this.assistantLoop(++this.loopGen);
   }
 
   acceptConsent() {
     this.unlockAudio();
     setConsent(true);
-    this.patch({ needsConsent: false });
+    this.patch({ needsConsent: false, consentGiven: true });
     this.queue?.stop();
     if (this.pendingLive) {
       this.pendingLive = false;
@@ -461,9 +537,34 @@ export class SmartVisionController {
   declineConsent() {
     this.pendingTask = null;
     this.pendingLive = false;
+    this.pendingVoice = false;
     this.patch({ needsConsent: false });
     this.queue?.stop();
     this.say(this.t.consentRefused, "answer");
+  }
+
+  /**
+   * Withdraws consent: the camera and the live conversation stop, no image is sent any more, and
+   * the notice is shown again before the camera can start. Settings and the emergency contact stay.
+   */
+  withdrawConsent() {
+    this.unlockAudio();
+    this.pendingTask = null;
+    this.pendingLive = false;
+    this.pendingVoice = false;
+    if (this.liveSession) this.stopLive(true);
+    this.resumeOnReturn = false;
+    if (this.state.camera === "on" || this.state.camera === "starting") {
+      this.releaseCamera();
+      this.feedback("off");
+    }
+    setConsent(false);
+    this.patch({ consentGiven: false });
+    this.history = [];
+    this.recent = [];
+    report("consent-withdrawn");
+    this.queue?.stop();
+    this.say(this.t.consentWithdrawn, "answer");
   }
 
   stopCamera() {
@@ -558,10 +659,11 @@ export class SmartVisionController {
     if (this.state.camera !== "on" || this.paused) return;
     this.paused = true;
     this.scanCtrl?.abort();
-    this.tracker.clear();
-    this.patch({ analysis: "paused", localHazards: [] });
+    // Only the descriptions and cloud analysis stop. The on-device warnings keep running: a pause
+    // must never silently turn the safety layer off, and the user is told which one is still on.
+    this.patch({ analysis: "paused" });
     this.feedback("off");
-    this.say(this.t.paused, "status");
+    this.say(this.state.detector === "ready" || this.state.detector === "loading" ? this.t.paused : this.t.pausedNoWarnings, "status");
   }
 
   resume() {
@@ -584,24 +686,23 @@ export class SmartVisionController {
     if (!source || this.state.camera !== "on") return;
     const now = Date.now();
     if (now >= this.disclaimerDueAt) this.sayDisclaimerOnce();
-    if (this.paused) return;
     if (document.hidden) {
-      if (this.state.analysis !== "hidden") this.patch({ analysis: "hidden" });
+      if (!this.paused && this.state.analysis !== "hidden") this.patch({ analysis: "hidden" });
       return;
     }
     const thumb = source.thumbnail(THUMB.width, THUMB.height);
     if (!thumb) return;
     const gray = rgbaToGray(thumb.rgba);
     const quality = classifyQuality(frameStats(gray, thumb.width, thumb.height));
+    // Measured while paused too: the on-device warnings need to know whether the camera is moving.
     this.motion = this.lastGray ? changedFraction(this.lastGray, gray) : 0;
     this.lastGray = gray;
+    if (this.paused) return;
     this.blurSince = quality === "blurry" ? (this.blurSince ?? now) : null;
     this.trackQuality(quality, now);
 
-    if (this.liveSession) {
-      this.liveFrameTick(gray, now);
-      return;
-    }
+    const live = !!this.liveSession;
+    if (live) this.liveFrameTick(gray, now);
 
     // The older frame sent with a request: the only evidence allowed for motion claims.
     // Offline nothing can be sent, so it isn't encoded either.
@@ -625,12 +726,14 @@ export class SmartVisionController {
       unchangedStreak: this.unchangedStreak,
       newObject: this.newObject,
       blurSince: this.blurSince,
+      ...(live ? { minIntervalMs: LIVE_HAZARD_SCAN_MS } : {}),
     });
     if (decision.send) void this.scan(gray);
     else if (this.state.analysis === "hidden") this.patch({ analysis: "watching" });
 
     // A long silence shouldn't feel like the assistant has died: a soft tone says it's still running.
-    if (now - this.lastSoundAt > ALIVE_AFTER_SILENCE_MS && !this.queue?.busy) {
+    // (A live conversation has its own voice.)
+    if (!live && now - this.lastSoundAt > ALIVE_AFTER_SILENCE_MS && !this.queue?.busy) {
       this.lastSoundAt = now;
       this.earcons.play("alive", this.state.settings.volume);
     }
@@ -711,9 +814,17 @@ export class SmartVisionController {
     const err = e instanceof VisionApiError ? e : new VisionApiError(0, "network");
     this.failures++;
     this.backoffUntil = Date.now() + backoffMs(this.failures, err.retryAfterMs);
+    if (this.failures === FAILURES_BEFORE_ANNOUNCE || err.code === "quota-exhausted") report("scan-failed", err.code);
     if (err.code === "not-configured") {
       this.backoffUntil = Date.now() + 5 * 60_000;
       if (!this.downAnnounced) this.say(this.t.aiNotConfigured, "answer");
+      this.downAnnounced = true;
+    } else if (err.code === "quota-exhausted") {
+      this.backoffUntil = Date.now() + Math.max(QUOTA_BACKOFF_MS, err.retryAfterMs);
+      if (!this.downAnnounced) {
+        this.feedback("error");
+        this.say(this.t.quotaExhausted, "answer");
+      }
       this.downAnnounced = true;
     } else if (this.failures >= FAILURES_BEFORE_ANNOUNCE && !this.downAnnounced && this.state.online) {
       // The user must not believe they're still being watched over when they aren't.
@@ -728,6 +839,8 @@ export class SmartVisionController {
   private applyAnalysis(analysis: SceneAnalysis, mode: VisionMode, spoken = analysis.spoken, lang?: SpeechLang) {
     this.patch({ environment: analysis.environment, detections: analysis.detections, texts: analysis.texts });
     this.speakHazards(analysis.hazards, mode !== "scan");
+    // In a live conversation the scans are only for their warnings: the conversation describes.
+    if (mode === "scan" && this.liveSession) return;
     if (mode !== "scan") {
       if (spoken) this.say(spoken, "answer", lang);
       return;
@@ -746,11 +859,12 @@ export class SmartVisionController {
       const urgency = hazardUrgency(hazard);
       if (urgentOnly && urgency !== "urgent") continue;
       if (!this.gate.admit(hazard, urgency, now)) continue;
+      const key = hazardKey(hazard);
       if (urgency === "urgent") {
         this.feedback("urgent");
-        this.say(warningPhrase(hazard, this.lang), "urgent");
+        this.say(warningPhrase(hazard, this.lang), "urgent", undefined, key);
       } else {
-        this.say(warningPhrase(hazard, this.lang), "warning");
+        this.say(warningPhrase(hazard, this.lang), "warning", undefined, key);
       }
     }
   }
@@ -763,6 +877,7 @@ export class SmartVisionController {
    */
   private detectorFailed(session: number, why: string) {
     console.warn("[vision] on-device detector unavailable:", why);
+    report("detector-failed", /timed out/.test(why) ? "timeout" : "error");
     this.detector.close(); // a broken instance isn't reused: the next camera start loads a new one
     if (session !== this.session) return;
     this.patch({ detector: "failed", localHazards: [] });
@@ -791,7 +906,8 @@ export class SmartVisionController {
       if (session !== this.session) return;
       const video = this.source?.videoElement();
       const now = performance.now();
-      if (video && !this.paused && !document.hidden && this.budget.shouldProcess(now)) {
+      // Also while paused: the pause stops descriptions, never the safety layer.
+      if (video && !document.hidden && this.budget.shouldProcess(now)) {
         try {
           const raw = this.detector.detect(video, now);
           this.budget.record(performance.now() - now, performance.now());
@@ -894,7 +1010,12 @@ export class SmartVisionController {
         this.say(t.answerCut, "answer", lang);
         return;
       }
-      this.say(err?.code === "not-configured" ? t.aiNotConfigured : err?.status === 429 || err?.code === "rate-limited" ? t.rateLimited : t.questionFailed, "answer", lang);
+      report("question-failed", err?.code ?? "unknown");
+      this.say(
+        err?.code === "not-configured" ? t.aiNotConfigured : err?.code === "quota-exhausted" ? t.quotaExhausted : err?.status === 429 || err?.code === "rate-limited" ? t.rateLimited : t.questionFailed,
+        "answer",
+        lang,
+      );
     } finally {
       if (this.questionCtrl === ctrl) this.questionCtrl = null;
       if (this.state.answer.live && this.questionCtrl === null) this.patch({ answer: { ...this.state.answer, live: false } });
@@ -1169,6 +1290,7 @@ export class SmartVisionController {
 
   private async handleVoiceError(e: unknown, pushToTalk: boolean) {
     const code = e instanceof VoiceError ? e.code : e instanceof VisionApiError ? "api" : "unknown";
+    report("voice-error", code);
     if ((code === "service" || code === "api") && (!this.state.online || navigator.onLine === false)) {
       // Offline, not a browser without speech service: don't switch to recording for good.
       this.patch({ mic: "off" });
@@ -1295,38 +1417,49 @@ export class SmartVisionController {
     this.lastLiveGray = null;
     this.liveNewUserTurn = true;
     this.liveNewAnswer = true;
+    this.liveCheckedChars = 0;
+    this.liveMuted = false;
+    this.liveCommandChecked = true;
     this.patch({ live: { ...LIVE_OFF, status: "connecting" } });
 
     if (this.state.camera !== "on") await this.startCamera(true);
     if (gen !== this.liveGen) return;
 
     const session = new LiveSession({ lang: this.lang, facing: this.state.facing }, {
-      status: (status) => this.onLiveStatus(gen, status),
+      status: (status, detail) => this.onLiveStatus(gen, status, detail),
       audio: (pcm) => {
         if (gen !== this.liveGen || !this.liveAudio) return;
-        if (this.liveNewAnswer) {
-          this.liveNewAnswer = false;
-          this.patch({ live: { ...this.state.live, ai: "" } });
-        }
+        if (this.liveNewAnswer) this.startLiveAnswer();
+        if (this.checkLiveCommand()) return;
+        if (this.liveMuted) return; // this answer promised safety: the correction replaced it
         this.liveAudio.play(pcm);
       },
-      interrupted: () => this.liveAudio?.flush(),
+      interrupted: () => {
+        this.liveAudio?.flush();
+        this.liveMuted = false;
+      },
       userSpeechStart: () => this.sendLiveFrame(false),
       userText: (piece) => {
         if (gen !== this.liveGen) return;
         const user = this.liveNewUserTurn ? piece.trimStart() : this.state.live.user + piece;
+        if (this.liveNewUserTurn) this.liveCommandChecked = false;
         this.liveNewUserTurn = false;
         this.liveNewAnswer = true;
         this.patch({ live: { ...this.state.live, user }, lastHeard: user });
       },
       aiText: (piece) => {
         if (gen !== this.liveGen) return;
-        const ai = this.liveNewAnswer ? piece.trimStart() : this.state.live.ai + piece;
-        this.liveNewAnswer = false;
+        if (this.liveNewAnswer) this.startLiveAnswer();
+        if (this.checkLiveCommand()) return;
+        const ai = this.state.live.ai + (this.state.live.ai ? piece : piece.trimStart());
         this.patch({ live: { ...this.state.live, ai } });
+        this.checkLiveSafety(false);
       },
       turnComplete: () => {
         if (gen !== this.liveGen) return;
+        if (this.checkLiveCommand()) return;
+        this.checkLiveSafety(true);
+        this.liveMuted = false;
         this.liveNewUserTurn = true;
         this.liveNewAnswer = true;
         const text = this.state.live.ai.trim();
@@ -1378,7 +1511,62 @@ export class SmartVisionController {
     }
   }
 
-  private onLiveStatus(gen: number, status: LiveStatus) {
+  /** The first sound or word of a new live answer. */
+  private startLiveAnswer() {
+    this.liveNewAnswer = false;
+    this.liveCheckedChars = 0;
+    this.liveMuted = false;
+    this.patch({ live: { ...this.state.live, ai: "" } });
+  }
+
+  /**
+   * What the user said in the live conversation, once their turn is over. Gemini would answer
+   * «نجدة» with words; the Emergency page must open instead, and «سكّر» must end the conversation.
+   * True when the conversation was ended for it.
+   */
+  private checkLiveCommand(): boolean {
+    if (this.liveCommandChecked) return false;
+    this.liveCommandChecked = true;
+    const command = parseCommand(this.state.live.user);
+    if (command === "emergency" || command === "call") {
+      this.stopLive(true);
+      this.openSheet("emergency");
+      // Hands-free: «عيّط» then selects the call button.
+      if (!this.state.assistantOn && this.pickVoiceInput()) {
+        this.patch({ assistantOn: true });
+        void this.assistantLoop(++this.loopGen);
+      }
+      return true;
+    }
+    if (command === "assistant-off" || command === "camera-off") {
+      this.stopLive();
+      if (command === "camera-off") this.stopCamera();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Gemini Live speaks before its words can be checked, so a promise of safety («الطريق فارغ»,
+   * «you can cross») can't be removed like in other answers. As soon as such a sentence shows up
+   * in its transcript, the rest of that answer is cut and the correction is said instead.
+   */
+  private checkLiveSafety(final: boolean) {
+    if (this.liveMuted) return;
+    const ai = this.state.live.ai;
+    // Only finished sentences, unless the answer is complete.
+    const end = final ? ai.length : Math.max(ai.lastIndexOf("."), ai.lastIndexOf("!"), ai.lastIndexOf("؟"), ai.lastIndexOf("?")) + 1;
+    if (end <= this.liveCheckedChars) return;
+    const fresh = ai.slice(this.liveCheckedChars, end);
+    this.liveCheckedChars = end;
+    if (!splitSentences(fresh).some(isSafetyClaim)) return;
+    this.liveMuted = true;
+    this.liveAudio?.flush();
+    report("live-safety-claim");
+    this.say(this.t.pathCaveat, "warning");
+  }
+
+  private onLiveStatus(gen: number, status: LiveStatus, detail?: string) {
     if (gen !== this.liveGen) return;
     const before = this.state.live.status;
     this.patch({ live: { ...this.state.live, status, model: this.liveSession?.model ?? "", voice: this.liveSession?.voice ?? "" } });
@@ -1393,6 +1581,7 @@ export class SmartVisionController {
         this.say(this.t.liveBack, "status");
       }
     } else if (status === "reconnecting" && before === "open") {
+      report("live-reconnect", detail && /^[a-z0-9-]{1,40}$/.test(detail) ? detail : "other");
       this.liveAudio?.flush();
       // The routine reconnect every ~10 minutes is announced by the server and is seamless.
       if (this.liveSession && this.state.online) setTimeout(() => {
@@ -1400,9 +1589,10 @@ export class SmartVisionController {
       }, 2_500);
       else this.say(this.t.liveReconnecting, "status");
     } else if (status === "failed") {
+      report("live-failed", detail && /^[a-z0-9-]{1,40}$/.test(detail) ? detail : "other");
       this.stopLive(true);
       this.feedback("error");
-      this.say(this.t.liveFailed, "answer");
+      this.say(detail === "quota-exhausted" ? this.t.quotaExhausted : this.t.liveFailed, "answer");
     }
   }
 

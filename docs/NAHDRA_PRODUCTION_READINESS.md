@@ -156,4 +156,5 @@ Each phase is implemented and tested on its own, in this order. Items marked **[
 
 | Date | Phase | Summary |
 |---|---|---|
+| 2026-11-12 | 1 (2nd pass) | Hazard scans kept during Talk live (8 s pace, warnings only); live safety promises cut and corrected; «نجدة» in live opens Emergency; pause keeps on-device warnings; warnings dropped unheard can be repeated; API: Origin required, signed session cookie, per-minute limits, daily budgets (search separate), optional Upstash store; CSP + HSTS; consent withdrawal and consent v2 notice; content-free monitoring (`/api/report`, `/api/health`). 199 unit tests; e2e `phase1Protection` (15 checks, no Gemini quota). Not device-tested. |
 | 2026-11-10 | 1 | Scans during speech, `warning` priority, resume order, detector failure spoken, "Stop listening" fix, camera released when hidden, no background "didn't hear". 122 unit tests, 3 mocked e2e scenarios (15 checks). Not device-tested. |

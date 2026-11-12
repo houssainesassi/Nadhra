@@ -39,7 +39,7 @@ export class WarningGate {
 
   admit(h: Hazard, urgency: Urgency, now: number): boolean {
     if (urgency === "info") return false;
-    const key = `${h.kind}:${h.side}`;
+    const key = hazardKey(h);
     const last = this.seen.get(key);
     // "Coming toward you" is new information even at the same severity, so it isn't held back.
     const rank = RANK[urgency] + (h.motion === "approaching" ? 0.5 : 0);
@@ -48,7 +48,15 @@ export class WarningGate {
     return true;
   }
 
+  /** The warning was never heard (it went stale in the queue): the next detection may say it. */
+  forget(key: string) {
+    this.seen.delete(key);
+  }
+
   clear() {
     this.seen.clear();
   }
 }
+
+/** Which warnings count as "the same one" for repeats. */
+export const hazardKey = (h: Pick<Hazard, "kind" | "side">) => `${h.kind}:${h.side}`;

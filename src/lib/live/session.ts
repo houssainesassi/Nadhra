@@ -9,6 +9,7 @@
 //   handle and reconnects into the same conversation (same memory of what was seen and said).
 import { bytesToBase64, base64ToBytes } from "./pcm.ts";
 import { LIVE_INPUT_RATE } from "./config.ts";
+import { apiFetch } from "../assistant/api.ts";
 import type { SpeechLang } from "../assistant/lang.ts";
 import type { CameraFacing } from "../assistant/types.ts";
 
@@ -93,7 +94,7 @@ export class LiveSession {
     this.events = events;
     this.opts = {
       tokenUrl: "/api/live/token",
-      fetchImpl: (...a) => fetch(...a),
+      fetchImpl: (url, init) => apiFetch(String(url), init),
       WebSocketImpl: globalThis.WebSocket,
       now: () => Date.now(),
       setupTimeoutMs: 10_000,
@@ -210,7 +211,8 @@ export class LiveSession {
     const d = (await res.json().catch(() => null)) as (TokenResponse & { error?: string }) | null;
     if (!res.ok || !d?.token) {
       const code = d?.error ?? `http-${res.status}`;
-      throw new TokenError(code, code !== "not-configured" && code !== "forbidden");
+      // A spent daily budget doesn't come back by retrying in a few seconds.
+      throw new TokenError(code, code !== "not-configured" && code !== "forbidden" && code !== "quota-exhausted");
     }
     return d;
   }

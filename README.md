@@ -93,6 +93,12 @@ Set these in `.env.local`, or in the Vercel project settings. Keys are read only
 | `GEMINI_LIVE_VOICE` | Live conversation voice: `Sulafat` (default), `Kore`, `Leda`, `Despina`, `Achernar` or `Zephyr`. Only female voices are accepted |
 | `GEMINI_LIVE_SILENCE_MS` | Silence that ends your turn in a live conversation (default 500) |
 | `GEMINI_LIVE_DISABLED` | `1` turns the live conversation off |
+| `DAILY_*_GLOBAL`, `DAILY_*_PER_SESSION` | Daily budgets per kind of call (vision, transcribe, tts, live, search). The global values are the hard daily ceiling |
+| `SESSION_SECRET` | Optional key for the session cookie (otherwise derived from `GEMINI_API_KEY`) |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Optional shared counters, so limits hold across serverless instances |
+| `HEALTH_TOKEN` | Lets `/api/health` show counters and today's usage |
+
+The API routes only answer this site's own page: a request needs the page's Origin and its anonymous session cookie, then per-minute limits and daily budgets apply ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#api-protection-and-cost-control)). This is not authentication: a determined script can still get a cookie. The daily totals are what cap the cost.
 
 Paid models are refused by design, so a misconfiguration can't produce a bill. To use a paid tier, change this check in [src/lib/ai/vision.ts](src/lib/ai/vision.ts).
 
@@ -105,7 +111,8 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 
 ## Privacy
 
-- The browser asks permission for the camera and microphone, and the app asks for consent first.
+- The browser asks permission for the camera and microphone, and the app asks for consent first. Consent can be withdrawn in Settings or Privacy: the camera and live conversation stop, and the notice comes back before the next start.
+- Monitoring counts failures by fixed name and short code only (`/api/report`, `/api/health`). No images, audio, questions, answers or locations are logged.
 - No video is recorded and no image or audio is stored by this app. Frames are held in memory only long enough to send.
 - **Camera images go to an external AI service** (Google Gemini, or OpenRouter as the fallback). Under free-tier terms, these services may keep the content and use it to improve their products, and it may be seen by human reviewers. Check the current terms before offering this to real users, and consider a paid tier that excludes this. People around the user appear in these images too.
 - **In a live conversation,** microphone audio and camera frames (at most one a second, fewer when nothing changes) go straight from the browser to Google Gemini Live. This app's server only hands out a one-time token that expires within minutes; the API key never reaches the browser, and no audio or image passes through the server.
@@ -121,6 +128,9 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - **Warnings are not instant.** The on-device detector reacts in under a second, but only knows common objects. Stairs, floor-level changes and other hazards rely on the cloud model, which takes about 2–3 s when healthy and more when busy. A fast car can arrive before any warning.
 - **"Near" and "far" are judged from the picture,** never measured. No distances are given, because a single camera can't measure them reliably.
 - **The French, English and Standard Arabic wording, and the Derja,** were written without native-speaker review. The Derja is also written by an AI model and spoken by a synthetic voice. It needs review by Tunisian blind users. Browser voices that aren't `ar-TN` will pronounce it less naturally.
+- **Pause stops descriptions, not on-device warnings.** Those keep running and the pause notice says so.
+- **During Talk live,** stairs and drops still come from cloud scans, every 8 s at most, so they arrive later than outside the conversation. A live answer that promises safety is cut and corrected, but its first words may already have been heard.
+- **Limits are per server instance** unless the Upstash store is configured. On Vercel, budgets are then approximate.
 - **Offline, only on-device warnings work.** The app says so and stops sending frames. The voice then works only if the device has a voice installed for the chosen language.
 - **Free-tier services can be busy or change.** The Edge voice in particular is an unofficial endpoint with no guarantee.
 - **Speech recognition has only been tested on synthetic speech.** Real voices, accents and noise will do worse. Check "I heard" on screen when an answer seems wrong.

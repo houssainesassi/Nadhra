@@ -1,6 +1,8 @@
 // Relative imports (not "@/") so the route can be unit-tested with plain Node (tests/visionRoute.test.ts).
 import { analyzeImage, restOfAnswer, visionStatus, type AnalyzeResult, type Attempt } from "../../../lib/ai/vision.ts";
-import { clientKey, isSameOrigin, RateLimiter, readJsonBody } from "../../../lib/server/http.ts";
+import { readJsonBody } from "../../../lib/server/http.ts";
+import { allowSearch, charge, checkRequest, type RequestContext } from "../../../lib/server/guard.ts";
+import { record } from "../../../lib/server/monitor.ts";
 import type { CameraFacing, VisionMode, VisionRequestBody, VisionStreamEvent } from "../../../lib/assistant/types.ts";
 import { isSpeechLang } from "../../../lib/assistant/lang.ts";
 
@@ -15,8 +17,6 @@ const MAX_IMAGE_BASE64 = 2 * 1024 * 1024;
 const MAX_QUESTION_CHARS = 300;
 const MAX_NOTE_CHARS = 500;
 const NO_STORE = { "Cache-Control": "no-store" };
-
-const limiter = new RateLimiter(Number(process.env.VISION_RATE_LIMIT_PER_MIN) || 40);
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(body, { status, headers: { ...NO_STORE, ...headers } });
 
@@ -36,7 +36,8 @@ export function GET() {
 }
 
 export async function POST(req: Request) {
-  if (!isSameOrigin(req)) return json({ error: "forbidden" }, 403);
+  const ctx = checkRequest(req, "vision");
+  if (ctx instanceof Response) return ctx;
   const body = await readJsonBody<Record<string, unknown>>(req, MAX_BODY_BYTES);
   if (!body.ok) return json({ error: body.error }, body.status);
   const raw = body.value && typeof body.value === "object" ? body.value : {};
@@ -49,8 +50,6 @@ export async function POST(req: Request) {
   if (question.length > MAX_QUESTION_CHARS) return json({ error: "question too long" }, 400);
   const cameraFacing: CameraFacing = raw.cameraFacing === "user" ? "user" : "outward";
   const previousAgeMs = typeof raw.previousAgeMs === "number" && raw.previousAgeMs > 0 && raw.previousAgeMs < 30_000 ? raw.previousAgeMs : undefined;
-
-  if (!limiter.hit(clientKey(req))) return json({ error: "too many requests" }, 429, { "Retry-After": "20" });
 
   const request: VisionRequestBody = {
     mode,
@@ -71,22 +70,30 @@ export async function POST(req: Request) {
   };
 
   if (!visionStatus().available) return json({ error: "not-configured" }, 503);
+  const limited = await charge(ctx, "vision");
+  if (limited) return limited;
+  record("vision.request", mode);
 
   const t0 = Date.now();
   // The user asked something else, or closed the page: the model call stops too.
   const abort = new AbortController();
   req.signal?.addEventListener("abort", () => abort.abort(), { once: true });
-  if (raw.stream === true && mode !== "scan") return streamAnswer(request, abort, t0);
+  const search = searchGate(ctx);
+  if (raw.stream === true && mode !== "scan") return streamAnswer(request, abort, t0, search);
 
-  const result = await analyzeImage(request, { signal: abort.signal });
+  const result = await analyzeImage(request, { signal: abort.signal, allowSearch: search });
   logFailures(result.attempts);
   if (!result.ok) return failure(result);
   return json({ analysis: result.analysis, provider: result.provider, latencyMs: Date.now() - t0 });
 }
 
+/** Web search is the only billed call: it has its own daily budget, counted only when it runs. */
+const searchGate = (ctx: RequestContext) => () => allowSearch(ctx);
+
 /** Everything failed. Say so: the client tells the user, and no description is made up. */
 function failure(result: AnalyzeResult) {
   const limited = result.attempts.length > 0 && result.attempts.every((a) => /cooling down|HTTP 429|HTTP 402/.test(a.error ?? ""));
+  record("vision.failed", limited ? "rate-limited" : "ai-unavailable", "warn");
   return limited ? json({ error: "rate-limited" }, 503, { "Retry-After": "30" }) : json({ error: "ai-unavailable" }, 503);
 }
 
@@ -95,7 +102,7 @@ function failure(result: AnalyzeResult) {
  * starts only with the first sentence (or the whole answer): if every provider fails before that,
  * the client gets the same JSON errors as without streaming.
  */
-async function streamAnswer(request: VisionRequestBody, abort: AbortController, t0: number): Promise<Response> {
+async function streamAnswer(request: VisionRequestBody, abort: AbortController, t0: number, search: () => Promise<boolean>): Promise<Response> {
   const encoder = new TextEncoder();
   let sink: ReadableStreamDefaultController<Uint8Array> | null = null;
   const pending: Uint8Array[] = [];
@@ -114,6 +121,7 @@ async function streamAnswer(request: VisionRequestBody, abort: AbortController, 
   const since = (at?: number) => (at === undefined ? undefined : at - t0);
   const work = analyzeImage(request, {
     signal: abort.signal,
+    allowSearch: search,
     clock,
     onSentence: (text) => {
       firstSentenceAt ??= Date.now();

@@ -7,6 +7,7 @@ import { base64ToBytes, bytesToBase64, floatToPcm16, pcm16ToFloat, rms } from ".
 import { LevelVad } from "../src/lib/live/audioIO.ts";
 import { LiveSession, type LiveStatus } from "../src/lib/live/session.ts";
 import { buildLiveSetup, liveConfig } from "../src/lib/server/liveToken.ts";
+import { browserHeaders } from "./helpers/browser.ts";
 
 test("voice: only female voices, whatever the environment says", () => {
   assert.equal(pickLiveVoice(undefined), DEFAULT_LIVE_VOICE);
@@ -66,7 +67,7 @@ test("token route: locked setup sent to Google, key never returned, cross-site r
       return new Response(JSON.stringify({ name: "auth_tokens/xyz" }));
     }) as typeof fetch;
     const { POST } = await import("../src/app/api/live/token/route.ts");
-    const res = await POST(new Request("http://localhost/api/live/token", { method: "POST", body: JSON.stringify({ lang: "tn", facing: "user", handle: "h1" }) }));
+    const res = await POST(new Request("http://localhost/api/live/token", { method: "POST", headers: browserHeaders("localhost"), body: JSON.stringify({ lang: "tn", facing: "user", handle: "h1" }) }));
     assert.equal(res.status, 200);
     const d = await res.json();
     assert.equal(d.token, "auth_tokens/xyz");
@@ -79,10 +80,10 @@ test("token route: locked setup sent to Google, key never returned, cross-site r
     assert.deepEqual(sent[0].body.bidiGenerateContentSetup.sessionResumption, { handle: "h1" });
     assert.match(sent[0].body.bidiGenerateContentSetup.systemInstruction.parts[0].text, /user's RIGHT/);
 
-    const bad = await POST(new Request("http://localhost/api/live/token", { method: "POST", body: JSON.stringify({ handle: "x y\"<>" }) }));
+    const bad = await POST(new Request("http://localhost/api/live/token", { method: "POST", headers: browserHeaders("localhost"), body: JSON.stringify({ handle: "x y\"<>" }) }));
     assert.deepEqual((await bad.json()).setup.sessionResumption, {}, "malformed handle ignored");
 
-    const cross = await POST(new Request("http://localhost/api/live/token", { method: "POST", headers: { origin: "https://evil.example", host: "localhost" }, body: "{}" }));
+    const cross = await POST(new Request("http://localhost/api/live/token", { method: "POST", headers: { ...browserHeaders("localhost"), origin: "https://evil.example" }, body: "{}" }));
     assert.equal(cross.status, 403);
   } finally {
     globalThis.fetch = realFetch;

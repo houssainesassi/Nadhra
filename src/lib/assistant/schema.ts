@@ -122,6 +122,17 @@ export function dropFalseSearchClaims(spoken: string, texts: SceneText[] = []): 
     .join(" ");
 }
 
+/**
+ * A sentence that promises safety («the way is clear», «you can cross»), or says nothing is ahead,
+ * which is heard the same way. Used on what Gemini Live says, which can't be filtered before it is
+ * heard: the assistant then corrects it at once.
+ */
+export function isSafetyClaim(sentence: string): boolean {
+  const n = normalizeArabic(sentence);
+  if (NEGATED_SAFETY.test(n)) return false;
+  return SAFETY_CLAIM.test(n) || (ABSENCE.test(n) && AHEAD.test(n));
+}
+
 export function splitSentences(text: string): string[] {
   return (text.match(/[^.!؟?\n]+[.!؟?]*/g) ?? []).map((s) => s.trim()).filter(Boolean);
 }

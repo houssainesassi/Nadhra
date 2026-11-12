@@ -81,7 +81,7 @@ const browser = await chromium.launch({
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "ar-TN", permissions: ["camera", "microphone"] });
 // Test-only instrumentation: watch the live WebSocket from inside the page (the app is unchanged).
 await ctx.addInitScript(() => {
-  localStorage.setItem("assistant.consent.v1", "1");
+  localStorage.setItem("assistant.consent.v2", "1");
   const W = window.WebSocket;
   window.__live = { ev: [], sent: { audio: 0, video: 0, text: 0, setup: 0 }, micOpenAt: 0 };
   const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -131,6 +131,8 @@ page.on("pageerror", (e) => consoleErrors.push(String(e)));
 await page.goto(BASE, { waitUntil: "networkidle" });
 
 const latencies = [];
+// Talk live is in Settings; the panel stays open over the camera.
+await page.getByTestId("open-settings").click();
 await page.getByTestId("live-toggle").click();
 const started = Date.now();
 let lastLatency = null;
@@ -145,7 +147,8 @@ while (Date.now() - started < (TOTAL_S + 4) * 1000) {
 }
 const ui = {
   status: await page.getByTestId("live-toggle").getAttribute("data-live-status"),
-  chip: await page.locator(".chip").first().textContent(),
+  state: await page.getByTestId("assistant-state").textContent(),
+  mic: await page.getByTestId("mic-status").textContent(),
   user: await page.getByTestId("live-user").textContent().catch(() => ""),
   ai: await page.getByTestId("live-ai").textContent().catch(() => ""),
   videoPlaying: await page.evaluate(() => { const v = document.querySelector("video"); return !!v && v.videoWidth > 0 && !v.paused; }),
@@ -202,8 +205,8 @@ const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, 
 const p2 = await phone.newPage();
 await p2.goto(BASE, { waitUntil: "networkidle" });
 const mobile = await p2.evaluate(() => {
-  const b = document.querySelector('[data-testid="live-toggle"]').getBoundingClientRect();
-  return { overflowX: document.documentElement.scrollWidth > innerWidth, button: { top: Math.round(b.top), height: Math.round(b.height), width: Math.round(b.width) }, viewport: innerWidth };
+  const b = document.querySelector('[data-testid="open-camera"]').getBoundingClientRect();
+  return { overflowX: document.documentElement.scrollWidth > innerWidth, overflowY: document.documentElement.scrollHeight > innerHeight, button: { top: Math.round(b.top), height: Math.round(b.height), width: Math.round(b.width) }, viewport: innerWidth };
 });
 await p2.screenshot({ path: join(OUT, "phone.png"), fullPage: false });
 console.log(`phone 390x844: ${JSON.stringify(mobile)}`);

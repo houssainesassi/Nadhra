@@ -1,6 +1,7 @@
 // /api/vision and its provider chain, with the upstream APIs replaced.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { browserHeaders } from "./helpers/browser.ts";
 
 type Handler = (url: string, body: any) => Response;
 let upstream: Handler = () => new Response("down", { status: 503 });
@@ -30,7 +31,7 @@ let n = 0;
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   POST(new Request("http://app.test/api/vision", {
     method: "POST",
-    headers: { "Content-Type": "application/json", host: "app.test", "x-forwarded-for": `10.1.0.${++n % 250}`, ...headers },
+    headers: { "Content-Type": "application/json", ...browserHeaders(), "x-forwarded-for": `10.1.0.${++n % 250}`, ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body),
   }));
 
@@ -151,7 +152,7 @@ test("paid models are refused and status names the receivers", async () => {
 
 test("transcribe: WAV only, forwarded to the provider that supports audio", async () => {
   const call = (body: unknown) => transcribe.POST(new Request("http://app.test/api/vision/transcribe", {
-    method: "POST", headers: { host: "app.test", "x-forwarded-for": `10.2.0.${++n % 250}` }, body: JSON.stringify(body),
+    method: "POST", headers: { ...browserHeaders(), "x-forwarded-for": `10.2.0.${++n % 250}` }, body: JSON.stringify(body),
   }));
   assert.equal((await call({})).status, 400);
   assert.equal((await call({ audio: JPEG })).status, 400);

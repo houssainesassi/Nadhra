@@ -4,6 +4,7 @@
 //   HybridTts  – the female cloud voice first; the browser's installed voice only when the cloud
 //                voice can't be used (offline, service down), preferring a female one
 // Keep the interface small so another engine (e.g. a local neural TTS) can be plugged in.
+import { apiFetch } from "../assistant/api.ts";
 import { CLOUD_VOICES, LANGS, type SpeechLang } from "../assistant/lang.ts";
 
 export interface SpeakOptions {
@@ -324,7 +325,7 @@ export class CloudTts implements TtsEngine {
       if (typeof navigator !== "undefined" && navigator.onLine === false) throw new CloudError("offline");
       let res: Response;
       try {
-        res = await fetch(this.endpoint, {
+        res = await apiFetch(this.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(lang === "tn" ? { text: speechText(text), rate } : { text: speechText(text, lang), rate, lang }),

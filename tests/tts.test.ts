@@ -2,6 +2,7 @@
 // client engines (browser-first priority, caching, queueing, retry, autoplay) with fakes.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { browserHeaders } from "./helpers/browser.ts";
 
 // ---------------------------------------------------------------- server
 // Fake Microsoft Edge TTS WebSocket: records what we send, replies like the real service.
@@ -67,7 +68,7 @@ const { secMsGec } = await import("../src/lib/speech/edgeDrm.ts");
 function post(body: unknown, headers: Record<string, string> = {}) {
   return new Request("http://app.test/api/tts", {
     method: "POST",
-    headers: { "Content-Type": "application/json", host: "app.test", ...headers },
+    headers: { "Content-Type": "application/json", ...browserHeaders(), ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }

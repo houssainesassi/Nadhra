@@ -66,7 +66,6 @@ html {
   /* 18px at the browser default, and larger when the user has set a larger default font size there.
      --text-scale is the app's own Text size setting. */
   font-size: calc(112.5% * var(--text-scale, 1));
-  scrollbar-gutter: stable;
 }
 
 body {
@@ -170,46 +169,7 @@ button {
   border-color: var(--ink);
 }
 
-.tile {
-  flex-direction: column;
-  gap: 0.4rem;
-  min-height: 6rem;
-  border-radius: 1.25rem;
-  padding: 0.75rem 0.5rem;
-  font-size: 1.05rem;
-  font-weight: 500;
-  text-align: center;
-  line-height: 1.3;
-}
-.tile[data-live="true"] {
-  border-color: var(--ink);
-  background: var(--raised);
-}
 
-.row-button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  width: 100%;
-  min-height: 3.5rem;
-  padding-block: 0.5rem;
-  border-bottom: 1px solid var(--hairline);
-  color: var(--ink);
-  font-size: 1.05rem;
-  font-weight: 500;
-  text-align: start;
-  transition: padding 200ms cubic-bezier(0.2, 0.8, 0.2, 1), color 150ms ease;
-}
-.row-button svg {
-  flex: none;
-  color: var(--ink-2);
-  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), color 150ms ease;
-}
-.row-button:hover svg {
-  color: var(--ink);
-  transform: translateX(4px);
-}
 
 .ghost {
   display: inline-flex;
@@ -311,146 +271,250 @@ kbd {
 
 } /* end of components layer */
 
-/* ---------- Iris: shows the assistant's state at a glance ---------- */
+/* ---------- The one screen ---------- */
 
-.iris {
-  --iris: var(--ink-2);
-  --spin: 60s;
-  --arc-spin: 14s;
+/* Exactly the visible viewport (dvh: never under a phone's browser bars), inside the safe areas.
+   It only scrolls as a last resort, at very large text sizes, so nothing is ever cut off. */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding:
+    env(safe-area-inset-top, 0px)
+    env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px);
+}
+
+.topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 76rem;
+  margin-inline: auto;
+  padding: 0.75rem 1rem;
+}
+.brand {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  align-items: center;
+  gap: 0.7rem;
+}
+.brand h1 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+.brand-ar {
+  color: var(--ink-2);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.logo {
+  border-radius: 11px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+.tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.lang-select {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 3rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  transition: border-color 150ms ease;
+}
+.lang-select:hover {
+  border-color: var(--edge);
+}
+.lang-select:focus-within {
+  outline: 3px solid var(--glow);
+  outline-offset: 3px;
+}
+.lang-select svg {
+  position: absolute;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+.lang-select svg:first-of-type {
+  inset-inline-start: 0.8rem;
+}
+.lang-select svg:last-of-type {
+  inset-inline-end: 0.75rem;
+}
+.lang-select select {
+  appearance: none;
+  height: 100%;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  padding-inline: 2.4rem 2.1rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.lang-select select:focus-visible {
+  outline: none;
+}
+.lang-select option {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 999px;
+  color: var(--ink);
+  transition: background-color 150ms ease;
+}
+.icon-button:hover {
+  background: var(--raised);
+}
+
+.main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.875rem;
+  width: 100%;
+  max-width: 76rem;
+  margin-inline: auto;
+  padding: 0 1rem 1rem;
+}
+
+/* --- At rest: one button --- */
+
+.home {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1rem, 3vh, 1.75rem);
+  padding-block: 0.5rem;
+  text-align: center;
+}
+.home-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.75rem, 2.4vh, 1.25rem);
+}
+
+.open-camera {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(0.75rem, 2.4vh, 1.25rem);
+  width: min(100%, 24rem);
+  height: clamp(9.5rem, 38vh, 17rem);
+  border-radius: 2rem;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.18),
+    0 14px 36px -12px rgb(0 0 0 / 0.5);
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 200ms ease;
+}
+.open-camera:hover {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.18),
+    0 18px 44px -12px rgb(0 0 0 / 0.55),
+    0 0 0 5px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.open-camera:active {
+  transform: scale(0.985);
+}
+.open-camera:focus-visible {
+  outline-width: 4px;
+  outline-offset: 5px;
+}
+.open-camera-icon {
+  display: grid;
+  place-items: center;
+  width: clamp(4rem, 11vh, 5.5rem);
   aspect-ratio: 1;
-  color: var(--iris);
-  transition: color 500ms ease;
-}
-.iris[data-state="watching"] { --iris: var(--glow); }
-.iris[data-state="thinking"] { --iris: var(--glow); --arc-spin: 1.5s; --spin: 18s; }
-.iris[data-state="speaking"] { --iris: var(--glow); }
-.iris[data-state="listening"] { --iris: var(--listen); }
-.iris[data-state="urgent"] { --iris: var(--alert-glow); --spin: 10s; }
-
-.iris svg {
-  position: absolute;
-  inset: 0;
-  overflow: visible;
-}
-.iris-aura {
-  position: absolute;
-  inset: 8%;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--iris) 42%, transparent), transparent 68%);
-  opacity: 0.16;
-  transition: opacity 600ms ease, transform 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.iris[data-state="watching"] .iris-aura { opacity: 0.3; }
-.iris[data-state="thinking"] .iris-aura { opacity: 0.42; }
-.iris[data-state="speaking"] .iris-aura { opacity: 0.6; transform: scale(1.2); animation: aura 2.4s ease-in-out infinite; }
-.iris[data-state="listening"] .iris-aura { opacity: 0.6; transform: scale(1.2); animation: aura 1.8s ease-in-out infinite; }
-.iris[data-state="urgent"] .iris-aura { opacity: 0.85; transform: scale(1.3); animation: aura 0.9s ease-in-out infinite; }
-
-.iris-ticks,
-.iris-arc,
-.iris-pupil,
-.iris-ping {
-  transform-origin: 100px 100px;
-}
-.iris-ticks {
-  opacity: 0.5;
-  animation: spin var(--spin) linear infinite;
-}
-.iris-arc {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-dasharray: 16 84;
-  opacity: 0;
-  transition: opacity 400ms ease;
-  animation: spin var(--arc-spin) linear infinite;
-}
-.iris[data-state="watching"] .iris-arc,
-.iris[data-state="thinking"] .iris-arc { opacity: 1; }
-.iris[data-state="thinking"] .iris-arc { stroke-dasharray: 34 66; }
-
-.iris-bar {
-  fill: currentColor;
-  opacity: 0.32;
-  transform-box: fill-box;
-  transform-origin: center bottom;
-  transform: scaleY(0.22);
-  transition: transform 500ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 400ms ease;
-}
-.iris[data-state="watching"] .iris-bar,
-.iris[data-state="thinking"] .iris-bar { transform: scaleY(0.34); opacity: 0.55; }
-.iris[data-state="speaking"] .iris-bar,
-.iris[data-state="listening"] .iris-bar,
-.iris[data-state="urgent"] .iris-bar {
-  opacity: 0.95;
-  animation: voice var(--bar-speed, 900ms) ease-in-out infinite alternate;
-  animation-delay: var(--delay);
-}
-.iris[data-state="listening"] .iris-bar { --bar-speed: 1400ms; }
-.iris[data-state="urgent"] .iris-bar { --bar-speed: 420ms; }
-
-.iris-pupil {
-  fill: currentColor;
-  transform: scale(0.72);
-  transition: transform 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.iris[data-state="watching"] .iris-pupil { transform: scale(0.86); }
-.iris[data-state="thinking"] .iris-pupil { transform: scale(0.66); animation: breathe 1.5s ease-in-out infinite; }
-.iris[data-state="speaking"] .iris-pupil { transform: scale(1); animation: breathe 1.8s ease-in-out infinite; }
-.iris[data-state="listening"] .iris-pupil { transform: scale(1.12); }
-.iris[data-state="urgent"] .iris-pupil { transform: scale(1.2); }
-.iris[data-state="idle"] .iris-pupil { animation: breathe 6s ease-in-out infinite; }
-
-.iris-ping {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  opacity: 0;
-}
-.iris[data-state="listening"] .iris-ping,
-.iris[data-state="urgent"] .iris-ping {
-  animation: ping 2.2s cubic-bezier(0.1, 0.6, 0.3, 1) infinite;
-}
-.iris[data-state="urgent"] .iris-ping { animation-duration: 1s; }
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes voice {
-  from { transform: scaleY(0.2); }
-  to { transform: scaleY(1); }
-}
-@keyframes breathe {
-  50% { scale: 1.07; }
-}
-@keyframes aura {
-  50% { scale: 1.12; }
-}
-@keyframes ping {
-  from { transform: scale(0.55); opacity: 0.7; }
-  to { transform: scale(1.3); opacity: 0; }
+  background: color-mix(in srgb, var(--primary-ink) 9%, transparent);
 }
 
-/* ---------- Camera stage ---------- */
+.tagline {
+  max-width: 28rem;
+  color: var(--ink-2);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+.home-alert {
+  max-width: 30rem;
+  border-radius: 1rem;
+  background: var(--alert);
+  color: var(--alert-ink);
+  padding: 0.75rem 1rem;
+  font-weight: 500;
+}
+.footnote {
+  max-width: 30rem;
+  color: var(--ink-2);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.link {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+/* --- Assisting: the camera fills the screen --- */
 
 .stage {
   position: relative;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
-  aspect-ratio: 16 / 10;
-  border-radius: 1.75rem;
-  background:
-    radial-gradient(90% 90% at 50% 0%, color-mix(in srgb, var(--glow) 9%, transparent), transparent 70%),
-    var(--surface);
+  border-radius: 1.5rem;
+  background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--hairline);
-  transition: box-shadow 300ms ease;
+  transition: box-shadow 250ms ease;
+}
+.stage[hidden] {
+  display: none;
 }
 .stage[data-on="true"] {
   background: #000;
 }
 .stage[data-urgent="true"] {
-  box-shadow: inset 0 0 0 3px var(--alert-glow), 0 0 44px -8px var(--alert-glow);
+  box-shadow: inset 0 0 0 4px var(--alert-glow);
 }
 .stage video {
   position: absolute;
@@ -459,98 +523,224 @@ kbd {
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 700ms ease;
+  transition: opacity 500ms ease;
 }
 .stage[data-on="true"] video {
   opacity: 1;
 }
-/* Viewfinder corners. Text on the stage sits on solid chips, so it stays readable over any picture. */
-.corner {
-  position: absolute;
-  width: 1.75rem;
-  height: 1.75rem;
-  border: 2px solid rgb(255 255 255 / 0.75);
-  opacity: 0;
-  transition: opacity 500ms ease 200ms;
-  filter: drop-shadow(0 0 2px rgb(0 0 0 / 0.7));
-  pointer-events: none;
-}
-.stage[data-on="true"] .corner { opacity: 1; }
-.corner-a { top: 1rem; left: 1rem; border-right: 0; border-bottom: 0; border-top-left-radius: 0.625rem; }
-.corner-b { top: 1rem; right: 1rem; border-left: 0; border-bottom: 0; border-top-right-radius: 0.625rem; }
-.corner-c { bottom: 1rem; left: 1rem; border-right: 0; border-top: 0; border-bottom-left-radius: 0.625rem; }
-.corner-d { bottom: 1rem; right: 1rem; border-left: 0; border-top: 0; border-bottom-right-radius: 0.625rem; }
 
-.sweep {
+.stage-empty {
   position: absolute;
-  inset-inline: 0;
-  top: 0;
-  height: 34%;
-  background: linear-gradient(to bottom, transparent, rgb(255 198 109 / 0.16) 92%, rgb(255 198 109 / 0.75));
-  pointer-events: none;
-  animation: sweep 1.9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 4.5rem 1.25rem 8rem;
+  text-align: center;
 }
-@keyframes sweep {
-  from { transform: translateY(-100%); }
-  to { transform: translateY(300%); }
+.stage-empty-text {
+  max-width: 26rem;
+  color: var(--ink-2);
+  font-size: 1.1rem;
 }
-
-.chip {
-  position: absolute;
-  z-index: 1;
+.pill-button {
   display: inline-flex;
+  min-height: 3.25rem;
+  align-items: center;
+  gap: 0.6rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-ink);
+  padding-inline: 1.25rem;
+  font-weight: 600;
+}
+
+/* Text on the camera sits on solid dark plates, so it stays readable over any picture, in both themes. */
+.stage-top {
+  position: absolute;
+  inset-inline: 0.75rem;
+  top: 0.75rem;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.pill {
+  display: inline-flex;
+  min-height: 2.5rem;
   align-items: center;
   gap: 0.5rem;
-  min-height: 2.25rem;
   border-radius: 999px;
-  background: rgb(0 0 0 / 0.82);
+  background: rgb(12 12 14 / 0.8);
   color: #fff;
-  padding-inline: 0.875rem;
-  font-size: 0.9rem;
+  padding-inline: 0.9rem;
+  font-size: 0.95rem;
   font-weight: 500;
+  line-height: 1.25;
+  backdrop-filter: blur(8px);
 }
-.chip i {
-  width: 0.55rem;
-  height: 0.55rem;
+.pill i {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
   border-radius: 50%;
-  background: #ff5a4f;
-  animation: blink 2s ease-in-out infinite;
+  background: #b9b8b2;
 }
-.chip i[data-paused="true"] {
-  background: #fff;
-  animation: none;
+.pill[data-tone="active"] i {
+  background: #ffc66d;
+  animation: glow 2.4s ease-in-out infinite;
 }
-@keyframes blink {
-  50% { opacity: 0.35; }
-}
-
-/* ---------- Entrances and panels ---------- */
-
-.rise {
-  animation: rise 640ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  animation-delay: var(--at, 0ms);
-}
-@keyframes rise {
-  from { opacity: 0; transform: translateY(14px); }
-}
-
-.caption {
-  animation: caption 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-@keyframes caption {
-  from { opacity: 0; transform: translateY(8px); filter: blur(3px); }
-}
-
-.voice-panel {
-  border-radius: 1.75rem;
-  transition: background-color 250ms ease, color 250ms ease;
-}
-.voice-panel[data-urgent="true"] {
+.pill[data-tone="urgent"] {
   background: var(--alert);
-  color: var(--alert-ink);
+  font-weight: 600;
 }
-.voice-panel[data-urgent="true"] .iris { --iris: #fff; }
-.voice-panel[data-urgent="true"] .quiet-text { color: var(--alert-ink); }
+.pill[data-tone="urgent"] i {
+  background: #fff;
+}
+.pill[data-tone="listen"] svg {
+  color: #8cc8ff;
+}
+.pill[data-tone="quiet"] svg {
+  color: #b9b8b2;
+}
+.notices {
+  position: absolute;
+  inset-inline: 0.75rem;
+  top: 3.85rem;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.pill[data-tone="notice"] {
+  border-inline-start: 3px solid #ffc66d;
+  border-radius: 0.75rem;
+  padding-block: 0.35rem;
+}
+@keyframes glow {
+  50% { opacity: 0.45; }
+}
+
+.caption-box {
+  position: absolute;
+  inset-inline: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 1;
+  max-height: 45%;
+  overflow-y: auto;
+  border-radius: 1.25rem;
+  background: rgb(12 12 14 / 0.84);
+  color: #fff;
+  padding: 0.9rem 1.15rem;
+  backdrop-filter: blur(8px);
+}
+.caption-box[data-urgent="true"] {
+  background: var(--alert);
+}
+.caption {
+  font-size: clamp(1.2rem, 1rem + 0.9vw, 1.65rem);
+  font-weight: 500;
+  line-height: 1.45;
+}
+.caption-hint {
+  color: #d6d5cf;
+  font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.3rem);
+}
+.heard {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+  color: #d6d5cf;
+  font-size: 0.95rem;
+}
+.heard svg {
+  flex: none;
+  color: #8cc8ff;
+}
+
+/* Neutral, with a red icon: a large red area only ever means a warning. */
+.stop-button {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  align-self: center;
+  width: min(100%, 30rem);
+  min-height: 4.5rem;
+  border: 1.5px solid var(--edge);
+  border-radius: 1.375rem;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 1.3rem;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15), 0 8px 24px -14px rgb(0 0 0 / 0.5);
+  transition: border-color 150ms ease, transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.stop-button svg {
+  flex: none;
+  color: var(--alert-glow);
+}
+.stop-button:hover {
+  border-color: var(--ink);
+}
+.stop-button:active {
+  transform: scale(0.985);
+}
+
+/* Phones: the header keeps the name and the three controls on one line. */
+@media (max-width: 520px) {
+  .brand-ar { display: none; }
+  .tools { gap: 0; }
+  .icon-button { width: 2.75rem; height: 2.75rem; }
+  .lang-select { height: 2.75rem; }
+}
+@media (max-width: 440px) {
+  .topbar { padding-inline: 0.75rem; gap: 0.5rem; }
+  .brand { gap: 0.5rem; }
+  .brand h1 { font-size: 1.25rem; }
+  .logo { width: 34px; height: 34px; }
+  .icon-button { width: 2.6rem; }
+  .lang-select svg:first-of-type { display: none; }
+  .lang-select select { padding-inline: 0.9rem 1.9rem; }
+}
+/* Very narrow: the logo stands for the name, which stays in the page for screen readers. */
+@media (max-width: 365px) {
+  .brand h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* A phone on its side: the Stop button moves beside the camera, so the camera keeps its height. */
+@media (orientation: landscape) and (max-height: 540px) {
+  .topbar { padding-block: 0.4rem; }
+  .main { flex-direction: row; gap: 0.75rem; padding-bottom: 0.75rem; }
+  .home { flex-direction: row; gap: 2rem; text-align: start; }
+  .open-camera { flex: none; width: min(46%, 20rem); height: clamp(8rem, 62vh, 14rem); }
+  .home-text { align-items: flex-start; max-width: 22rem; }
+  .stop-button { align-self: stretch; width: 9.5rem; flex-direction: column; font-size: 1.1rem; text-align: center; padding: 0.5rem; }
+  .caption-box { max-height: 52%; }
+}
+
+.safety-note {
+  border-inline-start: 3px solid var(--glow);
+  padding-inline-start: 1rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+/* ---------- Panels ---------- */
 
 dialog {
   color: var(--ink);
@@ -596,8 +786,9 @@ dialog::backdrop {
 }
 
 @media (forced-colors: active) {
-  .iris-aura,
-  .sweep { display: none; }
   .control,
-  .tile { border: 2px solid ButtonText; }
+  .open-camera,
+  .stop-button,
+  .pill,
+  .caption-box { border: 2px solid ButtonText; }
 }

@@ -75,10 +75,30 @@ The prompt asks the model to behave, but these hold whatever it writes:
 - **Warnings come from templates** (`warningPhrase`), so the wording always matches the confidence level.
 - **The on-device detector needs persistence.** At least 3 sightings before anything is reported; "approaching" needs growth over at least a second with a still camera.
 - **Unusable or failed results are never filled in.** The user is told the analysis is down.
+- **Pause never turns the safety layer off.** It stops descriptions and cloud scans; the on-device detector keeps warning, and the spoken notice says whether it is running.
+- **A live conversation keeps the hazard scans.** Cloud scans continue every 8 s or more, for their warnings only (stairs and drops come only from them).
+- **Live answers are checked after the fact.** Gemini Live speaks before its words can be filtered, so `isSafetyClaim` checks each finished sentence of its transcript; a promise of safety cuts the rest of that answer and the caveat is said instead.
+- **A warning dropped unheard can be said again.** When the speech queue drops a keyed warning (stale, or the queue was stopped), `WarningGate.forget` lets the next detection announce it.
+- **«نجدة» in a live conversation opens the Emergency page** instead of being answered by the model.
 
 The rules in `schema.ts` cover all four speech languages. Adding a language means adding its safety, distance and negation patterns there, and tests in `tests/languages.test.ts`.
 
 When you change these, add a test: they are the part of this app that can hurt someone if wrong.
+
+## API protection and cost control
+
+Every quota-limited route (`/api/vision`, `/api/vision/transcribe`, `/api/tts`, `/api/live/token`, `/api/report`) goes through `src/lib/server/guard.ts`:
+
+1. **Origin required** on POST and equal to the host: a bare script or another site gets 403.
+2. **Session cookie**: `/api/session` sets an HMAC-signed HttpOnly `SameSite=Strict` cookie (7 days); without it the route answers 401 `session` and the page's `apiFetch` opens one and retries. It is not authentication: it enables per-session limits, and one address may open at most `SESSIONS_PER_ADDRESS_PER_HOUR` sessions.
+3. **Per-minute limits** per session and per address.
+4. **Daily budgets** per session and for the whole service (`DAILY_*` variables). The service total is the cost ceiling; it is only counted after a session's own limits pass. Web search, the only billed call, has its own budget and is counted only when a search is offered; past it, questions are answered without search. A spent budget answers 503 `quota-exhausted`, which the page says out loud.
+
+Counters live in memory per instance unless `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` are set (`usageStore.ts`); if that store fails, memory is used and a warning logged.
+
+**Monitoring** (`monitor.ts`): counters and one JSON log line per notable event, with fixed names and short codes only. The page reports its own failures to `/api/report` (allow-listed event names). `/api/health` returns `{ok:true}`, or with `Authorization: Bearer $HEALTH_TOKEN` the counters and today's usage against the budgets.
+
+**Headers**: Content-Security-Policy (only this site, plus the Gemini Live WebSocket; `wasm-unsafe-eval` for MediaPipe, `blob:` scripts for the microphone worklet) and HSTS, in `next.config.ts`.
 
 ## Left and right
 

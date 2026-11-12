@@ -18,6 +18,8 @@ interface Item {
   at: number;
   /** Spoken in this language's voice (an answer in the question's language). Default: lang(). */
   lang?: SpeechLang;
+  /** Identifies a warning, so the caller hears when it is dropped without being said. */
+  key?: string;
 }
 
 export interface SpeechQueueOptions {
@@ -31,6 +33,8 @@ export interface SpeechQueueOptions {
   onUtterance?: (text: string, priority: SpeechPriority) => void;
   /** The engine could not speak. The text must then reach the user another way. */
   onFailure?: (text: string, message: string) => void;
+  /** A keyed sentence was dropped before it played (too old, or the queue was stopped). */
+  onDropped?: (key: string, priority: SpeechPriority, why: "stale" | "stopped") => void;
   now?: () => number;
   ttlMs?: Partial<Record<SpeechPriority, number>>;
   /** Moves on if an engine never reports the end of a sentence (seen in some browsers). */
@@ -92,7 +96,7 @@ export class SpeechQueue {
     this.engineLang = undefined;
   }
 
-  say(text: string, priority: SpeechPriority, lang?: SpeechLang) {
+  say(text: string, priority: SpeechPriority, lang?: SpeechLang, key?: string) {
     const chunks = speechChunks(text);
     if (!chunks.length) return;
     const at = this.now();
@@ -100,7 +104,7 @@ export class SpeechQueue {
     const same = normalizeArabic(text);
     if (normalizeArabic(this.current?.text ?? "") === same || this.pending.some((i) => normalizeArabic(i.text) === same)) return;
 
-    const items = chunks.map((chunk) => ({ text: chunk, priority, at, lang }));
+    const items = chunks.map((chunk) => ({ text: chunk, priority, at, lang, key }));
     const rank = RANK[priority];
     let index = this.pending.findIndex((i) => RANK[i.priority] < rank);
     if (index < 0) index = this.pending.length;
@@ -129,6 +133,7 @@ export class SpeechQueue {
 
   /** Silences the assistant now and forgets everything waiting. */
   stop() {
+    this.dropped(this.pending, "stopped");
     this.pending = [];
     this.cancelCurrent();
     this.notify();
@@ -158,9 +163,18 @@ export class SpeechQueue {
     }
   }
 
+  private dropped(items: Item[], why: "stale" | "stopped") {
+    const keys = new Set<string>();
+    for (const i of items) if (i.key && !keys.has(i.key)) keys.add(i.key), this.opts.onDropped?.(i.key, i.priority, why);
+  }
+
   private next(): Item | null {
     const now = this.now();
-    this.pending = this.pending.filter((i) => now - i.at <= this.ttl[i.priority]);
+    const stale = this.pending.filter((i) => now - i.at > this.ttl[i.priority]);
+    if (stale.length) {
+      this.pending = this.pending.filter((i) => !stale.includes(i));
+      this.dropped(stale, "stale");
+    }
     const index = this.hold ? this.pending.findIndex((i) => i.priority === "urgent") : this.pending.length ? 0 : -1;
     return index < 0 ? null : this.pending.splice(index, 1)[0];
   }

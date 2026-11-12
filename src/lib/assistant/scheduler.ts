@@ -34,6 +34,8 @@ export interface ScanInput {
   newObject: boolean;
   /** When the current run of blurred frames began, or null. */
   blurSince: number | null;
+  /** Overrides SCHEDULE.minIntervalMs (slower hazard-only scans during a live conversation). */
+  minIntervalMs?: number;
 }
 
 export type ScanDecision = { send: true; reason: "first" | "change" | "new-object" | "heartbeat" } | { send: false; reason: string };
@@ -49,7 +51,7 @@ export function decideScan(s: ScanInput): ScanDecision {
   if (s.now < s.backoffUntil) return { send: false, reason: "backoff" };
   if (s.quality === "dark" || s.quality === "bright" || s.quality === "flat") return { send: false, reason: `quality-${s.quality}` };
   const elapsed = s.now - s.lastScanAt;
-  if (elapsed < SCHEDULE.minIntervalMs) return { send: false, reason: "too-soon" };
+  if (elapsed < (s.minIntervalMs ?? SCHEDULE.minIntervalMs)) return { send: false, reason: "too-soon" };
   // Usually the camera is swinging: a sharp frame is worth a short wait, but not forever.
   if (s.quality === "blurry" && s.blurSince !== null && s.now - s.blurSince < SCHEDULE.blurWaitMs) return { send: false, reason: "waiting-for-sharp" };
   if (s.lastScanAt === -Infinity) return { send: true, reason: "first" };

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { partialJsonString, remainingSpeech, sanitizeAnalysis, sanitizeChat, SentenceStreamer } from "../src/lib/assistant/schema.ts";
 import { speech } from "../src/lib/assistant/phrases.ts";
 import type { VisionMode } from "../src/lib/assistant/types.ts";
+import { browserHeaders } from "./helpers/browser.ts";
 
 type Upstream = (url: string, body: any, signal: AbortSignal) => Response | Promise<Response>;
 let upstream: Upstream = () => new Response("down", { status: 503 });
@@ -32,7 +33,7 @@ let n = 0;
 const post = (body: unknown, signal?: AbortSignal) =>
   POST(new Request("http://app.test/api/vision", {
     method: "POST",
-    headers: { "Content-Type": "application/json", host: "app.test", "x-forwarded-for": `10.2.0.${++n % 250}` },
+    headers: { "Content-Type": "application/json", ...browserHeaders(), "x-forwarded-for": `10.2.0.${++n % 250}` },
     body: JSON.stringify(body),
     signal,
   }));

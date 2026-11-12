@@ -63,7 +63,9 @@ export function sanitizeVisionSettings(raw: unknown): VisionSettings {
 }
 
 export const SETTINGS_KEY = "assistant.settings";
-const CONSENT_KEY = "assistant.consent.v1";
+// v2: the notice now also covers the live conversation (voice and camera to Google) and the cloud
+// voice (sentences to Microsoft), so consent given to the older notice is asked for again.
+export const CONSENT_KEY = "assistant.consent.v2";
 
 export function loadVisionSettings(): VisionSettings {
   try {

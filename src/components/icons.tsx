@@ -22,21 +22,6 @@ export const MicIcon = (p: Props) => (
 export const MicOffIcon = (p: Props) => (
   <Svg {...p}><path d="m3 3 18 18" /><path d="M15 10V6a3 3 0 0 0-5.6-1.5" /><path d="M9 9v2a3 3 0 0 0 4.6 2.5" /><path d="M5.5 11.5a6.5 6.5 0 0 0 10.2 5.3" /><path d="M18.5 11.5a6.4 6.4 0 0 1-.5 2.5" /><path d="M12 18v3" /></Svg>
 );
-export const AskIcon = (p: Props) => (
-  <Svg {...p}><path d="M4 12a8 8 0 1 1 3.3 6.5L4 19.5l1-3.2A8 8 0 0 1 4 12z" /><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 1.8" /><path d="M12 16.2v.01" /></Svg>
-);
-export const SilenceIcon = (p: Props) => (
-  <Svg {...p}><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" /><path d="m16 10 4.5 4.5" /><path d="m20.5 10-4.5 4.5" /></Svg>
-);
-export const PauseIcon = (p: Props) => (
-  <Svg {...p}><path d="M9 5.5v13" /><path d="M15 5.5v13" /></Svg>
-);
-export const PlayIcon = (p: Props) => (
-  <Svg {...p}><path d="M17 5.5v13L7 12z" /></Svg>
-);
-export const RepeatIcon = (p: Props) => (
-  <Svg {...p}><path d="M20 12a8 8 0 1 1-2.5-5.8L20 8.5" /><path d="M20 4v4.5h-4.5" /></Svg>
-);
 export const SettingsIcon = (p: Props) => (
   <Svg {...p}><path d="M4 7h9" /><path d="M18 7h2" /><circle cx="15.5" cy="7" r="2.5" /><path d="M4 17h2" /><path d="M11 17h9" /><circle cx="8.5" cy="17" r="2.5" /></Svg>
 );
@@ -46,24 +31,8 @@ export const ShieldIcon = (p: Props) => (
 export const CloseIcon = (p: Props) => (
   <Svg {...p}><path d="m6 6 12 12" /><path d="M18 6 6 18" /></Svg>
 );
-export const ForwardIcon = (p: Props) => (
-  <Svg {...p}><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></Svg>
-);
 export const ChevronIcon = (p: Props) => (
   <Svg {...p}><path d="m6 9 6 6 6-6" /></Svg>
-);
-/** The brand mark: the iris reduced to its essentials. */
-export const DescribeIcon = (p: Props) => (
-  <Svg {...p}><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="3" /></Svg>
-);
-export const ReadIcon = (p: Props) => (
-  <Svg {...p}><path d="M4 5.5h16" /><path d="M4 10h16" /><path d="M4 14.5h10" /><path d="M4 19h7" /></Svg>
-);
-export const IdentifyIcon = (p: Props) => (
-  <Svg {...p}><path d="M3.5 12.6V4.5a1 1 0 0 1 1-1h8.1a1 1 0 0 1 .7.3l7.4 7.4a1 1 0 0 1 0 1.4l-8.1 8.1a1 1 0 0 1-1.4 0l-7.4-7.4a1 1 0 0 1-.3-.7z" /><circle cx="8.5" cy="8.5" r="1.5" /></Svg>
-);
-export const HelpIcon = (p: Props) => (
-  <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2.9-1.2 1.8" /><path d="M12 16.8v.01" /></Svg>
 );
 export const PhoneIcon = (p: Props) => (
   <Svg {...p}><path d="M5 3.5h3.2l1.6 4.2-2.2 1.4a11 11 0 0 0 5.3 5.3l1.4-2.2 4.2 1.6V17a2 2 0 0 1-2 2A14.5 14.5 0 0 1 3 5.5a2 2 0 0 1 2-2z" /></Svg>
@@ -71,12 +40,14 @@ export const PhoneIcon = (p: Props) => (
 export const MessageIcon = (p: Props) => (
   <Svg {...p}><path d="M4 5.5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4.5 3.5v-3.5H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" /><path d="M7.5 10h9" /><path d="M7.5 13.5h6" /></Svg>
 );
+export const GlobeIcon = (p: Props) => (
+  <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" /></Svg>
+);
+/** The brand mark: an iris in a rounded square. */
 export const LogoMark = () => (
-  <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="shrink-0 text-glow" aria-hidden="true">
-    <circle cx="20" cy="20" r="18.5" stroke="var(--edge)" />
-    <g stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-      <path d="M20 8v4M20 28v4M8 20h4M28 20h4M11.5 11.5l2.8 2.8M25.7 25.7l2.8 2.8M28.5 11.5l-2.8 2.8M14.3 25.7l-2.8 2.8" />
-    </g>
-    <circle cx="20" cy="20" r="4.5" fill="currentColor" />
+  <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="logo shrink-0" aria-hidden="true">
+    <rect width="40" height="40" rx="11" fill="var(--primary)" />
+    <path d="M8 20s4.6-7.5 12-7.5S32 20 32 20s-4.6 7.5-12 7.5S8 20 8 20z" stroke="var(--primary-ink)" strokeWidth="2" strokeLinejoin="round" />
+    <circle cx="20" cy="20" r="4.2" fill="var(--primary-ink)" />
   </svg>
 );

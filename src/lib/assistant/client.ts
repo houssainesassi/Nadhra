@@ -1,6 +1,7 @@
 // Browser side of the API routes.
 import type { VisionRequestBody, VisionResponseBody, VisionStatus, VisionStreamEvent } from "./types.ts";
 import type { SpeechLang } from "./lang.ts";
+import { apiFetch } from "./api.ts";
 
 export class VisionApiError extends Error {
   status: number;
@@ -41,7 +42,7 @@ async function postJson<T>(url: string, body: unknown, signal: AbortSignal | und
   const timeout = timeoutSignal(timeoutMs);
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await apiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -90,7 +91,7 @@ async function streamOnce(body: VisionRequestBody, onSentence: (text: string) =>
   const combined = signal ? anySignal([signal, timeout]) : timeout;
   let res: Response;
   try {
-    res = await fetch("/api/vision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), cache: "no-store", signal: combined });
+    res = await apiFetch("/api/vision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), cache: "no-store", signal: combined });
   } catch (e) {
     if (signal?.aborted) throw e;
     throw new VisionApiError(0, timeout.aborted ? "timeout" : "network");

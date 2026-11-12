@@ -257,10 +257,11 @@ async function withFallback<T>(
  * refused (a key without search quota): the question still gets an answer, which then says it
  * couldn't check live information.
  */
-async function callWithOptionalSearch(p: VisionProvider, call: Omit<VisionCall, "search" | "system">, system: (search: boolean) => string, wantSearch: boolean): Promise<{ raw: string; grounded: boolean }> {
+async function callWithOptionalSearch(p: VisionProvider, call: Omit<VisionCall, "search" | "system">, system: (search: boolean) => string, wantSearch: boolean, allow?: () => Promise<boolean>): Promise<{ raw: string; grounded: boolean }> {
   let grounded = false;
   const onGrounded = () => (grounded = true);
-  if (wantSearch && searchUsable(p)) {
+  // The daily search budget is checked last, so it is only counted when a search really runs.
+  if (wantSearch && searchUsable(p) && (!allow || (await allow()))) {
     try {
       const raw = await p.analyze({ ...call, system: system(true), search: true, onGrounded });
       return { raw, grounded };
@@ -287,6 +288,8 @@ export interface AnswerOptions {
   now?: Date;
   /** Filled in as the answer arrives: when the model's first text came, for latency measurements. */
   clock?: { firstTokenAt?: number };
+  /** Asked right before a web search: false (daily search budget spent) answers without one. */
+  allowSearch?: () => Promise<boolean>;
 }
 
 /** Called with each piece of streamed model text: notes the first one, and passes on finished sentences. */
@@ -375,7 +378,7 @@ export async function answerChat(req: VisionRequestBody, opts: AnswerOptions = {
       signal,
       json: false,
       onDelta: sentenceSink(opts, streamer, sent, progress),
-    }, (search) => chatSystemPrompt(req.lang, { search, cameraOn: extra.cameraOn }), true);
+    }, (search) => chatSystemPrompt(req.lang, { search, cameraOn: extra.cameraOn }), true, opts.allowSearch);
     return sanitizeChat(raw, { question, lang: req.lang, usedWeb: grounded });
   });
   return out.result ? { ok: true, analysis: out.result, provider: out.provider, attempts: out.attempts, sent } : { ok: false, attempts: out.attempts, sent };

@@ -7,7 +7,8 @@
 // SLA and Microsoft may change or restrict it at any time; see README "Cloud voice".
 import "server-only";
 import { CHROMIUM_MAJOR_VERSION, SEC_MS_GEC_VERSION, TRUSTED_CLIENT_TOKEN, secMsGec } from "./edgeDrm.ts";
-import { clientKey, isSameOrigin, RateLimiter, readJsonBody } from "../server/http.ts";
+import { clientKey, RateLimiter, readJsonBody } from "../server/http.ts";
+import { charge, checkRequest } from "../server/guard.ts";
 import { CLOUD_VOICES, isSpeechLang } from "../assistant/lang.ts";
 
 export const MAX_TTS_CHARS = 500; // a recognized sentence is far shorter; the service splits at 4096 bytes
@@ -243,7 +244,8 @@ function json(status: number, body: Record<string, unknown>, extra: Record<strin
 export async function handleTtsPost(req: Request): Promise<Response> {
   const c = ttsConfig();
   if (!c.enabled) return json(503, { error: "not-configured" });
-  if (!isSameOrigin(req)) return json(403, { error: "forbidden" });
+  const ctx = checkRequest(req, "tts");
+  if (ctx instanceof Response) return ctx;
   const parsed = await readJsonBody<{ text?: unknown; rate?: unknown; lang?: unknown } | null>(req, 4096);
   if (!parsed.ok) return json(parsed.status, { error: parsed.error });
   const body = parsed.value;
@@ -260,6 +262,8 @@ export async function handleTtsPost(req: Request): Promise<Response> {
     return json(503, { error: "upstream-unavailable" }, { "Retry-After": String(Math.ceil((cooldownUntil - now) / 1000)) });
   }
   if (!rateLimiter(c.maxPerMin).hit(clientKey(req), now)) return json(429, { error: "too many requests" }, { "Retry-After": "30" });
+  const limited = await charge(ctx, "tts", now);
+  if (limited) return limited;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), c.timeoutMs);
