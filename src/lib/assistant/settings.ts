@@ -24,7 +24,7 @@ export interface VisionSettings {
 }
 
 export const DEFAULT_VISION_SETTINGS: VisionSettings = {
-  rate: 0.9,
+  rate: 1,
   volume: 1,
   facing: "auto",
   narration: true,

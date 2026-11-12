@@ -391,7 +391,7 @@ test("WAV encoding: valid header, length, clipping and resampling", () => {
 test("settings: corrupted values fall back to defaults", () => {
   assert.deepEqual(
     sanitizeVisionSettings({ rate: "fast", facing: "up", narration: 1, screenReaderEcho: null, volume: "max", language: 3, vibration: "yes", textScale: [], emergencyName: {}, emergencyPhone: 5 }),
-    { rate: 0.9, volume: 1, facing: "auto", narration: true, screenReaderEcho: false, language: "tn", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
+    { rate: 1, volume: 1, facing: "auto", narration: true, screenReaderEcho: false, language: "tn", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
   );
   assert.equal(sanitizeVisionSettings({ rate: 99 }).rate, 1.5);
   assert.equal(sanitizeVisionSettings(null).facing, "auto");
