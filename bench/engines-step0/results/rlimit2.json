@@ -1,0 +1,187 @@
+{
+ "meminfo_start": {
+  "MemTotal": 7805,
+  "MemAvailable": 2226
+ },
+ "loadavg": [
+  "4.07",
+  "2.99",
+  "1.80"
+ ],
+ "rlimit": {
+  "paddle@AS=875MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 0,
+    "errors": [
+     {
+      "image": "M01_a.jpg",
+      "http": 500,
+      "error": "ImportError"
+     },
+     {
+      "image": "M01_b.jpg",
+      "http": 500,
+      "error": "ImportError"
+     }
+    ],
+    "first_roundtrip_ms": 35,
+    "median_roundtrip_ms": 27,
+    "median_server_ms": 0,
+    "median_transport_overhead_ms": 31.3
+   },
+   "status": {
+    "VmPeak": 863,
+    "VmSize": 863,
+    "VmHWM": 93,
+    "VmRSS": 93,
+    "Threads": 7
+   },
+   "alive_after_reads": true
+  },
+  "paddle@AS=1500MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 0,
+    "errors": [
+     {
+      "image": "M01_a.jpg",
+      "http": 500,
+      "error": "ONNXRuntimeError"
+     },
+     {
+      "image": "M01_b.jpg",
+      "http": 500,
+      "error": "ONNXRuntimeError"
+     }
+    ],
+    "first_roundtrip_ms": 8016,
+    "median_roundtrip_ms": 1173,
+    "median_server_ms": 0,
+    "median_transport_overhead_ms": 4594.5
+   },
+   "status": {
+    "VmPeak": 1495,
+    "VmSize": 1484,
+    "VmHWM": 416,
+    "VmRSS": 239,
+    "Threads": 15
+   },
+   "alive_after_reads": true
+  },
+  "paddle@AS=2500MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "errors": [],
+    "first_roundtrip_ms": 6228,
+    "median_roundtrip_ms": 6329,
+    "median_server_ms": 6316,
+    "median_transport_overhead_ms": 13.9
+   },
+   "status": {
+    "VmPeak": 2056,
+    "VmSize": 1692,
+    "VmHWM": 539,
+    "VmRSS": 194,
+    "Threads": 14
+   },
+   "alive_after_reads": true
+  },
+  "paddle@AS=4000MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "errors": [],
+    "first_roundtrip_ms": 9347,
+    "median_roundtrip_ms": 7142,
+    "median_server_ms": 7130,
+    "median_transport_overhead_ms": 16.6
+   },
+   "status": {
+    "VmPeak": 2037,
+    "VmSize": 1692,
+    "VmHWM": 539,
+    "VmRSS": 194,
+    "Threads": 14
+   },
+   "alive_after_reads": true
+  },
+  "tesseract@AS=250MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "errors": [],
+    "first_roundtrip_ms": 944,
+    "median_roundtrip_ms": 451,
+    "median_server_ms": 441,
+    "median_transport_overhead_ms": 9.2
+   },
+   "status": {
+    "VmPeak": 172,
+    "VmSize": 172,
+    "VmHWM": 124,
+    "VmRSS": 124,
+    "Threads": 1
+   },
+   "alive_after_reads": true
+  },
+  "tesseract@AS=500MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "errors": [],
+    "first_roundtrip_ms": 1027,
+    "median_roundtrip_ms": 662,
+    "median_server_ms": 651,
+    "median_transport_overhead_ms": 10.1
+   },
+   "status": {
+    "VmPeak": 172,
+    "VmSize": 172,
+    "VmHWM": 124,
+    "VmRSS": 124,
+    "Threads": 1
+   },
+   "alive_after_reads": true
+  },
+  "tesseract@AS=1000MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "errors": [],
+    "first_roundtrip_ms": 1571,
+    "median_roundtrip_ms": 975,
+    "median_server_ms": 948,
+    "median_transport_overhead_ms": 24.9
+   },
+   "status": {
+    "VmPeak": 172,
+    "VmSize": 172,
+    "VmHWM": 125,
+    "VmRSS": 125,
+    "Threads": 1
+   },
+   "alive_after_reads": true
+  },
+  "overrun none+600MB@AS=300MB": {
+   "ok": false,
+   "exit": 1,
+   "stderr_tail": "Traceback (most recent call last):\n  File \"/tmp/claude-1000/-home-hello-Downloads-blind/9576161f-a7f6-4822-be16-349d0ba89296/scratchpad/step0/engine_server.py\", line 90, in <module>\n    _hog = bytearray(args.alloc_mb * 1024 * 1024)\nMemoryError\n"
+  }
+ }
+}

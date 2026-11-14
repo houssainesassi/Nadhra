@@ -639,7 +639,7 @@ const scenarios = {
     check("pause: on-device detection keeps running", (await detectorStatus()) === "ready");
     check("pause: the user hears that warnings stay on", !!(await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("التحذيرات اللي في الجهاز مازالت خدّامة"))), 10_000)));
 
-    await e.openSettings();
+    await e.page.getByTestId("open-privacy").click();
     await e.page.getByTestId("withdraw-consent").click();
     check("withdrawing consent stops the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "off", 5000)));
     check("and forgets the consent", (await e.page.evaluate(() => localStorage.getItem("assistant.consent.v3"))) === null);

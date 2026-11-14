@@ -1,0 +1,571 @@
+{
+ "meminfo_start": {
+  "MemTotal": 7805,
+  "MemAvailable": 3239
+ },
+ "loadavg": [
+  "1.66",
+  "1.09",
+  "1.00"
+ ],
+ "startup": {
+  "none": {
+   "runs": [
+    {
+     "ok": true,
+     "t_import_ms": 47,
+     "t_load_ms": 0,
+     "startup_ms": 83,
+     "idle_rss_mb": 19,
+     "threads": 1,
+     "stop_ms": 3,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 0
+    },
+    {
+     "ok": true,
+     "t_import_ms": 42,
+     "t_load_ms": 0,
+     "startup_ms": 83,
+     "idle_rss_mb": 19,
+     "threads": 1,
+     "stop_ms": 3,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 0
+    },
+    {
+     "ok": true,
+     "t_import_ms": 63,
+     "t_load_ms": 0,
+     "startup_ms": 126,
+     "idle_rss_mb": 19,
+     "threads": 1,
+     "stop_ms": 4,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 17
+    },
+    {
+     "ok": true,
+     "t_import_ms": 43,
+     "t_load_ms": 0,
+     "startup_ms": 83,
+     "idle_rss_mb": 19,
+     "threads": 1,
+     "stop_ms": 3,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 11
+    },
+    {
+     "ok": true,
+     "t_import_ms": 52,
+     "t_load_ms": 0,
+     "startup_ms": 104,
+     "idle_rss_mb": 19,
+     "threads": 1,
+     "stop_ms": 3,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": -1
+    }
+   ],
+   "startup_ms_median": 83,
+   "startup_ms_min": 83,
+   "startup_ms_max": 126
+  },
+  "tesseract": {
+   "runs": [
+    {
+     "ok": true,
+     "t_import_ms": 56,
+     "t_load_ms": 463,
+     "startup_ms": 572,
+     "idle_rss_mb": 91,
+     "threads": 1,
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 67
+    },
+    {
+     "ok": true,
+     "t_import_ms": 48,
+     "t_load_ms": 324,
+     "startup_ms": 431,
+     "idle_rss_mb": 91,
+     "threads": 1,
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 61
+    },
+    {
+     "ok": true,
+     "t_import_ms": 56,
+     "t_load_ms": 312,
+     "startup_ms": 409,
+     "idle_rss_mb": 91,
+     "threads": 1,
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 42
+    },
+    {
+     "ok": true,
+     "t_import_ms": 47,
+     "t_load_ms": 290,
+     "startup_ms": 388,
+     "idle_rss_mb": 91,
+     "threads": 1,
+     "stop_ms": 8,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 48
+    },
+    {
+     "ok": true,
+     "t_import_ms": 43,
+     "t_load_ms": 292,
+     "startup_ms": 388,
+     "idle_rss_mb": 91,
+     "threads": 1,
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 15
+    }
+   ],
+   "startup_ms_median": 409,
+   "startup_ms_min": 388,
+   "startup_ms_max": 572
+  },
+  "paddle": {
+   "runs": [
+    {
+     "ok": true,
+     "t_import_ms": 47,
+     "t_load_ms": 1466,
+     "startup_ms": 1565,
+     "idle_rss_mb": 74,
+     "threads": 7,
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 8
+    },
+    {
+     "ok": true,
+     "t_import_ms": 109,
+     "t_load_ms": 1397,
+     "startup_ms": 1586,
+     "idle_rss_mb": 74,
+     "threads": 7,
+     "stop_ms": 16,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": -1
+    },
+    {
+     "ok": true,
+     "t_import_ms": 47,
+     "t_load_ms": 1382,
+     "startup_ms": 1480,
+     "idle_rss_mb": 74,
+     "threads": 7,
+     "stop_ms": 16,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": -28
+    },
+    {
+     "ok": true,
+     "t_import_ms": 202,
+     "t_load_ms": 2473,
+     "startup_ms": 2794,
+     "idle_rss_mb": 74,
+     "threads": 7,
+     "stop_ms": 49,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": -10
+    },
+    {
+     "ok": true,
+     "t_import_ms": 139,
+     "t_load_ms": 2486,
+     "startup_ms": 2727,
+     "idle_rss_mb": 74,
+     "threads": 7,
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 17
+    }
+   ],
+   "startup_ms_median": 1586,
+   "startup_ms_min": 1480,
+   "startup_ms_max": 2794
+  }
+ },
+ "memory": {
+  "none": {
+   "health": {
+    "ok": true,
+    "t_import_ms": 69,
+    "t_load_ms": 0,
+    "startup_ms": 125
+   },
+   "idle": {
+    "VmPeak": 27,
+    "VmSize": 27,
+    "VmHWM": 19,
+    "VmRSS": 19,
+    "Threads": 1
+   },
+   "reads": {},
+   "after_reads": {
+    "VmPeak": 27,
+    "VmSize": 27,
+    "VmHWM": 19,
+    "VmRSS": 19,
+    "Threads": 1
+   },
+   "stop": {
+    "stop_ms": 4,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 13
+   }
+  },
+  "tesseract": {
+   "health": {
+    "ok": true,
+    "t_import_ms": 79,
+    "t_load_ms": 451,
+    "startup_ms": 602
+   },
+   "idle": {
+    "VmPeak": 154,
+    "VmSize": 142,
+    "VmHWM": 102,
+    "VmRSS": 91,
+    "Threads": 1
+   },
+   "reads": {
+    "images": 10,
+    "lines": 67,
+    "first_roundtrip_ms": 795,
+    "median_roundtrip_ms": 592,
+    "median_server_ms": 580,
+    "median_transport_overhead_ms": 9.2
+   },
+   "after_reads": {
+    "VmPeak": 172,
+    "VmSize": 172,
+    "VmHWM": 124,
+    "VmRSS": 124,
+    "Threads": 1
+   },
+   "stop": {
+    "stop_ms": 7,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 127
+   }
+  },
+  "paddle": {
+   "health": {
+    "ok": true,
+    "t_import_ms": 54,
+    "t_load_ms": 1371,
+    "startup_ms": 1470
+   },
+   "idle": {
+    "VmPeak": 845,
+    "VmSize": 845,
+    "VmHWM": 74,
+    "VmRSS": 74,
+    "Threads": 7
+   },
+   "reads": {
+    "images": 10,
+    "lines": 68,
+    "first_roundtrip_ms": 5063,
+    "median_roundtrip_ms": 3835,
+    "median_server_ms": 3827,
+    "median_transport_overhead_ms": 8.0
+   },
+   "after_reads": {
+    "VmPeak": 2057,
+    "VmSize": 1699,
+    "VmHWM": 538,
+    "VmRSS": 200,
+    "Threads": 14
+   },
+   "stop": {
+    "stop_ms": 15,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 92
+   }
+  }
+ },
+ "sequential": {
+  "steps": [
+   {
+    "engine": "paddle",
+    "startup_ms": 2199,
+    "reads": {
+     "images": 2,
+     "lines": 16,
+     "first_roundtrip_ms": 6428,
+     "median_roundtrip_ms": 4465,
+     "median_server_ms": 4445,
+     "median_transport_overhead_ms": 15.2
+    },
+    "VmHWM": 538,
+    "stop": {
+     "stop_ms": 15,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 133
+    }
+   },
+   {
+    "engine": "tesseract",
+    "startup_ms": 472,
+    "reads": {
+     "images": 2,
+     "lines": 16,
+     "first_roundtrip_ms": 811,
+     "median_roundtrip_ms": 493,
+     "median_server_ms": 485,
+     "median_transport_overhead_ms": 7.1
+    },
+    "VmHWM": 125,
+    "stop": {
+     "stop_ms": 7,
+     "exit": 0,
+     "socket_removed": true,
+     "leftover_processes": 0,
+     "mem_available_recovered_mb": 127
+    }
+   }
+  ],
+  "total_ms": 15492,
+  "max_engine_rss_mb": 529,
+  "max_mem_drop_mb": 420,
+  "mem_available_start_mb": 2959,
+  "mem_available_end_mb": 3272
+ },
+ "parallel": {
+  "paddle_startup_ms": 1453,
+  "tesseract_startup_ms": 1453,
+  "both_ready_ms": 1453,
+  "paddle_reads": {
+   "images": 2,
+   "lines": 16,
+   "first_roundtrip_ms": 5170,
+   "median_roundtrip_ms": 3744,
+   "median_server_ms": 3735,
+   "median_transport_overhead_ms": 10.4
+  },
+  "tesseract_reads": {
+   "images": 2,
+   "lines": 16,
+   "first_roundtrip_ms": 1474,
+   "median_roundtrip_ms": 613,
+   "median_server_ms": 602,
+   "median_transport_overhead_ms": 11.2
+  },
+  "total_ms": 10367,
+  "max_sum_rss_mb": 660,
+  "max_mem_drop_mb": 487,
+  "stop": [
+   {
+    "stop_ms": 15,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 132
+   },
+   {
+    "stop_ms": 38,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 49
+   }
+  ]
+ },
+ "rlimit": {
+  "paddle@AS=875MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 0,
+    "first_roundtrip_ms": 33,
+    "median_roundtrip_ms": 29,
+    "median_server_ms": 19,
+    "median_transport_overhead_ms": 10.6
+   },
+   "status": {
+    "VmPeak": 863,
+    "VmSize": 863,
+    "VmHWM": 93,
+    "VmRSS": 93,
+    "Threads": 7
+   },
+   "alive_after_reads": true
+  },
+  "paddle@AS=1500MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 8,
+    "first_roundtrip_ms": 3183,
+    "median_roundtrip_ms": 5535,
+    "median_server_ms": 5527,
+    "median_transport_overhead_ms": 9.2
+   },
+   "status": {
+    "VmPeak": 1494,
+    "VmSize": 1409,
+    "VmHWM": 415,
+    "VmRSS": 191,
+    "Threads": 14
+   },
+   "alive_after_reads": true
+  },
+  "paddle@AS=2500MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "first_roundtrip_ms": 6090,
+    "median_roundtrip_ms": 4365,
+    "median_server_ms": 4354,
+    "median_transport_overhead_ms": 12.5
+   },
+   "status": {
+    "VmPeak": 2037,
+    "VmSize": 1692,
+    "VmHWM": 537,
+    "VmRSS": 193,
+    "Threads": 15
+   },
+   "alive_after_reads": true
+  },
+  "paddle@AS=4000MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "first_roundtrip_ms": 5377,
+    "median_roundtrip_ms": 8167,
+    "median_server_ms": 8150,
+    "median_transport_overhead_ms": 19.8
+   },
+   "status": {
+    "VmPeak": 2037,
+    "VmSize": 1692,
+    "VmHWM": 538,
+    "VmRSS": 193,
+    "Threads": 14
+   },
+   "alive_after_reads": true
+  },
+  "tesseract@AS=250MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "first_roundtrip_ms": 1322,
+    "median_roundtrip_ms": 451,
+    "median_server_ms": 445,
+    "median_transport_overhead_ms": 7.4
+   },
+   "status": {
+    "VmPeak": 165,
+    "VmSize": 165,
+    "VmHWM": 117,
+    "VmRSS": 117,
+    "Threads": 1
+   },
+   "alive_after_reads": true
+  },
+  "tesseract@AS=500MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "first_roundtrip_ms": 825,
+    "median_roundtrip_ms": 467,
+    "median_server_ms": 460,
+    "median_transport_overhead_ms": 7.0
+   },
+   "status": {
+    "VmPeak": 165,
+    "VmSize": 165,
+    "VmHWM": 117,
+    "VmRSS": 117,
+    "Threads": 1
+   },
+   "alive_after_reads": true
+  },
+  "tesseract@AS=1000MB": {
+   "health_ok": true,
+   "detail": null,
+   "reads": {
+    "images": 2,
+    "lines": 16,
+    "first_roundtrip_ms": 804,
+    "median_roundtrip_ms": 437,
+    "median_server_ms": 430,
+    "median_transport_overhead_ms": 6.6
+   },
+   "status": {
+    "VmPeak": 165,
+    "VmSize": 165,
+    "VmHWM": 117,
+    "VmRSS": 117,
+    "Threads": 1
+   },
+   "alive_after_reads": true
+  },
+  "overrun none+600MB@AS=300MB": {
+   "ok": false,
+   "exit": 1,
+   "stderr_tail": "Traceback (most recent call last):\n  File \"/tmp/claude-1000/-home-hello-Downloads-blind/9576161f-a7f6-4822-be16-349d0ba89296/scratchpad/step0/engine_server.py\", line 93, in <module>\n    _hog = bytearray(args.alloc_mb * 1024 * 1024)\nMemoryError\n"
+  }
+ }
+}

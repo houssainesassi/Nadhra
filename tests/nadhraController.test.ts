@@ -109,6 +109,8 @@ afterEach(() => {
 
 function setup(opts: { provider?: "nadhra"; autoDescribe?: boolean; voice?: FakeVoice } = {}) {
   if (opts.provider || opts.autoDescribe) storage.set("assistant.settings", JSON.stringify({ ...(opts.provider ? { provider: opts.provider } : {}), ...(opts.autoDescribe ? { autoDescribe: true } : {}) }));
+  // These tests check the Derja phrases: Tunisian unless a saved setting says otherwise.
+  storage.set("assistant.settings", JSON.stringify({ language: "tn", ...JSON.parse(storage.get("assistant.settings") ?? "{}") }));
   const c = new SmartVisionController();
   const engine = new FakeEngine();
   const sources: FakeSource[] = [];

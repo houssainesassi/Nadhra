@@ -159,7 +159,7 @@ test("prompts: one per language; Tunisian unchanged in substance", () => {
 
 test("settings: language, volume, text size and the emergency number are validated", () => {
   const s = sanitizeVisionSettings({ language: "de", volume: 7, textScale: 0.2, emergencyPhone: "+216 98 <script> 123 456", emergencyName: "  Maman\u0007 " });
-  assert.equal(s.language, "tn");
+  assert.equal(s.language, "en", "English is the default language");
   assert.equal(s.volume, 1);
   assert.equal(s.textScale, 1);
   assert.equal(s.emergencyPhone, "+216 98 123 456");

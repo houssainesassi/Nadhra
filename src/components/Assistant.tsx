@@ -9,46 +9,13 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/useStore";
 import { SmartVisionController, type SheetName, type VisionState } from "@/lib/assistant/controller";
-import { commandExamples, type VoiceCommand } from "@/lib/assistant/commands";
+import { commandExamples } from "@/lib/assistant/commands";
 import { LANGS, SPEECH_LANGS, type SpeechLang } from "@/lib/assistant/lang";
 import { cameraErrorText } from "@/lib/assistant/phrases";
 import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiProvider, type FacingSetting } from "@/lib/assistant/settings";
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
 import { CameraIcon, CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, GlobeIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon } from "./icons";
-
-const SHORTCUTS = [
-  ["C", "Open the camera, or stop assistance"],
-  ["L", "Start or end a live conversation"],
-  ["D", "Describe my surroundings"],
-  ["T", "Read text"],
-  ["I", "Identify an object"],
-  ["V", "Turn voice commands on or off"],
-  ["Q", "Ask by voice"],
-  ["P", "Pause or resume analysis"],
-  ["R", "Repeat the last sentence"],
-  ["H", "Help: hear what you can say"],
-  ["Esc", "Stop talking"],
-] as const;
-
-const COMMAND_LIST: [VoiceCommand, string][] = [
-  ["front", "What's in front of me"],
-  ["describe", "Describe my surroundings"],
-  ["read", "Read text"],
-  ["identify", "Identify an object"],
-  ["repeat", "Repeat"],
-  ["stop-speech", "Stop talking"],
-  ["back", "Go back or cancel"],
-  ["help", "Help"],
-  ["pause", "Pause analysis"],
-  ["resume", "Resume"],
-  ["camera-on", "Start the camera"],
-  ["camera-off", "Stop the camera"],
-  ["louder", "Louder (also: quieter)"],
-  ["slower", "Slower (also: faster)"],
-  ["emergency", "Emergency page (then «عيّط» / “call” selects the call button)"],
-  ["assistant-off", "Turn off voice commands"],
-];
 
 /** Tunisia's emergency numbers. */
 const EMERGENCY_NUMBERS = [
@@ -466,35 +433,6 @@ export default function Assistant() {
             </button>
           </fieldset>
 
-          <div className="border-t border-hairline pt-6">
-            <h3 className="font-medium">Camera consent</h3>
-            <p className="mt-1 text-base text-ink-2">{s.consentGiven ? "You agreed to send camera images to the AI service." : "Not given. You'll be asked before the camera starts."}</p>
-            {s.consentGiven && (
-              <button type="button" onClick={() => controller.withdrawConsent()} className="control control-quiet mt-3 min-h-16" data-testid="withdraw-consent">Withdraw consent and stop the camera</button>
-            )}
-          </div>
-
-          <div className="border-t border-hairline pt-6">
-            <h3 className="font-medium">Voice commands</h3>
-            <p className="mt-1 text-base text-ink-2">They work in all four languages. Anything else is taken as a question.</p>
-            <ul className="mt-3 flex flex-col gap-2.5 text-base">
-              {COMMAND_LIST.map(([cmd, what]) => (
-                <li key={cmd} className="flex items-baseline justify-between gap-4 border-b border-hairline pb-2.5">
-                  <span>{what}</span>
-                  <span lang={lang.bcp47} dir={lang.dir} className={`font-medium ${rtl ? "arabic" : ""}`}>{examples[cmd]}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="border-t border-hairline pt-6">
-            <h3 className="font-medium">Keyboard shortcuts</h3>
-            <p className="mt-1 text-base text-ink-2">With a screen reader, use its pass-through mode, or use the buttons.</p>
-            <ul className="mt-3 flex flex-col gap-2.5 text-base">
-              {SHORTCUTS.map(([key, what]) => (
-                <li key={key} className="flex items-center gap-3"><kbd>{key}</kbd><span>{what}</span></li>
-              ))}
-            </ul>
-          </div>
         </div>
       </Sheet>
 
@@ -508,7 +446,7 @@ export default function Assistant() {
         <h3 className="mt-6 font-semibold">Privacy</h3>
         <PrivacyText providers={providers} />
         {s.consentGiven && (
-          <button type="button" onClick={() => controller.withdrawConsent()} className="control control-quiet mt-6 min-h-16">Withdraw consent and stop the camera</button>
+          <button type="button" onClick={() => controller.withdrawConsent()} className="control control-quiet mt-6 min-h-16" data-testid="withdraw-consent">Withdraw consent and stop the camera</button>
         )}
       </Sheet>
 

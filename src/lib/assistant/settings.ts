@@ -42,7 +42,7 @@ export const DEFAULT_VISION_SETTINGS: VisionSettings = {
   facing: "auto",
   autoDescribe: false,
   screenReaderEcho: false,
-  language: "tn",
+  language: "en",
   vibration: true,
   textScale: 1,
   emergencyName: "",

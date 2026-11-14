@@ -165,7 +165,7 @@ const focused = (page) => page.evaluate(() => document.activeElement?.dataset.te
   await page.screenshot({ path: join(OUT, "phone-active-tn.png") });
 
   await page.getByTestId("open-settings").click();
-  check("Settings holds live conversation, voice commands, consent withdrawal and the emergency contact", (await page.getByRole("dialog", { name: "Settings" }).isVisible()) && (await page.getByTestId("live-toggle").count()) === 1 && (await page.getByTestId("voice-commands").count()) === 1 && (await page.getByTestId("withdraw-consent").count()) === 1);
+  check("Settings holds live conversation, voice commands and the emergency contact", (await page.getByRole("dialog", { name: "Settings" }).isVisible()) && (await page.getByTestId("live-toggle").count()) === 1 && (await page.getByTestId("voice-commands").count()) === 1);
   await page.keyboard.press("Escape");
   await page.getByTestId("open-privacy").click();
   const privacy = page.getByRole("dialog", { name: "Privacy & safety" });

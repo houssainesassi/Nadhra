@@ -391,7 +391,7 @@ test("WAV encoding: valid header, length, clipping and resampling", () => {
 test("settings: corrupted values fall back to defaults", () => {
   assert.deepEqual(
     sanitizeVisionSettings({ rate: "fast", facing: "up", autoDescribe: 1, screenReaderEcho: null, volume: "max", language: 3, vibration: "yes", textScale: [], emergencyName: {}, emergencyPhone: 5 }),
-    { rate: 1, volume: 1, facing: "auto", autoDescribe: false, screenReaderEcho: false, language: "tn", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
+    { rate: 1, volume: 1, facing: "auto", autoDescribe: false, screenReaderEcho: false, language: "en", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
   );
   // Automatic descriptions are off unless chosen; the old «narration» setting doesn't turn them on.
   assert.equal(sanitizeVisionSettings({ narration: true }).autoDescribe, false);

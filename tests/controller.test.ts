@@ -172,6 +172,7 @@ afterEach(() => {
  * user would; `auto: false` keeps the default (off). See the "automatic descriptions" tests.
  */
 function setup(opts: { detector?: FakeDetector; voice?: FakeVoice; auto?: boolean } = {}) {
+  if (!storage.has("assistant.settings")) storage.set("assistant.settings", JSON.stringify({ language: "tn" })); // the defaults, in Derja: these tests check the Tunisian phrases
   const c = new SmartVisionController();
   const engine = new FakeEngine();
   const sources: FakeSource[] = [];

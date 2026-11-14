@@ -1,0 +1,96 @@
+{
+ "meminfo_start": {
+  "MemTotal": 7805,
+  "MemAvailable": 3307
+ },
+ "loadavg": [
+  "1.63",
+  "1.05",
+  "0.98"
+ ],
+ "fs": {
+  "engine_can_access": {
+   "/home/hello": {
+    "exists": true,
+    "readable": true,
+    "writable": true
+   },
+   "/home/hello/.ssh": {
+    "exists": false,
+    "readable": false,
+    "writable": false
+   },
+   "/home/hello/Downloads/blind/.env.local": {
+    "exists": true,
+    "readable": true,
+    "writable": true
+   },
+   "/etc/passwd": {
+    "exists": true,
+    "readable": true,
+    "writable": false
+   }
+  },
+  "engine_env_keys": [
+   "HOME",
+   "LANG",
+   "PATH"
+  ],
+  "socket_mode": "0o600",
+  "socket_dir_mode": "0o700"
+ },
+ "network": {
+  "no_block": {
+   "health": {
+    "ok": true,
+    "t_import_ms": 88,
+    "t_load_ms": 1653,
+    "startup_ms": 1807
+   },
+   "probe": {
+    "create_inet_socket": "allowed",
+    "connect_127.0.0.1:9": "ConnectionRefusedError: [Errno 111] Connection refused",
+    "list_interfaces": [
+     "lo",
+     "eno1",
+     "wlan0",
+     "docker0"
+    ]
+   },
+   "read_ok": true,
+   "stop": {
+    "stop_ms": 16,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 147
+   }
+  },
+  "audit_hook_block": {
+   "health": {
+    "ok": true,
+    "t_import_ms": 45,
+    "t_load_ms": 1189,
+    "startup_ms": 1289
+   },
+   "probe": {
+    "create_inet_socket": "RuntimeError: network blocked: family 2",
+    "connect_127.0.0.1:9": "RuntimeError: network blocked: socket.getaddrinfo",
+    "list_interfaces": [
+     "lo",
+     "eno1",
+     "wlan0",
+     "docker0"
+    ]
+   },
+   "read_ok": true,
+   "stop": {
+    "stop_ms": 16,
+    "exit": 0,
+    "socket_removed": true,
+    "leftover_processes": 0,
+    "mem_available_recovered_mb": 146
+   }
+  }
+ }
+}

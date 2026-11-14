@@ -200,3 +200,28 @@ Questions for you:
 - `next build` OK (the earlier `.next` was put back afterwards);
 - `e2e/nadhra/run.mjs` **67/67, twice**, with the hybrid server in its default configuration;
 - the layout regression `e2e/redesign.mjs` 53/53.
+
+## 10. Step N2: engine runtime (2026-11-14)
+
+Approved scope only: manifests, a launcher with lifecycle, health checks, a free-memory check before loading,
+idle shutdown, and fake engines for tests. **No real engine or model is connected, nothing was downloaded or
+installed, and Nadhra still declares no task** (`NADHRA_TASKS = {}`). No route calls the launcher yet.
+
+- `src/lib/server/engines/manifest.ts`:
+  - the manifest format: id, licence, `benchOnly`, informational `candidateTasks`, command (never a shell; only `{host}`/`{port}`/`{modelDir}` placeholders), health path, measured `ramMB`, architectures, model files (relative path, https URL, SHA-256, size);
+  - the validator, which lists every problem; the licence must be permissive unless the engine is `benchOnly`;
+  - the loader, which reports broken or duplicate manifests and leaves them out.
+- `src/lib/server/engines/launcher.ts`:
+  - start once for concurrent callers;
+  - health check (2xx before the deadline: `start-timeout` / `unhealthy` otherwise, and the process is killed);
+  - free memory checked first (`ramMB` + `NADHRA_RAM_RESERVE_MB`, default 512), and unknown memory is refused;
+  - architecture check; research-only engines are never loaded;
+  - reference counting with idle shutdown (`NADHRA_IDLE_SHUTDOWN_MS`, default 2 min);
+  - a health watchdog while running (two failed checks stop the engine); crash detection, and a restart on the next acquire;
+  - SIGTERM then SIGKILL on stop; synchronous SIGTERM to every engine when the server exits (no signal handlers, so the server's own shutdown is unchanged).
+  - Privacy: the engine gets a minimal allowlisted environment (no API keys, tokens or `NODE_OPTIONS`), is told to listen on 127.0.0.1, and the launcher only contacts 127.0.0.1.
+- `engines/manifests/` (empty, `.gitkeep`) and `engines/README.md`.
+- Tests:
+  - `tests/engines.test.ts` (20), with a fake engine process `tests/fixtures/fake-engine.mjs`;
+  - full suite 418/418; tsc clean; `next build` OK;
+  - Chromium regression `e2e/nadhra/run.mjs` 67/67 (the N1 protections are unchanged).
