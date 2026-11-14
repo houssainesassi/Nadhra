@@ -5,8 +5,9 @@
 // Three `next start` servers, each under e2e/nadhra/netlog.mjs (every outgoing connection of the server
 // is recorded and blocked: no Gemini quota, nothing reaches any cloud service):
 //   hybrid  AI_MODE=hybrid NADHRA_AI_ENABLED=1   the Nadhra machine, DEFAULT settings otherwise
-//   public  NADHRA_AI_ENABLED=1, AI_MODE unset   the flag alone must not expose Nadhra
-//   plain   nothing set                          today's public configuration
+//   public  NADHRA_AI_ENABLED=1, AI_MODE unset   production with Nadhra shown: switch visible, Gemini
+//                                                routing unchanged (cloud), every Nadhra request refused
+//   plain   nothing set                          production without the flag: no switch
 // Fake camera (e2e/make_synthetic_camera.py), no microphone, no /api route mocked.
 //
 //   node --experimental-strip-types e2e/nadhra/run.mjs <fixtures-dir>
@@ -17,13 +18,16 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { speech } from "../../src/lib/assistant/phrases.ts";
 import { UI_TEXT } from "../../src/lib/assistant/uiText.ts";
+import { DEFAULT_VISION_SETTINGS } from "../../src/lib/assistant/settings.ts";
+import { speechChunks } from "../../src/lib/assistant/speechQueue.ts";
 
 const fixtures = process.argv[2];
 if (!fixtures) throw new Error("usage: node --experimental-strip-types e2e/nadhra/run.mjs <fixtures-dir>");
 const OUT = "e2e/nadhra/out";
 mkdirSync(OUT, { recursive: true });
-const T = speech("tn");
-const UI = UI_TEXT.tn;
+// The app's default speech language (no language is chosen in these runs).
+const T = speech(DEFAULT_VISION_SETTINGS.language);
+const UI = UI_TEXT[DEFAULT_VISION_SETTINGS.language];
 const REFUSAL = `${T.nadhra.unavailable} ${T.nadhra.needsGemini}`;
 const root = join(homedir(), ".cache", "ms-playwright");
 const executablePath = process.env.CHROME_PATH ?? join(root, readdirSync(root).filter((x) => /^chromium-\d+$/.test(x)).sort().reverse()[0], "chrome-linux64", "chrome");
@@ -49,7 +53,9 @@ for (const [name, s] of Object.entries(servers)) {
   const env = { ...process.env, ...s.env, NODE_OPTIONS: `--import ${NETLOG}`, NETLOG_FILE: s.log, NETLOG_DELAY_FILE: DELAY, NEXT_TELEMETRY_DISABLED: "1",
     // Fakes override .env.local: even an unblocked call could not use real quota.
     GEMINI_API_KEY: "e2e-fake-gemini-key", OPENROUTER_API_KEY: "e2e-fake-openrouter-key" };
-  for (const k of ["AI_MODE", "NADHRA_AI_ENABLED", "INTERNET_PROBE_URL"]) if (!(k in s.env)) delete env[k];
+  // Empty, not deleted: `next start` fills missing variables from .env.local (which may set these for
+  // local dev), but never overrides one that exists. Empty = unset for the app.
+  for (const k of ["AI_MODE", "NADHRA_AI_ENABLED", "INTERNET_PROBE_URL"]) if (!(k in s.env)) env[k] = "";
   const child = spawn("node_modules/.bin/next", ["start", "-p", String(s.port)], { env, stdio: ["ignore", "pipe", "pipe"], detached: true });
   child.stdout.on("data", (d) => (s.stdout = (s.stdout ?? "") + d));
   child.stderr.on("data", (d) => (s.stdout = (s.stdout ?? "") + d));
@@ -69,9 +75,10 @@ const isGeminiModel = (e) => e.via === "fetch" && /generativelanguage\.googleapi
 // --- public configuration ----------------------------------------------------------------------------
 const status = {};
 for (const name of Object.keys(servers)) status[name] = await (await fetch(`${servers[name].base}/api/vision`)).json();
-check("public (flag set, AI_MODE unset): status has no nadhra", !("nadhra" in status.public), JSON.stringify(status.public));
+check("public (flag set, AI_MODE unset): status offers Nadhra, experimental, no task", JSON.stringify(status.public.nadhra) === JSON.stringify({ experimental: true, tasks: [] }), JSON.stringify(status.public));
+check("public: still cloud mode (no mode field)", !("mode" in status.public), JSON.stringify(status.public));
 check("plain: status has no nadhra", !("nadhra" in status.plain));
-check("public status identical with and without the flag", JSON.stringify(status.public) === JSON.stringify(status.plain));
+check("public status = plain status + the nadhra field only", (() => { const { nadhra, ...rest } = status.public; return JSON.stringify(rest) === JSON.stringify(status.plain); })());
 check("hybrid status offers Nadhra, experimental, no task", JSON.stringify(status.hybrid.nadhra) === JSON.stringify({ experimental: true, tasks: [] }) && status.hybrid.mode === "hybrid", JSON.stringify(status.hybrid));
 
 // --- browser -------------------------------------------------------------------------------------
@@ -107,7 +114,13 @@ async function open(base, viewport = { width: 412, height: 915 }) {
   return { ctx, page, requests, failed, errors };
 }
 const said = (page) => page.evaluate(() => window.__said.join(" \n "));
-const heard = async (page, text, ms = 8_000) => !!(await until(async () => (await said(page)).includes(text.slice(0, 30)), ms));
+// A long phrase is spoken in chunks; without a real voice they end at once and only the last one may
+// stay on the caption. Its first or its last chunk counts.
+const heard = async (page, text, ms = 8_000) => {
+  const chunks = speechChunks(text);
+  const marks = [...new Set([text.slice(0, 30), chunks[chunks.length - 1].slice(0, 30)])];
+  return !!(await until(async () => { const s = await said(page); return marks.some((m) => s.includes(m)); }, ms));
+};
 const announcedCount = (page, text) => page.evaluate((t) => window.__announced.filter((a) => a === t).length, text);
 const stage = (page, attr) => page.locator("[data-testid=stage]").getAttribute(`data-${attr}`);
 const consentOpen = (page) => page.locator('dialog[aria-labelledby="consent-title"]').evaluate((d) => d.open);
@@ -125,10 +138,43 @@ const active = (page) => sw(page).getAttribute("data-active");
 const notice = (page) => until(async () => (await page.locator("[data-testid=ai-provider-notice]").textContent())?.trim(), 3_000);
 const choose = async (page, p) => { await page.click(`main [data-testid=ai-provider-${p}]`); await sleep(200); };
 
-for (const name of ["public", "plain"]) {
-  const { page, ctx } = await open(servers[name].base);
-  check(`${name}: no AI switch on the home screen`, (await sw(page).count()) === 0);
-  check(`${name}: none in Settings either`, (await settings(page, () => page.locator("dialog[open] [data-testid=ai-provider]").count())) === 0);
+{
+  const { page, ctx } = await open(servers.plain.base);
+  check("plain: no AI switch on the home screen", (await sw(page).count()) === 0);
+  check("plain: none in Settings either", (await settings(page, () => page.locator("dialog[open] [data-testid=ai-provider]").count())) === 0);
+  await ctx.close();
+}
+{
+  // Production with the flag: the same switch on the home screen; Nadhra refuses everything.
+  const { page, ctx, requests, errors } = await open(servers.public.base);
+  check("public: the AI switch is on the home screen", (await sw(page).count()) === 1 && (await sw(page).isVisible()));
+  check("public: Gemini is the default, Nadhra selectable", (await active(page)) === "gemini" && (await page.locator("[data-testid=ai-provider-nadhra] input").isEnabled()));
+  const tPub = Date.now();
+  await choose(page, "nadhra");
+  check("public: switch to Nadhra, confirmation spoken", (await active(page)) === "nadhra" && (await heard(page, T.nadhra.selected)));
+  await page.click("[data-testid=open-camera]");
+  await until(async () => (await stage(page, "camera")) === "on", 8_000);
+  check("public: Nadhra camera on, analysis local", (await stage(page, "analysis")) === "local", await stage(page, "analysis"));
+  const n = await announcedCount(page, REFUSAL);
+  await page.keyboard.press("d");
+  check("public: a question is refused out loud", await until(async () => (await announcedCount(page, REFUSAL)) > n, 6_000));
+  await sleep(1_500);
+  check("public: the page sent nothing", requests.filter((r) => r.t >= tPub && r.method !== "GET").length === 0);
+  const tD = Date.now();
+  const direct = await page.evaluate(async () => {
+    await fetch("/api/session", { credentials: "same-origin" });
+    const r = await fetch("/api/vision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "nadhra", mode: "chat", question: "test" }) });
+    return { status: r.status, body: await r.json() };
+  });
+  await sleep(500);
+  check("public: provider nadhra → 503 nadhra-unavailable", direct.status === 503 && direct.body.error === "nadhra-unavailable", JSON.stringify(direct));
+  check("public: the server made no outgoing attempt", since("public", tPub).length === 0, JSON.stringify(since("public", tPub)));
+  check("public: no page errors", errors.length === 0, errors.join(" | "));
+  await page.screenshot({ path: join(OUT, "public-home-412.png") });
+  // Stop speaking before closing: an utterance cut off by closing the page can stall the browser's
+  // shared speech queue for the next pages.
+  await page.evaluate(() => speechSynthesis.cancel());
+  await sleep(500);
   await ctx.close();
 }
 
@@ -152,7 +198,7 @@ let t0 = Date.now();
 await page.click("[data-testid=open-camera]");
 check("Gemini: Open camera shows the consent notice first", await until(() => consentOpen(page), 5_000));
 check("Gemini: the camera waits for consent", (await stage(page, "camera")) === "off");
-await page.click("text=I don't agree");
+await page.getByRole("button", { name: "I don't agree", exact: true }).click();
 check("Gemini: declining is said, camera stays off", (await heard(page, T.consentRefused)) && (await stage(page, "camera")) === "off");
 check("Gemini: no AI request before or after declining", aiPosts(t0).length === 0, JSON.stringify(aiPosts(t0).map((r) => r.url)));
 
@@ -222,7 +268,7 @@ check("back to Gemini: active, confirmation spoken", (await active(page)) === "g
 check("back to Gemini without consent: camera stopped", (await until(async () => (await stage(page, "camera")) === "off", 4_000)) !== null);
 check("back to Gemini without consent: consent notice shown", await until(() => consentOpen(page), 4_000));
 check("back to Gemini: no AI request before consent", aiPosts(tBack).length === 0);
-await page.click("text=I agree");
+await page.getByRole("button", { name: "I agree", exact: true }).click();
 await until(async () => (await stage(page, "camera")) === "on", 8_000);
 check("Gemini after consent: camera on, existing 'manual' state", (await stage(page, "camera")) === "on" && (await stage(page, "analysis")) === "manual", await stage(page, "analysis"));
 

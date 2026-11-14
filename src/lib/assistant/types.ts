@@ -178,7 +178,7 @@ export interface VisionStatus {
   /** Questions that need current information can be looked up on the web. */
   canSearch?: boolean;
   /**
-   * Present only when this server offers Nadhra AI (NADHRA_AI_ENABLED with AI_MODE hybrid or offline):
+   * Present only when this server offers Nadhra AI (NADHRA_AI_ENABLED, in any AI_MODE):
    * experimental, and the tasks it can do now (none until its local engines are connected).
    */
   nadhra?: { experimental: true; tasks: AiTask[] };

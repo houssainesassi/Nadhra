@@ -102,10 +102,12 @@ export const NADHRA_TASKS: Readonly<Partial<Record<AiTask, TaskSupport>>> = Obje
 export const nadhraEnabled = (env: Record<string, string | undefined> = process.env) => /^(1|true|yes)$/i.test(env.NADHRA_AI_ENABLED?.trim() ?? "");
 
 /**
- * The server offers Nadhra AI as a choice: switched on, and AI_MODE allows local engines (hybrid or
- * offline). In cloud mode (the default, the public deployment) it is never offered.
+ * The server offers Nadhra AI as a choice (the home-screen switch): NADHRA_AI_ENABLED alone, in any
+ * AI_MODE, so a cloud deployment can show it too. Offering it only shows the choice: AI_MODE still
+ * decides Gemini's routing, and every Nadhra request is still refused (503 nadhra-unavailable) until
+ * NADHRA_TASKS declares a task.
  */
-export const nadhraOffered = (env: Record<string, string | undefined> = process.env) => nadhraEnabled(env) && aiMode(env) !== "cloud";
+export const nadhraOffered = (env: Record<string, string | undefined> = process.env) => nadhraEnabled(env);
 
 /** The tasks Nadhra AI declares now (none in N1). */
 export const nadhraTasks = (): AiTask[] => AI_TASKS.filter((t) => !!NADHRA_TASKS[t]);

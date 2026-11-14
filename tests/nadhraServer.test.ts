@@ -59,15 +59,18 @@ test("router: Nadhra declares no task in N1", () => {
   assert.deepEqual(nadhraTasks(), []);
 });
 
-test("router: Nadhra is offered only when enabled and AI_MODE is hybrid or offline", () => {
+test("router: Nadhra is offered only when enabled, in any AI_MODE (production included)", () => {
   assert.equal(nadhraEnabled({}), false);
   assert.equal(nadhraEnabled({ NADHRA_AI_ENABLED: "0" }), false);
   assert.equal(nadhraEnabled({ NADHRA_AI_ENABLED: "true" }), true);
-  assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "1" }), false, "cloud (default)");
-  assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "1", AI_MODE: "cloud" }), false);
+  assert.equal(nadhraOffered({}), false, "nothing set (default)");
+  assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "0" }), false);
+  assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "1" }), true, "cloud (default mode)");
+  assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "1", AI_MODE: "cloud" }), true);
   assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "1", AI_MODE: "hybrid" }), true);
   assert.equal(nadhraOffered({ NADHRA_AI_ENABLED: "1", AI_MODE: "offline" }), true);
   assert.equal(nadhraOffered({ AI_MODE: "hybrid" }), false, "not enabled");
+  assert.equal(nadhraOffered({ AI_MODE: "offline" }), false, "not enabled");
 });
 
 for (const mode of [undefined, "hybrid", "offline"] as const) {
@@ -110,11 +113,13 @@ test("without provider nadhra: the same upstream request as with no provider fie
   assert.ok(!bodies.absent[0].body.includes("nadhra"), "the provider field is not forwarded upstream");
 });
 
-test("status: unchanged in cloud mode even with NADHRA_AI_ENABLED; names Nadhra only when offered", async () => {
+test("status: unchanged without NADHRA_AI_ENABLED; with it, only the nadhra field is added (cloud included)", async () => {
   const cloudBefore = await vision.GET().json();
   assert.equal("nadhra" in cloudBefore, false);
   process.env.NADHRA_AI_ENABLED = "1";
-  assert.deepEqual(await vision.GET().json(), cloudBefore, "cloud: byte-identical");
+  const { nadhra: cloudNadhra, ...cloudRest } = await vision.GET().json();
+  assert.deepEqual(cloudNadhra, { experimental: true, tasks: [] }, "cloud: offered, experimental, no task");
+  assert.deepEqual(cloudRest, cloudBefore, "cloud: everything else byte-identical (no mode, same providers)");
 
   process.env.AI_MODE = "hybrid";
   delete process.env.NADHRA_AI_ENABLED;
