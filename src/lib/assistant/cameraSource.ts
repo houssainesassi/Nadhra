@@ -24,6 +24,11 @@ export interface CameraSource {
   stop(): void;
   isLive(): boolean;
   capture(maxSide: number, quality: number): CapturedFrame | null;
+  /**
+   * Optional: a still photo at the sensor's full resolution, for reading small print. Sources without
+   * one, or a failed photo, fall back to `capture`.
+   */
+  captureStill?(maxSide: number, quality: number): Promise<CapturedFrame | null>;
   /** Small raw copy for quick checks on the device. */
   thumbnail(width: number, height: number): GrayFrame | null;
   /** For the on-device detector, when the source plays in a video element. */
@@ -33,6 +38,10 @@ export interface CameraSource {
   /** Switch to the next camera, when there is more than one. Resolves false if there is none. */
   switchDevice?(): Promise<boolean>;
 }
+
+const STILL_TIMEOUT_MS = 3_000;
+/** The server accepts up to 2 MB of base64. */
+const MAX_STILL_CHARS = 1_900_000;
 
 export class WebcamSource implements CameraSource {
   readonly kind = "webcam";
@@ -95,6 +104,45 @@ export class WebcamSource implements CameraSource {
     const url = canvas.toDataURL("image/jpeg", quality);
     const comma = url.indexOf(",");
     return comma > 0 && url.startsWith("data:image/jpeg") ? { base64: url.slice(comma + 1), at: Date.now() } : null;
+  }
+
+  /**
+   * A full-resolution photo through ImageCapture (Chrome on Android), scaled to maxSide. The video
+   * runs at 720p for the detector and the battery; a photo is often twice as sharp, which matters
+   * for the small print on a medicine box. Anything unsupported or slow falls back to a video frame.
+   */
+  async captureStill(maxSide: number, quality: number): Promise<CapturedFrame | null> {
+    const track = this.stream?.getVideoTracks()[0];
+    const Capture = (globalThis as { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto(): Promise<Blob> } }).ImageCapture;
+    if (!track || typeof Capture !== "function" || typeof createImageBitmap !== "function") return this.capture(maxSide, quality);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const blob = await Promise.race([
+        new Capture(track).takePhoto(),
+        new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("photo timed out")), STILL_TIMEOUT_MS))),
+      ]);
+      const bitmap = await createImageBitmap(blob);
+      try {
+        // A photo no better than the video isn't worth its larger upload.
+        if (Math.max(bitmap.width, bitmap.height) <= Math.max(this.video.videoWidth, this.video.videoHeight)) return this.capture(maxSide, quality);
+        const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        let url = canvas.toDataURL("image/jpeg", quality);
+        if (url.length > MAX_STILL_CHARS) url = canvas.toDataURL("image/jpeg", 0.7);
+        const comma = url.indexOf(",");
+        if (comma < 0 || !url.startsWith("data:image/jpeg") || url.length > MAX_STILL_CHARS) return this.capture(maxSide, quality);
+        return { base64: url.slice(comma + 1), at: Date.now() };
+      } finally {
+        bitmap.close();
+      }
+    } catch {
+      return this.capture(maxSide, quality);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   thumbnail(width: number, height: number): GrayFrame | null {

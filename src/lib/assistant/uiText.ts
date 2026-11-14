@@ -18,6 +18,10 @@ export interface UiText {
   starting: string;
   speaking: string;
   looking: string;
+  /** Camera on, automatic descriptions off. */
+  manual: string;
+  /** Camera on with Nadhra AI selected: only the on-device warnings run. */
+  nadhra: string;
   warning: string;
   paused: string;
   offline: string;
@@ -46,6 +50,8 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     starting: "الكاميرا قاعدة تتحلّ…",
     speaking: "قاعدة تحكي",
     looking: "قاعدة تشوف…",
+    manual: "يوصف كي تسألو، التنبيهات خدّامة",
+    nadhra: "ذكاء نظرة (تجريبي): تنبيهات الجهاز فقط", // Tunisian wording awaiting approval
     warning: "تنبيه",
     paused: "الوصف واقف، التنبيهات خدّامة",
     offline: "ما فمّاش إنترنت: كان التنبيهات اللي في الجهاز",
@@ -71,6 +77,8 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     starting: "جارٍ تشغيل الكاميرا…",
     speaking: "تتحدّث",
     looking: "تنظر…",
+    manual: "يصف عند الطلب، التنبيهات تعمل",
+    nadhra: "ذكاء نظرة (تجريبي): تنبيهات الجهاز فقط",
     warning: "تنبيه",
     paused: "الوصف متوقّف، التنبيهات تعمل",
     offline: "لا يوجد إنترنت: تنبيهات الجهاز فقط",
@@ -96,6 +104,8 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     starting: "Démarrage de la caméra…",
     speaking: "Parle",
     looking: "Regarde…",
+    manual: "Décrit à la demande, alertes actives",
+    nadhra: "Nadhra AI (expérimentale) : alertes de l'appareil seulement",
     warning: "Alerte",
     paused: "Description en pause, alertes actives",
     offline: "Hors ligne : alertes de l'appareil seulement",
@@ -121,6 +131,8 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     starting: "Starting the camera…",
     speaking: "Speaking",
     looking: "Looking…",
+    manual: "Describes when asked, warnings on",
+    nadhra: "Nadhra AI (experimental): on-device warnings only",
     warning: "Warning",
     paused: "Descriptions paused, warnings on",
     offline: "Offline: on-device warnings only",

@@ -8,7 +8,15 @@
 import "server-only";
 import { HttpError, isFreeOpenRouterModel, postJson, postSse } from "./http.ts";
 import { parseModelJson, parseTranscript, remainingSpeech, sanitizeAnalysis, sanitizeChat, SentenceStreamer, swapSides } from "../assistant/schema.ts";
-import { buildChatText, buildUserText, chatSystemPrompt, transcribePrompt, visionSystemPrompt } from "../assistant/prompts.ts";
+import { buildChatText, buildLocateText, buildReadText, buildUserText, chatSystemPrompt, LOCATE_SYSTEM_PROMPT, readSystemPrompt, transcribePrompt, visionSystemPrompt } from "../assistant/prompts.ts";
+import { isMedicalQuestion, sanitizeDocument } from "../assistant/document.ts";
+import { inspectLine, parseBox, toGray, type GrayImage } from "../assistant/lineCheck.ts";
+import jpeg from "jpeg-js";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { speech } from "../assistant/phrases.ts";
+import { internetForRouting } from "../server/deviceCapabilities.ts";
+import { AI_TASKS, aiMode, nadhraOffered, nadhraTasks, routeProviders, routeRefusal, type AiTask, type Locality, type RouteContext, type RouteRefusal, type TaskSupport } from "./router.ts";
 import type { SpeechLang } from "../assistant/lang.ts";
 import type { SceneAnalysis, VisionRequestBody, VisionStatus } from "../assistant/types.ts";
 
@@ -27,6 +35,8 @@ export interface VisionCall {
   onDelta?: (text: string) => void;
   /** Called when the answer was grounded in web search results. */
   onGrounded?: () => void;
+  /** 0.2 by default. Reading uses 0: a transcription has one right answer. */
+  temperature?: number;
 }
 
 export interface VisionProvider {
@@ -37,6 +47,10 @@ export interface VisionProvider {
   /** Who receives the images. Shown to the user in the privacy notice. */
   label: string;
   model: string;
+  /** Where the data goes: "cloud" sends it over the internet to `label`, "local" keeps it on the device. */
+  locality: Locality;
+  /** The only tasks the router will give this provider (router.ts). */
+  tasks: Partial<Record<AiTask, TaskSupport>>;
   configured: boolean;
   disabledReason: string | null;
   /** Can ground answers in a web search. */
@@ -90,15 +104,17 @@ export function getVisionProviders(): VisionProvider[] {
       family: "gemini",
       label: "Google Gemini",
       model,
+      locality: "cloud",
+      tasks: { scan: "full", question: "full", chat: "full", read: "full", transcribe: "full" },
       configured: !!geminiKey && process.env.GEMINI_ENABLED !== "false",
       disabledReason: /pro/i.test(model) ? `Gemini vision model "${model}" looks like a Pro model, which has no free tier` : null,
       canSearch: searchOn,
-      analyze: async ({ system, text, images, maxTokens, signal, json = true, search, onDelta, onGrounded }) => {
+      analyze: async ({ system, text, images, maxTokens, signal, json = true, search, onDelta, onGrounded, temperature = 0.2 }) => {
         const keyHeaders = search ? { "x-goog-api-key": searchKey } : headers;
         const body = {
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: "user", parts: [...images.map((data) => ({ inlineData: { mimeType: "image/jpeg", data } })), { text }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: "application/json" } : {}) },
+          generationConfig: { temperature, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: "application/json" } : {}) },
           ...(search ? { tools: [{ google_search: {} }] } : {}),
         };
         if (!onDelta) {
@@ -133,17 +149,20 @@ export function getVisionProviders(): VisionProvider[] {
       family: "openrouter",
       label: "OpenRouter",
       model: orModel,
+      locality: "cloud",
+      // No "read": documents never go to OpenRouter (see readDocument). No transcribe method either.
+      tasks: { scan: "full", question: "full", chat: "full" },
       configured: !!orKey,
       disabledReason: isFreeOpenRouterModel(orModel) ? null : `OPENROUTER_VISION_MODEL "${orModel}" is not a free model (must be openrouter/free or end with ":free")`,
       // Not streamed: the whole answer is passed on at once, so a fallback still speaks normally.
-      analyze: async ({ system, text, images, maxTokens, signal, onDelta }) => {
+      analyze: async ({ system, text, images, maxTokens, signal, onDelta, temperature = 0.2 }) => {
         const data = await postJson("https://openrouter.ai/api/v1/chat/completions", {
           Authorization: `Bearer ${orKey}`,
           "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
           "X-Title": "Nadhra",
         }, {
           model: orModel,
-          temperature: 0.2,
+          temperature,
           max_tokens: maxTokens,
           messages: [
             { role: "system", content: system },
@@ -159,16 +178,63 @@ export function getVisionProviders(): VisionProvider[] {
 }
 
 const usable = (p: VisionProvider) => p.configured && !p.disabledReason;
+
+/** AI_MODE and what is known about the internet (probed in hybrid mode only), for routing. */
+function routeContext(): RouteContext {
+  const mode = aiMode();
+  return { mode, internet: internetForRouting(mode) };
+}
+
+/** The providers that may do `task`, in the order to try them (router.ts). */
+export function providersFor(task: AiTask): VisionProvider[] {
+  return routeProviders(getVisionProviders(), task, routeContext());
+}
+
+/**
+ * "offline-mode" or "no-internet" when the mode or the connection rules `task` out (nothing local can
+ * do it), so the user hears that reason instead of "the service is down". null otherwise.
+ */
+export function refusalFor(task: AiTask): RouteRefusal | null {
+  return routeRefusal(getVisionProviders().filter(usable), task, routeContext());
+}
+
+/**
+ * For /api/health: per task, the providers the current mode would try (in order), where each runs,
+ * and why a task would be refused. Ids only, no keys.
+ */
+export function capabilitySummary(): { mode: string; tasks: Record<AiTask, { providers: { id: string; locality: Locality; support: TaskSupport }[]; refusal: RouteRefusal | null }> } {
+  const ctx = routeContext();
+  const ok = getVisionProviders().filter(usable);
+  const tasks = Object.fromEntries(AI_TASKS.map((t) => [t, {
+    providers: routeProviders(ok, t, ctx).map((p) => ({ id: p.id, locality: p.locality, support: p.tasks[t]! })),
+    refusal: routeRefusal(ok, t, ctx),
+  }])) as ReturnType<typeof capabilitySummary>["tasks"];
+  return { mode: ctx.mode, tasks };
+}
+
+/** The task a request needs. A medicine question is read under the reading rules, or answered without a picture. */
+export function taskOf(req: Pick<VisionRequestBody, "mode" | "image" | "question">): AiTask {
+  if ((req.mode === "question" || req.mode === "chat") && isMedicalQuestion(req.question ?? "")) return req.image ? "read" : "chat";
+  if (req.mode === "read") return "read";
+  if (req.mode === "chat" || !req.image) return "chat";
+  return req.mode === "scan" ? "scan" : "question";
+}
 // Search quota belongs to the key, not the model (every model got 429 together in our tests).
 const searchUsable = (p: VisionProvider) => !!p.canSearch && (searchCooldownUntil.get(p.family) ?? 0) <= Date.now();
 
 export function visionStatus(): VisionStatus {
-  const ok = getVisionProviders().filter(usable);
+  const ctx = routeContext();
+  // Only providers the current mode may use: in offline mode no company is listed as a recipient.
+  const ok = getVisionProviders().filter(usable).filter((p) => AI_TASKS.some((t) => routeProviders([p], t, ctx).length > 0));
   return {
+    // Only when it isn't the default, so the cloud status stays exactly what it was.
+    ...(ctx.mode !== "cloud" ? { mode: ctx.mode } : {}),
     available: ok.length > 0,
     providers: [...new Map(ok.map((p) => [p.family, { id: p.family, label: p.label }])).values()],
-    canTranscribe: ok.some((p) => p.transcribe),
+    canTranscribe: ok.some((p) => p.transcribe && routeProviders([p], "transcribe", ctx).length > 0),
     canSearch: ok.some(searchUsable),
+    // Only when this server offers Nadhra AI: the default status stays exactly what it was.
+    ...(nadhraOffered() ? { nadhra: { experimental: true as const, tasks: nadhraTasks() } } : {}),
   };
 }
 
@@ -278,7 +344,7 @@ async function callWithOptionalSearch(p: VisionProvider, call: Omit<VisionCall, 
 
 export type AnalyzeResult =
   | { ok: true; analysis: SceneAnalysis; provider: string; attempts: Attempt[]; sent: string[] }
-  | { ok: false; attempts: Attempt[]; sent: string[] };
+  | { ok: false; attempts: Attempt[]; sent: string[]; refusal?: RouteRefusal };
 
 export interface AnswerOptions {
   /** Aborted when the client goes away or asks something else. */
@@ -308,6 +374,16 @@ function sentenceSink(opts: AnswerOptions, streamer: SentenceStreamer | null, se
 const timeouts = () => ({ timeoutMs: num(process.env.VISION_TIMEOUT_MS, 9_000), budgetMs: num(process.env.VISION_TOTAL_BUDGET_MS, 22_000) });
 
 export async function analyzeImage(req: VisionRequestBody, opts: AnswerOptions = {}): Promise<AnalyzeResult> {
+  const refusal = refusalFor(taskOf(req));
+  if (refusal) return { ok: false, attempts: [], sent: [], refusal };
+  if (req.mode === "read") return readDocument(req, opts);
+  // A question about medicines never gets an ordinary answer: with a picture it is read under the
+  // reading rules (one frame only, so no dose or date can be confirmed), without one it is declined.
+  if ((req.mode === "question" || req.mode === "chat") && isMedicalQuestion(req.question ?? "")) {
+    if (req.image) return readDocument({ ...req, mode: "read", previousImage: undefined, previousAgeMs: undefined }, opts);
+    const declined = speech(req.lang ?? "tn").doc.medicalDeclined;
+    return { ok: true, analysis: { spoken: declined, changed: true, imageQuality: "good", environment: null, detections: [], hazards: [], texts: [], uncertain: false }, provider: "none", attempts: [], sent: [] };
+  }
   if (req.mode === "chat" || !req.image) return answerChat(req, opts);
   const started = Date.now();
   const now = opts.now ?? new Date();
@@ -331,7 +407,7 @@ export async function analyzeImage(req: VisionRequestBody, opts: AnswerOptions =
   // A question that needs live information is answered by a web search instead, when one is possible.
   const webPossible = req.mode === "question" && visionStatus().canSearch === true;
   const sent: string[] = [];
-  const out = await withFallback(getVisionProviders(), { ...timeouts(), signal: opts.signal, committed: () => sent.length > 0 }, async (p, signal, progress) => {
+  const out = await withFallback(providersFor(req.mode === "scan" ? "scan" : "question"), { ...timeouts(), signal: opts.signal, committed: () => sent.length > 0 }, async (p, signal, progress) => {
     const streamer = opts.onSentence ? new SentenceStreamer({ mode: req.mode, cameraFacing: req.cameraFacing, question: req.question, holdAll: (raw) => webPossible && /"needs_web"\s*:\s*true/.test(raw) }) : null;
     const raw = await p.analyze({
       system,
@@ -363,13 +439,152 @@ export async function analyzeImage(req: VisionRequestBody, opts: AnswerOptions =
   return { ok: true, analysis, provider: out.provider, attempts: out.attempts, sent };
 }
 
+/**
+ * Reads a document or package, or answers a question about one read earlier (`req.document`, then
+ * the image is optional). Not streamed: what is said is assembled and checked from the whole
+ * transcription (document.ts), so no sentence can be spoken before its checks.
+ */
+async function readDocument(req: VisionRequestBody, opts: AnswerOptions): Promise<AnalyzeResult> {
+  const now = opts.now ?? new Date();
+  const lang = req.lang ?? "tn";
+  const text = buildReadText({ question: req.question, document: req.document, hasImage: !!req.image, now });
+  const t = timeouts();
+  // A full page of text takes longer to write out than a scene description (about 3 s on the fast
+  // models, measured Nov 2026). An attempt that takes longer is usually a busy model: better to
+  // move on to the next one while the overall budget still allows it.
+  const limits = { timeoutMs: Math.max(t.timeoutMs, num(process.env.READ_TIMEOUT_MS, 10_000)), budgetMs: t.budgetMs, signal: opts.signal };
+  // Documents go to Gemini only: OpenRouter's free routing passes images on to providers whose
+  // handling of them is unknown, which is not acceptable for prescriptions and medicine boxes.
+  const gemini = providersFor("read").filter((p) => p.family === "gemini");
+  const read = (image: string | undefined) => async (p: VisionProvider, signal: AbortSignal) =>
+    parseModelJson(await p.analyze({ system: readSystemPrompt(lang), text, images: image ? [image] : [], maxTokens: 4000, signal, temperature: 0 }));
+  // The second reading: another frame, at the same time as the first, starting from another model
+  // when there is one, then falling back to the first model before the slow ones (gemini-3.5-flash
+  // took 13-14 s for a prescription in Nov 2026). It decides only whether the numbers of a medical
+  // paper may be said (document.ts); if it fails, they aren't.
+  const secondOrder = gemini.length > 1 ? [gemini[1], gemini[0], ...gemini.slice(2)] : gemini;
+  // The model whose line boxes are accurate (gemini-3.1-flash-lite: 98 % of lines placed well, against
+  // 84 % for gemini-3.5-flash-lite, e2e/read/boxvariants.ts) locates the first reading's lines in the
+  // first frame, as soon as that reading is in. It only says where each line is: the text, the
+  // second reading and every check stay as they are (document.ts, checkFirst).
+  const locator = gemini.find((p) => p.model === process.env.READ_LOCATE_MODEL) ?? gemini[1];
+  const firstP = withFallback(gemini, limits, read(req.image));
+  const locateP = firstP.then(async (f) => {
+    const lines = Array.isArray(f.result?.lines) ? (f.result!.lines as Record<string, unknown>[]) : [];
+    // Not needed when the first reading came from the locating model itself, or there is nothing to place.
+    if (!req.image || !locator || !lines.length || f.attempts.some((a) => a.ok && a.provider === locator.id)) return null;
+    return withFallback([locator], limits, async (p, signal) =>
+      parseModelJson(await p.analyze({ system: LOCATE_SYSTEM_PROMPT, text: buildLocateText(lines.map((l) => String(l.text ?? ""))), images: [req.image!], maxTokens: 2000, signal, temperature: 0 })));
+  });
+  const [first, second, located] = await Promise.all([
+    firstP,
+    req.image && req.secondImage ? withFallback(secondOrder, limits, read(req.secondImage)) : Promise.resolve(null),
+    locateP,
+  ]);
+  const attempts = [...first.attempts, ...(second?.attempts ?? []), ...(located?.attempts ?? [])];
+  if (first.result && located?.result) first.result = withLocatedBoxes(first.result, located.result);
+  if (!first.result) return { ok: false, attempts, sent: [] };
+  try {
+    // With a new picture, a missing second reading is null: numbers on a medical paper then can't be said.
+    const frameA = lazyGray(req.image);
+    const frameB = lazyGray(req.secondImage);
+    const inspect = (frame: () => GrayImage | null) => (box: unknown, text: string) => {
+      const img = frame();
+      return img ? inspectLine(img, box, text) : "no-box";
+    };
+    const analysis = sanitizeDocument(first.result, {
+      lang, question: req.question, context: req.document, now,
+      confirm: req.image ? (second?.result ?? null) : undefined,
+      inspect: { first: inspect(frameA), second: inspect(frameB) },
+    });
+    captureReading(req, first.result, second?.result ?? null, analysis);
+    return { ok: true, analysis, provider: first.provider, attempts, sent: [] };
+  } catch {
+    return { ok: false, attempts, sent: [] };
+  }
+}
+
+/**
+ * The locating model's answer, put on the first reading's lines as `located_box`: a box, or null
+ * when it gave null (not fully visible) or nothing usable for that line. If its answer has no usable
+ * "boxes" list at all, the reading is left as it was (the first reading's own boxes are used).
+ */
+export function withLocatedBoxes(reading: Record<string, unknown>, locate: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(locate.boxes) || !Array.isArray(reading.lines)) return reading;
+  const byIndex = new Map<number, unknown>();
+  for (const b of locate.boxes as Record<string, unknown>[]) if (b && typeof b.i === "number") byIndex.set(b.i, b.box_2d ?? null);
+  const lines = reading.lines as Record<string, unknown>[];
+  const boxes = lines.map((_, i) => parseBox(byIndex.get(i)));
+  // Two different lines placed in the same spot: at least one placement is wrong, so neither counts.
+  const clash = boxes.map((b, i) => !!b && boxes.some((o, j) => j !== i && !!o && overlap(b, o) > 0.5));
+  return { ...reading, lines: lines.map((l, i) => ({ ...l, located_box: boxes[i] && !clash[i] ? boxes[i] : null })) };
+}
+
+/** Intersection over the smaller box, for [ymin, xmin, ymax, xmax] boxes. */
+function overlap(a: number[], b: number[]): number {
+  const h = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+  const w = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  if (h <= 0 || w <= 0) return 0;
+  const area = (x: number[]) => (x[2] - x[0]) * (x[3] - x[1]);
+  return (h * w) / Math.min(area(a), area(b));
+}
+
+/**
+ * TESTING ONLY, for the real-camera sessions with synthetic documents (docs/PHASE1_REAL_CAMERA_TEST_PROTOCOL.md):
+ * with READ_CAPTURE_DIR set on a local server, each reading's two frames, both raw readings and the
+ * result are saved there, so the session can be scored afterwards without new requests. Never on
+ * Vercel (refused), off unless set, and only ever for mock documents: it stores what the camera saw.
+ */
+const captureDir = () => (process.env.READ_CAPTURE_DIR && !process.env.VERCEL ? process.env.READ_CAPTURE_DIR : null);
+let captureWarned = false;
+function captureReading(req: VisionRequestBody, first: unknown, second: unknown, analysis: unknown) {
+  const dir = captureDir();
+  if (!dir) return;
+  if (!captureWarned) {
+    captureWarned = true;
+    console.warn(`[vision] READ_CAPTURE_DIR is set: readings are saved to ${dir}. Testing with synthetic documents only.`);
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  void (async () => {
+    try {
+      await mkdir(dir, { recursive: true });
+      if (req.image) await writeFile(join(dir, `${stamp}_a.jpg`), Buffer.from(req.image, "base64"));
+      if (req.secondImage) await writeFile(join(dir, `${stamp}_b.jpg`), Buffer.from(req.secondImage, "base64"));
+      await writeFile(join(dir, `${stamp}.json`), JSON.stringify({ at: new Date().toISOString(), lang: req.lang, question: req.question ?? null, document: req.document ?? null, first, second, analysis }, null, 1));
+    } catch (e) {
+      console.warn("[vision] capture failed:", (e as Error).message);
+    }
+  })();
+}
+
+/**
+ * A frame as brightness, for the pixel check of printed lines, or null if it can't be decoded
+ * (then no line of a medical paper can be checked, so none is read). Decoded once, when first needed.
+ */
+function lazyGray(base64: string | undefined): () => GrayImage | null {
+  let done = false;
+  let img: GrayImage | null = null;
+  return () => {
+    if (done) return img;
+    done = true;
+    if (!base64) return null;
+    try {
+      const d = jpeg.decode(Buffer.from(base64, "base64"), { useTArray: true, maxMemoryUsageInMB: 256, maxResolutionInMP: 30 });
+      img = toGray(d.data, d.width, d.height);
+    } catch {
+      img = null;
+    }
+    return img;
+  };
+}
+
 /** A question without a picture: the camera is off, or the question needs the web, not the camera. */
 export async function answerChat(req: VisionRequestBody, opts: AnswerOptions = {}, extra: { cameraOn?: boolean; budgetMs?: number; scene?: string } = {}): Promise<AnalyzeResult> {
   const question = (req.question ?? "").trim();
   const now = opts.now ?? new Date();
   const text = buildChatText({ question, history: req.history, now, scene: extra.scene });
   const sent: string[] = [];
-  const out = await withFallback(getVisionProviders(), { ...timeouts(), ...(extra.budgetMs ? { budgetMs: extra.budgetMs } : {}), signal: opts.signal, committed: () => sent.length > 0 }, async (p, signal, progress) => {
+  const out = await withFallback(providersFor("chat"), { ...timeouts(), ...(extra.budgetMs ? { budgetMs: extra.budgetMs } : {}), signal: opts.signal, committed: () => sent.length > 0 }, async (p, signal, progress) => {
     const streamer = opts.onSentence ? new SentenceStreamer({ mode: "chat", cameraFacing: req.cameraFacing, question }) : null;
     const { raw, grounded } = await callWithOptionalSearch(p, {
       text,
@@ -387,10 +602,12 @@ export async function answerChat(req: VisionRequestBody, opts: AnswerOptions = {
 /** The part of a streamed answer that wasn't sent sentence by sentence: the rest, or a caveat. */
 export const restOfAnswer = (analysis: SceneAnalysis, sent: string[]) => remainingSpeech(analysis.spoken, sent);
 
-export type TranscribeResult = { ok: true; text: string; attempts: Attempt[] } | { ok: false; attempts: Attempt[] };
+export type TranscribeResult = { ok: true; text: string; attempts: Attempt[] } | { ok: false; attempts: Attempt[]; refusal?: RouteRefusal };
 
 export async function transcribeAudio(wavBase64: string, lang: SpeechLang = "tn"): Promise<TranscribeResult> {
-  const providers = getVisionProviders().filter((p) => p.transcribe);
+  const refusal = refusalFor("transcribe");
+  if (refusal) return { ok: false, attempts: [], refusal };
+  const providers = providersFor("transcribe").filter((p) => p.transcribe);
   const out = await withFallback(providers, { timeoutMs: num(process.env.VISION_TIMEOUT_MS, 9_000), budgetMs: 15_000 }, async (p, signal) => parseTranscript(await p.transcribe!(wavBase64, signal, lang)));
   return out.result !== null ? { ok: true, text: out.result, attempts: out.attempts } : { ok: false, attempts: out.attempts };
 }

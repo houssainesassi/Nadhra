@@ -67,11 +67,50 @@ const layout = (page) => page.evaluate(() => {
     vh: innerHeight, open: box(".open-camera"), stop: box(".stop-button"), stage: box(".stage"),
   };
 });
-const withLang = (ctx, language, extra = {}) => ctx.addInitScript(({ language, extra }) => {
-  if (!localStorage.getItem("assistant.settings")) localStorage.setItem("assistant.settings", JSON.stringify({ language }));
+// Automatic descriptions are off by default; these layout flows turn them on, as a user would, to see
+// descriptions and warnings on screen. The default itself is checked in "0." below.
+const withLang = (ctx, language, extra = {}, settings = { autoDescribe: true }) => ctx.addInitScript(({ language, extra, settings }) => {
+  if (!localStorage.getItem("assistant.settings")) localStorage.setItem("assistant.settings", JSON.stringify({ language, ...settings }));
   for (const [k, v] of Object.entries(extra)) localStorage.setItem(k, v);
-}, { language, extra });
+}, { language, extra, settings });
 const focused = (page) => page.evaluate(() => document.activeElement?.dataset.testid);
+
+// --- 0. By default, no picture leaves the phone by itself -------------------------------------------
+{
+  const { page, state, errors } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
+  await withLang(page.context(), "en", {}, {});
+  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.getByTestId("open-camera").click();
+  await page.getByRole("button", { name: "I agree", exact: true }).click();
+  await until(() => page.locator('.stage[data-on="true"]').count());
+  await sleep(5000);
+  check("default: no picture is sent automatically after Open camera", state.posts === 0, `${state.posts} sent`);
+  check("default: the screen says it describes when asked", (await page.getByTestId("stage").getAttribute("data-analysis")) === "manual");
+  check("default: the user hears that automatic descriptions are off, and what that means", state.tts.some((t) => /Automatic descriptions are off/.test(t.text ?? "")), state.tts.map((t) => t.text).join(" | "));
+  check("default: no page errors", errors.length === 0, errors.join(" | "));
+  await page.context().close();
+}
+
+// --- 0b. The live conversation asks first: nothing is requested before the second press ------------
+{
+  const { page, errors } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
+  await withLang(page.context(), "en", { "assistant.consent.v3": "1" });
+  let tokens = 0;
+  await page.context().route("**/api/live/token", (route) => (tokens++, route.fulfill({ status: 503, json: { error: "test" } })));
+  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.getByTestId("open-camera").click();
+  await until(() => page.locator('.stage[data-on="true"]').count());
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("live-toggle").click();
+  await sleep(1500);
+  check("live: the first press only asks (the button now says «I agree»)", (await page.getByTestId("live-toggle").innerText()).includes("I agree: start the live conversation"));
+  check("live: nothing requested before the answer", tokens === 0, `${tokens} token requests`);
+  await page.getByTestId("live-toggle").click();
+  await until(() => tokens > 0, 5000);
+  check("live: the second press starts it", tokens > 0);
+  check("live: no page errors", errors.length === 0, errors.join(" | "));
+  await page.context().close();
+}
 
 // --- 1. The whole flow on a phone ----------------------------------------------------------------
 {
@@ -148,7 +187,7 @@ for (const [name, viewport, mobile] of [
   ["phone-landscape-844x390", { width: 844, height: 390 }, true],
 ]) {
   const { ctx, page, errors } = await context(viewport, mobile ? { isMobile: true, hasTouch: true } : {});
-  await withLang(ctx, "fr", { "assistant.consent.v2": "1" });
+  await withLang(ctx, "fr", { "assistant.consent.v3": "1" });
   await page.goto(BASE, { waitUntil: "networkidle" });
   let l = await layout(page);
   check(`${name} home: no scrolling, button on screen`, !l.scrolls && !l.overflowX && !l.nameClipped && l.open?.bottom <= l.vh, JSON.stringify(l));

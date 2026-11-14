@@ -525,6 +525,14 @@ test("client: cloud voice disabled on the server -> unavailable, browser behavio
 test("speechText: slash read as «أو», symbols removed, spacing cleaned", async () => {
   const { speechText } = await import("../src/lib/speech/tts.ts");
   assert.equal(speechText("خال / عم"), "خال أو عم");
+  // Found in the browser test of document reading: dates, fractions and units must keep their slash.
+  assert.equal(speechText("EXP : 03/2027", "fr"), "EXP : 03/2027");
+  assert.equal(speechText("تاريخ الصلاحية 03 / 2027"), "تاريخ الصلاحية 03/2027");
+  assert.equal(speechText("1/2 comprimé le soir", "fr"), "1/2 comprimé le soir");
+  assert.equal(speechText("250 mg/5 ml", "fr"), "250 mg/5 ml");
+  assert.equal(speechText("120 mg/ml", "fr"), "120 mg/ml");
+  assert.equal(speechText("oui/non", "fr"), "oui ou non");
+  assert.equal(speechText("left / right", "en"), "left or right");
   assert.equal(speechText("«مرحبا»  ( تاكسي ) ؟"), "مرحبا تاكسي؟");
 });
 

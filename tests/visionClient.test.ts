@@ -390,9 +390,28 @@ test("WAV encoding: valid header, length, clipping and resampling", () => {
 
 test("settings: corrupted values fall back to defaults", () => {
   assert.deepEqual(
-    sanitizeVisionSettings({ rate: "fast", facing: "up", narration: 1, screenReaderEcho: null, volume: "max", language: 3, vibration: "yes", textScale: [], emergencyName: {}, emergencyPhone: 5 }),
-    { rate: 1, volume: 1, facing: "auto", narration: true, screenReaderEcho: false, language: "tn", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
+    sanitizeVisionSettings({ rate: "fast", facing: "up", autoDescribe: 1, screenReaderEcho: null, volume: "max", language: 3, vibration: "yes", textScale: [], emergencyName: {}, emergencyPhone: 5 }),
+    { rate: 1, volume: 1, facing: "auto", autoDescribe: false, screenReaderEcho: false, language: "tn", vibration: true, textScale: 1, emergencyName: "", emergencyPhone: "" },
   );
+  // Automatic descriptions are off unless chosen; the old «narration» setting doesn't turn them on.
+  assert.equal(sanitizeVisionSettings({ narration: true }).autoDescribe, false);
+  assert.equal(sanitizeVisionSettings({ autoDescribe: true }).autoDescribe, true);
   assert.equal(sanitizeVisionSettings({ rate: 99 }).rate, 1.5);
   assert.equal(sanitizeVisionSettings(null).facing, "auto");
+});
+
+test("speech: an answer sentence said twice is spoken twice (the check after each dose), a status isn't", async () => {
+  const { SpeechQueue } = await import("../src/lib/assistant/speechQueue.ts");
+  const said: string[] = [];
+  let end: (() => void) | undefined;
+  const engine = { name: "fake", available: () => true, voiceInfo: () => null, speak: (t: string, o: { onEnd?: () => void }) => { said.push(t); end = o.onEnd; }, stop: () => {} };
+  const q = new SpeechQueue(engine as never, { rate: () => 1 });
+  for (const t of ["500 mg.", "ثبّت فيها مع الصيدلي.", "20 mg.", "ثبّت فيها مع الصيدلي."]) q.say(t, "answer");
+  for (let i = 0; i < 6; i++) end?.();
+  assert.deepEqual(said, ["500 mg.", "ثبّت فيها مع الصيدلي.", "20 mg.", "ثبّت فيها مع الصيدلي."]);
+  said.length = 0;
+  q.say("الكاميرا خدّامة.", "status");
+  q.say("الكاميرا خدّامة.", "status");
+  for (let i = 0; i < 3; i++) end?.();
+  assert.deepEqual(said, ["الكاميرا خدّامة."]);
 });

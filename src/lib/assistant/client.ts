@@ -1,7 +1,7 @@
 // Browser side of the API routes.
 import type { VisionRequestBody, VisionResponseBody, VisionStatus, VisionStreamEvent } from "./types.ts";
 import type { SpeechLang } from "./lang.ts";
-import { apiFetch } from "./api.ts";
+import { apiFetch, LocalOnlyError } from "./api.ts";
 
 export class VisionApiError extends Error {
   status: number;
@@ -50,6 +50,7 @@ async function postJson<T>(url: string, body: unknown, signal: AbortSignal | und
       signal: signal ? anySignal([signal, timeout]) : timeout,
     });
   } catch (e) {
+    if (e instanceof LocalOnlyError) throw new VisionApiError(0, e.code); // Nadhra AI: never sent
     if (signal?.aborted) throw e; // cancelled by us, not a failure
     throw new VisionApiError(0, timeout.aborted ? "timeout" : "network");
   }
@@ -93,6 +94,7 @@ async function streamOnce(body: VisionRequestBody, onSentence: (text: string) =>
   try {
     res = await apiFetch("/api/vision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, stream: true }), cache: "no-store", signal: combined });
   } catch (e) {
+    if (e instanceof LocalOnlyError) throw new VisionApiError(0, e.code); // Nadhra AI: never sent
     if (signal?.aborted) throw e;
     throw new VisionApiError(0, timeout.aborted ? "timeout" : "network");
   }

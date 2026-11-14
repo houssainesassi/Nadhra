@@ -15,14 +15,18 @@ const q = { mode: "question", cameraFacing: "outward", hasMotionEvidence: false 
 const hazard = (p: Partial<Hazard>): Hazard => ({ kind: "obstacle", label: "", side: "center", proximity: "near", confidence: "confirmed", motion: "unknown", ...p });
 
 test("phrases: every language says every sentence", () => {
-  const keys = Object.keys(SPEECH).sort();
+  // Every key at every depth, with its value. Document kinds without a spoken header are empty on purpose.
+  const MAY_BE_EMPTY = new Set(["doc.kind.other", "doc.kind.none"]);
+  const walk = (v: unknown, path: string, out: Map<string, string>) => {
+    if (typeof v === "string") out.set(path, v);
+    else for (const [k, child] of Object.entries(v as Record<string, unknown>)) walk(child, path ? `${path}.${k}` : k, out);
+    return out;
+  };
+  const keys = [...walk(SPEECH, "", new Map()).keys()].sort();
   for (const lang of SPEECH_LANGS) {
-    const p = PHRASES[lang] as unknown as Record<string, unknown>;
-    assert.deepEqual(Object.keys(p).sort(), keys, lang);
-    for (const [k, v] of Object.entries(p)) {
-      if (typeof v === "string") assert.ok(v.trim().length > 1, `${lang}.${k}`);
-      else for (const [t, text] of Object.entries(v as Record<string, string>)) assert.ok(text.trim().length > 1, `${lang}.${k}.${t}`);
-    }
+    const all = walk(PHRASES[lang], "", new Map());
+    assert.deepEqual([...all.keys()].sort(), keys, lang);
+    for (const [k, text] of all) assert.ok(MAY_BE_EMPTY.has(k) ? text === "" : text.trim().length > 1, `${lang}.${k}`);
   }
   assert.equal(speech("tn"), SPEECH);
   assert.match(cameraErrorText("fr", "denied"), /autorisation/);

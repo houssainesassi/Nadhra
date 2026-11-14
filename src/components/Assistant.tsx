@@ -12,7 +12,7 @@ import { SmartVisionController, type SheetName, type VisionState } from "@/lib/a
 import { commandExamples, type VoiceCommand } from "@/lib/assistant/commands";
 import { LANGS, SPEECH_LANGS, type SpeechLang } from "@/lib/assistant/lang";
 import { cameraErrorText } from "@/lib/assistant/phrases";
-import { RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type FacingSetting } from "@/lib/assistant/settings";
+import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiProvider, type FacingSetting } from "@/lib/assistant/settings";
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { CameraIcon, CameraOffIcon, ChevronIcon, CloseIcon, GlobeIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon } from "./icons";
 
@@ -83,6 +83,8 @@ function assistanceStatus(s: VisionState, ui: UiText, urgent: boolean): { text: 
   if (urgent) return { text: ui.warning, tone: "urgent" };
   if (s.camera === "starting") return { text: ui.starting, tone: "quiet" };
   if (s.camera === "on" && s.analysis === "paused") return { text: ui.paused, tone: "quiet" };
+  if (s.camera === "on" && s.analysis === "local" && !s.speaking && !s.answer.live) return { text: ui.nadhra, tone: "quiet" };
+  if (s.camera === "on" && s.analysis === "manual" && !s.speaking && !s.live.playing && !s.answer.live && s.mic !== "processing") return { text: ui.manual, tone: "quiet" };
   if (s.speaking || s.live.playing) return { text: ui.speaking, tone: "active" };
   if (s.analysis === "analyzing" || s.mic === "processing" || s.answer.live) return { text: ui.looking, tone: "active" };
   return { text: ui.active, tone: "active" };
@@ -229,6 +231,7 @@ export default function Assistant() {
   }, [controller]);
 
   const language = s.settings.language;
+  const provider = providerOf(s.settings);
   const lang = LANGS[language];
   const ui = UI_TEXT[language];
   const rtl = lang.dir === "rtl";
@@ -372,17 +375,23 @@ export default function Assistant() {
 
       <Sheet dialogRef={settingsRef} title="Settings" onClose={() => controller.closeSheet("settings")}>
         <div className="flex flex-col gap-6 text-lg">
+          {(s.status?.nadhra || provider === "nadhra") && (
+            <Choice label="AI" hint={provider === "nadhra" ? NADHRA_HINT + (s.status?.nadhra ? "" : " This server doesn't offer Nadhra AI.") : GEMINI_HINT} value={provider} onChange={(v) => controller.updateSettings({ provider: v as AiProvider })} testId="ai-provider">
+              <option value="gemini">Gemini AI (Google, online)</option>
+              <option value="nadhra">Nadhra AI (on this device, experimental)</option>
+            </Choice>
+          )}
           <div className="flex flex-col gap-3">
             <h3 className="font-medium">Conversation</h3>
             <Toggle testId="voice-commands" label="Voice commands" hint="On by itself with Open camera. Say a command or ask any question." checked={s.assistantOn} onChange={() => controller.toggleAssistant()} />
             <button type="button" onClick={() => controller.toggleLive()} aria-pressed={liveOn} aria-keyshortcuts="L" aria-describedby="live-hint" data-testid="live-toggle" data-live-status={s.live.status} className={`control ${liveOn ? "control-listening" : "control-quiet"} min-h-16`}>
               <MicIcon />
-              <span className="min-w-0">{liveOn ? "End live conversation" : "Talk live"}</span>
+              <span className="min-w-0">{liveOn ? "End live conversation" : s.liveNotice ? "I agree: start the live conversation" : "Talk live"}</span>
               {liveOn && (
                 <span aria-hidden="true" data-testid="live-status" className="ms-auto shrink-0 rounded-full border border-current px-3 py-0.5 text-base font-medium">{liveLabel(s)}</span>
               )}
             </button>
-            <p id="live-hint" className="text-base text-ink-2">A spoken conversation, like a phone call: talk any time while showing the camera, and interrupt whenever you like. On-device warnings keep running.</p>
+            <p id="live-hint" className="text-base text-ink-2">A spoken conversation, like a phone call: talk any time while showing the camera, and interrupt whenever you like. While it is on, your voice and about one picture a second go to Google Gemini. To stop sending, press “End live conversation” or “Stop assistance”: that stops on this phone, without sending anything. Saying “stop live” or «وقّف المحادثة» works too, but those words are recognised by Gemini Live, so they reach Google. On-device warnings keep running.</p>
             {liveOn && (
               <p role="status" className="text-base text-ink-2" data-testid="live-meta">
                 {liveLabel(s)}
@@ -413,7 +422,7 @@ export default function Assistant() {
             <option value="dark">Dark</option>
             <option value="light">Light</option>
           </Choice>
-          <Toggle label="Describe my surroundings automatically" hint="Warnings and answers stay on." checked={s.settings.narration} onChange={(v) => controller.updateSettings({ narration: v })} />
+          <Toggle label="Describe my surroundings automatically" hint="Off: no picture is sent unless you ask. On: a picture goes to Google Gemini every few seconds, papers in view included; stairs and drops are only detected when this is on. The phone's own warnings for people and vehicles work either way." checked={s.settings.autoDescribe} onChange={(v) => controller.updateSettings({ autoDescribe: v })} />
           <Toggle label="Vibrate on warnings and events" hint="On phones that can vibrate." checked={s.settings.vibration} onChange={(v) => controller.updateSettings({ vibration: v })} />
           <Toggle label="Also send speech to my screen reader" checked={s.settings.screenReaderEcho} onChange={(v) => controller.updateSettings({ screenReaderEcho: v })} />
           {s.canSwitchCamera && cameraOn && (
@@ -535,13 +544,16 @@ export default function Assistant() {
   );
 }
 
-function Choice({ label, hint, value, onChange, children }: { label: string; hint?: string; value: string; onChange: (v: string) => void; children: React.ReactNode }) {
+const GEMINI_HINT = "Gemini AI describes, reads and answers. Pictures, questions and your voice go to Google Gemini when used (see Privacy & safety).";
+const NADHRA_HINT = "Experimental, under development. Its AI isn't connected yet: it can't describe, read, answer questions or understand voice commands. Nothing is sent from this device. With the camera on, only the phone's own warnings for people and vehicles work. Choose Gemini AI to use the other features.";
+
+function Choice({ label, hint, value, onChange, children, testId }: { label: string; hint?: string; value: string; onChange: (v: string) => void; children: React.ReactNode; testId?: string }) {
   return (
     <label className="flex flex-col gap-2">
       <span className="font-medium">{label}</span>
       {hint && <span className="text-base text-ink-2">{hint}</span>}
       <span className="select">
-        <select value={value} onChange={(e) => onChange(e.target.value)} className="field pe-12">{children}</select>
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="field pe-12" data-testid={testId}>{children}</select>
         <ChevronIcon size={20} />
       </span>
     </label>

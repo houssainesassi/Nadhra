@@ -68,3 +68,49 @@ export function changedFraction(a: Uint8Array, b: Uint8Array, pixelDelta = 28): 
   for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > pixelDelta) changed++;
   return changed / a.length;
 }
+
+/**
+ * Sharpness of the sharpest part of the frame: the variance of the Laplacian in the best of a 4×4
+ * grid of tiles. Text often fills only part of the picture, so the whole-frame average would call a
+ * sharp label on a plain table blurred. The frame is first smoothed with a 3×3 box: camera noise
+ * alone otherwise scores like sharp detail, and a blurred page from a noisy camera passed as sharp.
+ * Meant for a frame of about 640 px wide.
+ */
+export function sharpestTile(gray: Uint8Array, width: number, height: number, grid = 4): number {
+  const smooth = new Float32Array(width * height);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      smooth[i] = (gray[i - width - 1] + gray[i - width] + gray[i - width + 1] + gray[i - 1] + gray[i] + gray[i + 1] + gray[i + width - 1] + gray[i + width] + gray[i + width + 1]) / 9;
+    }
+  }
+  let best = 0;
+  const tw = Math.floor(width / grid);
+  const th = Math.floor(height / grid);
+  for (let ty = 0; ty < grid; ty++) {
+    for (let tx = 0; tx < grid; tx++) {
+      let sum = 0, sumSq = 0, n = 0;
+      for (let y = Math.max(2, ty * th); y < Math.min(height - 2, (ty + 1) * th); y++) {
+        for (let x = Math.max(2, tx * tw); x < Math.min(width - 2, (tx + 1) * tw); x++) {
+          const i = y * width + x;
+          const lap = smooth[i - 1] + smooth[i + 1] + smooth[i - width] + smooth[i + width] - 4 * smooth[i];
+          sum += lap;
+          sumSq += lap * lap;
+          n++;
+        }
+      }
+      if (n) best = Math.max(best, sumSq / n - (sum / n) ** 2);
+    }
+  }
+  return best;
+}
+
+/**
+ * Below this, small print can't be read (sharpestTile on 640 × 480). Calibrated on rendered
+ * documents photographed in software (e2e/read/make_documents.py), with camera noise added after
+ * the blur as a real camera does: sharp pages score 280-460, slightly soft but readable ones 22-80,
+ * a Gaussian blur of 6 px at 1600 px (unreadable small print) 8-15 with noise. Set low, so a real
+ * but dull frame isn't refused: only gross blur is caught here, and the model reports the rest.
+ * Not yet calibrated on real phone frames.
+ */
+export const READ_BLUR_LIMIT = 20;

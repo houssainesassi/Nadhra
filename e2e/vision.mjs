@@ -53,8 +53,11 @@ async function open({ camera = "street", audio, grant = true, device = grant, vi
   openBrowsers.add(browser);
   const ctx = await browser.newContext({ viewport, locale: "ar-TN", permissions: grant ? ["camera", "microphone"] : [] });
   await ctx.addInitScript(({ consent, facing }) => {
-    if (consent) localStorage.setItem("assistant.consent.v2", "1");
-    if (facing) localStorage.setItem("assistant.settings", JSON.stringify({ facing }));
+    if (consent) localStorage.setItem("assistant.consent.v3", "1");
+    // The spoken notice about documents is tested in e2e/read/browser.mjs; here it is already accepted.
+    if (consent) localStorage.setItem("assistant.readConsent.v1", "1");
+    // These scenarios are about the automatic scans, which are off by default: turned on, as a user would.
+    localStorage.setItem("assistant.settings", JSON.stringify({ autoDescribe: true, ...(facing ? { facing } : {}) }));
     // Keeps a handle on the camera tracks, to prove they get released.
     window.__tracks = [];
     // Every sentence the assistant starts to say, in order (the "Last said" caption).
@@ -568,10 +571,14 @@ const scenarios = {
     const reading = Array.from({ length: 30 }, (_, i) => `هذا السطر رقم ${i + 1} من الورقة اللي قدّامك ومكتوب فيه كلام طويل شوية.`).join(" ");
     let readingStarted = false;
     const stairs = { kind: "stairs", label: "درج", side: "center", proximity: "near", confidence: "confirmed", motion: "unknown" };
+    // The read task ("T") uses the reading mode: a long letter, read out as the paper's text.
+    const letter = { kind: "letter", legibility: "clear", problems: [], lines: [], medicine: {}, explanation: "", rescan: false, more: false, segments: [{ text: reading, source: "document", lang: "tn" }] };
     await mockServices(e, (body) =>
-      body.mode === "question"
-        ? scene({ spoken: reading, changed: true })
-        : scene({ hazards: readingStarted ? [stairs] : [], spoken: readingStarted ? "وصف جديد ما لازمش يتقال." : "", changed: true }),
+      body.mode === "read"
+        ? { ...scene({ spoken: reading, changed: true }), document: letter }
+        : body.mode === "question"
+          ? scene({ spoken: reading, changed: true })
+          : scene({ hazards: readingStarted ? [stairs] : [], spoken: readingStarted ? "وصف جديد ما لازمش يتقال." : "", changed: true }),
     );
     await e.start();
     await until(async () => (await e.statusOf("camera-status")) === "on");
@@ -635,7 +642,7 @@ const scenarios = {
     await e.openSettings();
     await e.page.getByTestId("withdraw-consent").click();
     check("withdrawing consent stops the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "off", 5000)));
-    check("and forgets the consent", (await e.page.evaluate(() => localStorage.getItem("assistant.consent.v2"))) === null);
+    check("and forgets the consent", (await e.page.evaluate(() => localStorage.getItem("assistant.consent.v3"))) === null);
     await e.page.keyboard.press("Escape");
     await e.start();
     check("the notice is shown again before the camera can start", await e.page.getByRole("dialog", { name: "Before the camera starts" }).isVisible());

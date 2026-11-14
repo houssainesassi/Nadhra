@@ -26,7 +26,8 @@ g.addEventListener = on(windowListeners);
 g.removeEventListener = off(windowListeners);
 const doc = { hidden: false, addEventListener: on(docListeners), removeEventListener: off(docListeners) };
 g.document = doc;
-const storage = new Map<string, string>([["assistant.consent.v2", "1"]]);
+// Consent to the camera notice and to the notice about documents (tests of those notices remove them).
+const storage = new Map<string, string>([["assistant.consent.v3", "1"], ["assistant.readConsent.v1", "1"]]);
 Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
   value: { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v), removeItem: (k: string) => storage.delete(k) },
@@ -46,6 +47,8 @@ let replies: SceneAnalysis[] = [];
 /** The next POSTs fail with these errors instead. */
 let failures: { status: number; error: string }[] = [];
 g.fetch = async (url: string, init?: { method?: string; body?: string }) => {
+  // The page's own error reports aren't vision requests: they mustn't take a prepared reply.
+  if (init?.method === "POST" && String(url).includes("/api/report")) return new Response(null, { status: 204 });
   if (init?.method === "POST") {
     posts.push(JSON.parse(init.body ?? "{}"));
     const fail = failures.shift();
@@ -159,9 +162,16 @@ afterEach(() => {
   posts.length = 0;
   replies = [];
   failures = [];
+  storage.set("assistant.consent.v3", "1");
+  storage.set("assistant.readConsent.v1", "1");
+  storage.delete("assistant.settings"); // each test starts from the defaults
 });
 
-function setup(opts: { detector?: FakeDetector; voice?: FakeVoice } = {}) {
+/**
+ * Most of these tests are about the automatic scans, so they turn automatic descriptions on, as a
+ * user would; `auto: false` keeps the default (off). See the "automatic descriptions" tests.
+ */
+function setup(opts: { detector?: FakeDetector; voice?: FakeVoice; auto?: boolean } = {}) {
   const c = new SmartVisionController();
   const engine = new FakeEngine();
   const sources: FakeSource[] = [];
@@ -174,6 +184,7 @@ function setup(opts: { detector?: FakeDetector; voice?: FakeVoice } = {}) {
   const feedbackOrig = (any.feedback as (n: string) => void).bind(c);
   any.feedback = (name: string) => { feedback.push(name); feedbackOrig(name); };
   c.attach({} as HTMLVideoElement, { tts: engine });
+  if (opts.auto !== false) c.store.set({ ...c.state, settings: { ...c.state.settings, autoDescribe: true } });
   const h = {
     c,
     engine,
@@ -495,7 +506,7 @@ test("a connection that fails before any answer is retried once, then reported",
   await withFetch((async () => {
     calls++;
     throw new TypeError("Failed to fetch");
-  }) as typeof fetch, () => h.c.ask("شنوة مكتوب هنا؟"));
+  }) as typeof fetch, () => h.c.ask("شنوة اللون متاع الحيط؟"));
   assert.equal(calls, 2);
   h.drain();
   assert.ok(h.engine.said.includes(T.questionFailed));
@@ -510,6 +521,32 @@ test("a question in French gets a French answer request and a French 'one moment
   assert.equal((posts.at(-1) as Record<string, unknown>).lang, "fr");
   assert.ok(h.engine.said.includes(speech("fr").thinking));
   assert.equal(h.c.state.answer.lang, "fr");
+});
+
+test("multi-turn: a short follow-up keeps the conversation's language and carries the earlier exchange", async () => {
+  const h = setup();
+  replies.push(scene({ spoken: "It's ten o'clock.", changed: true }));
+  await h.c.ask("What time is it?");
+  replies.push(scene({ spoken: "Half past ten.", changed: true }));
+  await h.c.ask("OK");
+  const sent = posts.at(-1) as Record<string, unknown>;
+  assert.equal(sent.lang, "en", "«OK» after an English answer stays English, with Derja chosen");
+  assert.deepEqual(sent.history, [{ q: "What time is it?", a: "It's ten o'clock." }]);
+  replies.push(scene({ spoken: "الساعة 10 و نص.", changed: true }));
+  await h.c.ask("w ba3d?");
+  assert.equal((posts.at(-1) as Record<string, unknown>).lang, "tn", "a clear switch to Arabizi is followed");
+});
+
+test("multi-turn: changing the language setting starts the conversation afresh", async () => {
+  const h = setup();
+  replies.push(scene({ spoken: "It's ten o'clock.", changed: true }));
+  await h.c.ask("What time is it?");
+  h.c.updateSettings({ language: "fr" });
+  replies.push(scene({ spoken: "D'accord.", changed: true }));
+  await h.c.ask("OK");
+  const sent = posts.at(-1) as Record<string, unknown>;
+  assert.equal(sent.lang, "fr", "the old answer's language no longer counts");
+  assert.deepEqual(sent.history, []);
 });
 
 test("a phone that doesn't say which camera it opened is not treated as a mirror", async () => {
@@ -665,7 +702,7 @@ test("withdrawing consent stops the camera, forgets it, and asks again before th
   assert.equal(h.c.state.camera, "off");
   assert.equal(h.sources[0].stopped, true);
   assert.equal(h.c.state.consentGiven, false);
-  assert.equal(localStorage.getItem("assistant.consent.v2"), null);
+  assert.equal(localStorage.getItem("assistant.consent.v3"), null);
   assert.equal(h.engine.last, T.consentWithdrawn);
 
   await h.c.startCamera();
@@ -673,7 +710,7 @@ test("withdrawing consent stops the camera, forgets it, and asks again before th
   assert.equal(h.sources.length, 1, "no camera started without consent");
   h.c.acceptConsent();
   await flush();
-  assert.equal(localStorage.getItem("assistant.consent.v2"), "1");
+  assert.equal(localStorage.getItem("assistant.consent.v3"), "1");
 });
 
 test("a spent daily budget is said once, and scans wait instead of retrying every few seconds", async () => {
@@ -721,7 +758,7 @@ test("Open camera starts the camera, on-device warnings and voice commands; Stop
 });
 
 test("Open camera without consent shows the notice first; nothing starts until it is accepted", async () => {
-  storage.delete("assistant.consent.v2");
+  storage.delete("assistant.consent.v3");
   try {
     const h = setup({ voice: new FakeVoice(() => new Promise<VoiceResult>(() => {})) });
     await h.c.startAssistance();
@@ -737,7 +774,7 @@ test("Open camera without consent shows the notice first; nothing starts until i
     assert.equal(h.c.state.camera, "on");
     assert.equal(h.c.state.assistantOn, true, "voice commands follow the camera once consent is given");
   } finally {
-    storage.set("assistant.consent.v2", "1");
+    storage.set("assistant.consent.v3", "1");
   }
 });
 
@@ -778,4 +815,504 @@ test("after Open camera, saying «نجدة» then «عيّط» opens the Emergen
   assert.equal(h.c.state.focus.target, "call", "«عيّط» selects the call button (the user's tap places the call)");
   assert.equal(h.c.state.camera, "on", "the camera and its warnings keep running");
   h.c.updateSettings({ emergencyPhone: "" });
+});
+
+// --- reading documents ---------------------------------------------------------------------------------
+
+const { sanitizeDocument } = await import("../src/lib/assistant/document.ts");
+const DOC_NOW = new Date("2026-11-13T10:00:00+01:00");
+const L = (text: string, confidence = "confirmed") => ({ text, confidence });
+const BOX_RAW = {
+  doc_type: "medicine", legibility: "clear",
+  lines: [L("FEBRALIX 500 mg"), L("16 comprimés"), L("EXP 03/2027")],
+  medicine: { name: "FEBRALIX", strength: "500 mg", expiry: "EXP 03/2027" },
+};
+/** What the server answers when both readings agree. */
+const WHOLE = { first: () => null, second: () => null };
+const boxReading = () => sanitizeDocument(BOX_RAW, { lang: "tn", now: DOC_NOW, confirm: BOX_RAW, inspect: WHOLE });
+const D = speech("tn").doc;
+
+/** A camera whose picture is uniformly dark, or uniformly flat (no detail at all: unreadable). */
+class PlainSource extends FakeSource {
+  level: number;
+  constructor(level: number) { super(); this.level = level; }
+  thumbnail(width: number, height: number): GrayFrame {
+    const px = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i++) px.set([this.level, this.level, this.level, 255], i * 4);
+    return { rgba: px, width, height };
+  }
+}
+
+function langsOf(engine: FakeEngine) {
+  const spoken: { text: string; lang: string }[] = [];
+  let lang = "tn";
+  (engine as unknown as { setLanguage: (l: string) => void }).setLanguage = (l) => (lang = l);
+  const speak = engine.speak.bind(engine);
+  engine.speak = (text, opts) => { spoken.push({ text, lang }); speak(text, opts); };
+  return spoken;
+}
+
+test("«اقرالي الدوا»: a reading is requested with a sharp still, and said with the box's text in the French voice", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const spoken = langsOf(h.engine);
+  replies.push(boxReading());
+  assert.equal(parseCommand("اقرالي الدوا"), "read");
+  await h.c.readDocument();
+  const sent = posts.at(-1) as Record<string, unknown>;
+  assert.equal(sent.mode, "read");
+  assert.equal(sent.image, "/9j/AAAA");
+  assert.equal(sent.secondImage, "/9j/AAAA", "a second frame, for the independent second reading");
+  assert.equal(sent.question, undefined);
+  assert.equal((h.any.history as unknown[]).length, 0, "readings stay out of the general conversation history");
+  h.drain();
+  const name = spoken.find((s) => s.text.includes("FEBRALIX"))!;
+  assert.equal(name.lang, "fr", "the printed name is read by the French voice");
+  assert.equal(spoken.find((s) => s.text.includes(D.name))!.lang, "tn", "the labels are the assistant's, in Derja");
+  assert.ok(h.engine.said.some((s) => s.includes(D.notExpired)));
+  assert.match(h.c.state.answer.text, /FEBRALIX/);
+});
+
+test("a dark picture is refused on the device: nothing is sent, and the user hears why", async () => {
+  const h = setup();
+  h.any.makeSource = () => { const s = new PlainSource(8); h.sources.push(s); return s; };
+  h.any.readSteadyWaitMs = 50;
+  await h.start();
+  h.drain();
+  const before = posts.length;
+  await h.c.readDocument();
+  assert.equal(posts.length, before, "no image left the phone");
+  h.drain();
+  assert.ok(h.engine.said.includes(D.tooDark), h.engine.said.join(" | "));
+});
+
+test("a picture without any sharp detail is refused as blurred after waiting for a steadier one", async () => {
+  const h = setup();
+  h.any.makeSource = () => { const s = new PlainSource(140); h.sources.push(s); return s; };
+  h.any.readSteadyWaitMs = 300;
+  await h.start();
+  h.drain();
+  const before = posts.length;
+  const t0 = Date.now();
+  await h.c.readDocument();
+  assert.ok(Date.now() - t0 >= 250, "it waited for a sharper frame first");
+  assert.equal(posts.length, before);
+  h.drain();
+  assert.ok(h.engine.said.some((s) => s.includes(D.tip.blurry.split(".")[0])));
+});
+
+test("questions after a reading are about the paper, with its text; one that isn't is asked normally", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  replies.push(boxReading());
+  await h.c.readDocument();
+  h.drain();
+
+  replies.push(sanitizeDocument({ lines: [], answer: { about_document: true, found: true, quote: "EXP 03/2027" } }, { lang: "tn", question: "وقتاش يوفى؟", context: { kind: "medicine", lines: ["FEBRALIX 500 mg", "16 comprimés", "EXP 03/2027"] }, now: DOC_NOW }));
+  await h.c.ask("وقتاش يوفى؟");
+  const follow = posts.at(-1) as Record<string, unknown>;
+  assert.equal(follow.mode, "read");
+  assert.deepEqual((follow.document as { lines: string[] }).lines, ["FEBRALIX 500 mg", "16 comprimés", "EXP 03/2027"]);
+  h.drain();
+  assert.ok(h.engine.said.includes(D.quote));
+
+  const n = posts.length;
+  replies.push(sanitizeDocument({ lines: [], answer: { about_document: false } }, { lang: "tn", question: "شنوة لون الحيط؟", context: { kind: "medicine", lines: ["x"] }, now: DOC_NOW }));
+  replies.push(scene({ spoken: "الحيط أبيض.", changed: true }));
+  await h.c.ask("شنوة لون الحيط؟");
+  assert.deepEqual(posts.slice(n).map((p) => (p as Record<string, unknown>).mode), ["read", "question"]);
+  h.drain();
+  assert.ok(h.engine.said.includes("الحيط أبيض."));
+});
+
+test("«اقرا الكل» reads the whole text from memory: no new picture is sent", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  replies.push(boxReading());
+  await h.c.readDocument();
+  h.drain();
+  const n = posts.length;
+  assert.equal(parseCommand("اقرا الكل"), "read-all");
+  h.c.readAll();
+  h.drain();
+  assert.equal(posts.length, n);
+  assert.ok(h.engine.said.some((s) => s.includes("16 comprimés")));
+});
+
+test("«اقرا الكل» with nothing read and the camera off says so", async () => {
+  const h = setup();
+  h.c.readAll();
+  h.drain();
+  assert.ok(h.engine.said.includes(D.nothingRead));
+});
+
+test("a reading whose connection drops is sent once more; a second failure is said", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  let calls = 0;
+  await withFetch((async () => {
+    calls++;
+    throw new TypeError("Failed to fetch");
+  }) as typeof fetch, () => h.c.readDocument());
+  assert.equal(calls, 2);
+  h.drain();
+  assert.ok(h.engine.said.includes(T.questionFailed));
+});
+
+test("withdrawing consent forgets the document read", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  replies.push(boxReading());
+  await h.c.readDocument();
+  assert.ok(h.any.document);
+  h.c.withdrawConsent();
+  assert.equal(h.any.document, null);
+  assert.equal(localStorage.getItem("assistant.readConsent.v1"), null, "the notice about documents is asked again too");
+});
+
+test("before the first document leaves the phone, the notice naming Google is said; only «موافق» sends it", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  storage.delete("assistant.readConsent.v1");
+  const before = posts.length;
+  await h.c.readDocument();
+  assert.equal(posts.length, before, "nothing sent before the answer");
+  assert.equal(h.engine.last.slice(0, 20), D.notice.slice(0, 20));
+  // «رجّع» cancels: still nothing sent.
+  assert.equal(parseCommand("رجّع"), "back");
+  h.c.goBack();
+  assert.ok(h.engine.said.includes(D.noticeRefused));
+  assert.equal(posts.length, before);
+  // Asked again, then «موافق»: the reading goes ahead, and the notice isn't repeated next time.
+  await h.c.readDocument();
+  replies.push(boxReading());
+  assert.equal(parseCommand("موافق"), "yes");
+  assert.equal((h.any.runCommand as (c: string) => boolean).call(h.c, "yes"), true);
+  await until(() => posts.length > before);
+  assert.equal((posts.at(-1) as Record<string, unknown>).mode, "read");
+  assert.equal(localStorage.getItem("assistant.readConsent.v1"), "1");
+});
+
+test("F6: a medicine question never gets an ordinary answer: read under the reading rules, or declined", async () => {
+  const off = setup();
+  await off.c.ask("قداش من حبة ناخذ في النهار؟");
+  off.drain();
+  assert.equal(posts.length, 0, "camera off: nothing sent at all");
+  assert.ok(off.engine.said.includes(D.medicalDeclined));
+
+  const h = setup();
+  await h.start();
+  h.drain();
+  replies.push(boxReading());
+  await h.c.ask("combien de comprimés par jour ?");
+  const sent = posts.at(-1) as Record<string, unknown>;
+  assert.equal(sent.mode, "read", "camera on: the reading mode, with its double reading and checks");
+  assert.equal(sent.question, "combien de comprimés par jour ?");
+});
+
+test("F6: in a live conversation, a medicine question is taken from the live model and read under the rules", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const { audio } = fakeLive(h);
+  replies.push(boxReading());
+  h.c.store.set({ ...h.c.state, live: { ...h.c.state.live, user: "قداش من حبة ناخذ؟" } });
+  h.any.liveCommandChecked = false;
+  assert.equal((h.any.checkLiveCommand as () => boolean).call(h.c), true);
+  assert.ok(audio.flushed >= 1, "the live answer is cut");
+  assert.equal(h.any.liveMuted, true);
+  await until(() => posts.some((p) => (p as Record<string, unknown>).mode === "read"));
+  assert.ok(posts.some((p) => (p as Record<string, unknown>).mode === "read"));
+});
+
+test("F6: a dose in a live answer is cut at once and the refusal is said", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const { audio } = fakeLive(h);
+  h.any.liveCheckedChars = 0;
+  h.c.store.set({ ...h.c.state, live: { ...h.c.state.live, ai: "هاذي علبة باراسيتامول. خوذ 2 حبات في النهار." } });
+  (h.any.checkLiveSafety as (f: boolean) => void).call(h.c, false);
+  assert.ok(audio.flushed >= 1);
+  assert.equal(h.engine.last, D.liveMedical);
+  assert.equal(h.any.liveMuted, true);
+});
+
+/** A camera whose view stays the same until `seed` changes. */
+class StillSource extends FakeSource {
+  view = 7;
+  thumbnail(width: number, height: number): GrayFrame { return { rgba: noise(width, height, this.view), width, height }; }
+}
+
+test("a document in view stops automatic frames (scans and live) until it is put away", async () => {
+  const h = setup();
+  const cam = new StillSource();
+  h.any.makeSource = () => { h.sources.push(cam); return cam; };
+  await h.start();
+  h.drain();
+  h.any.lastScanAt = Date.now() - 60_000;
+  replies.push({ ...scene({}), documentInView: true });
+  h.tick();
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.ok(h.engine.said.includes(D.inView), "the user is told why descriptions stopped");
+  const { session } = fakeLive(h);
+  for (let i = 0; i < 5; i++) {
+    h.any.lastScanAt = Date.now() - 60_000;
+    h.tick();
+    await flush();
+  }
+  assert.equal(posts.length, 1, "no automatic scan of the document");
+  assert.equal((h.any.sendLiveFrame as (f: boolean) => boolean).call(h.c, true), false, "nor a live frame");
+  assert.equal(session.frames, 0);
+  // Put away: the view changes, and after two ticks frames go out again.
+  h.any.liveSession = null;
+  cam.view = 99;
+  for (let i = 0; i < 3; i++) {
+    h.any.lastScanAt = Date.now() - 60_000;
+    h.tick();
+    await flush();
+  }
+  assert.ok(posts.length > 1, "scans resume");
+});
+
+// --- automatic descriptions: off by default ---------------------------------------------------------------
+
+test("by default no picture leaves the phone by itself: no automatic scan, and the user is told what that means", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  for (let i = 0; i < 5; i++) {
+    h.any.lastScanAt = Date.now() - 60_000;
+    h.tick();
+    await flush();
+  }
+  assert.equal(posts.length, 0, "nothing sent");
+  assert.equal(h.c.state.analysis, "manual");
+  assert.equal(h.c.state.settings.autoDescribe, false);
+  h.drain();
+  assert.ok(h.engine.said.includes(T.autoOffNotice), "said: no picture unless asked, and no stairs or drops");
+  // Asking still works: an explicit question sends its picture.
+  h.drain();
+  replies.push(scene({ spoken: "قدّامك باب.", changed: true }));
+  await h.c.ask("شنوة قدّامي؟");
+  assert.equal((posts.at(-1) as Record<string, unknown>).mode, "question");
+});
+
+test("«شعّل الوصف التلقائي» turns scans on, with the notice; «سكّر الوصف التلقائي» turns them off", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  assert.equal(parseCommand("شعّل الوصف التلقائي"), "auto-on");
+  assert.equal(parseCommand("turn off automatic descriptions"), "auto-off");
+  (h.any.runCommand as (c: string) => boolean).call(h.c, "auto-on");
+  assert.ok(h.engine.said.includes(T.autoOn), "it says pictures go to Google every few seconds, papers included");
+  assert.equal(h.c.state.settings.autoDescribe, true);
+  h.tick();
+  await flush();
+  assert.equal(posts.length, 1, "scans start");
+  (h.any.runCommand as (c: string) => boolean).call(h.c, "auto-off");
+  assert.ok(h.engine.said.includes(T.autoOff));
+  const n = posts.length;
+  for (let i = 0; i < 3; i++) {
+    h.any.lastScanAt = Date.now() - 60_000;
+    h.tick();
+    await flush();
+  }
+  assert.equal(posts.length, n, "and stop");
+});
+
+test("a prescription with several doses: the check is actually spoken after every one of them", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const raw = { doc_type: "prescription", legibility: "clear", lines: [L("1) FEBRALIX 500 mg"), L("1 comprimé 3 fois par jour"), L("2) GASTRONIL 20 mg"), L("1 gélule le matin")] };
+  replies.push(sanitizeDocument(raw, { lang: "tn", now: DOC_NOW, confirm: raw, inspect: WHOLE }));
+  await h.c.readDocument();
+  h.drain();
+  for (const dose of ["1) FEBRALIX 500 mg.", "1 comprimé 3 fois par jour.", "2) GASTRONIL 20 mg.", "1 gélule le matin."]) {
+    const i = h.engine.said.indexOf(dose);
+    assert.ok(i >= 0, dose);
+    assert.equal(h.engine.said[i + 1], D.checkDose, `after ${dose}`);
+  }
+});
+
+// --- live conversation privacy ---------------------------------------------------------------------------
+
+test("live: its own spoken notice first; nothing starts until «موافق» or a second press, and «رجّع» cancels", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  storage.delete("assistant.liveConsent.v1");
+  await h.c.startLive();
+  assert.equal(h.c.state.liveNotice, true);
+  assert.equal(h.any.liveSession, null, "no session, nothing sent");
+  assert.ok(h.engine.said.some((x) => x.length > 20 && T.liveNotice.startsWith(x)), "the notice is being said");
+  assert.match(T.liveNotice, /Google Gemini/);
+  h.c.goBack();
+  assert.equal(h.c.state.liveNotice, false);
+  assert.ok(h.engine.said.includes(T.liveNoticeRefused));
+  assert.equal(localStorage.getItem("assistant.liveConsent.v1"), null);
+  // Asked again, then «موافق»: remembered, and the start goes ahead.
+  await h.c.startLive();
+  assert.equal((h.any.runCommand as (c: string) => boolean).call(h.c, "yes"), true);
+  await flush();
+  assert.equal(localStorage.getItem("assistant.liveConsent.v1"), "1");
+  assert.equal(h.c.state.liveNotice, false);
+});
+
+test("live: «وقّف المحادثة» on the partial transcript stops sending at once", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const { session } = fakeLive(h);
+  assert.equal(parseCommand("وقّف المحادثة"), "live-off");
+  assert.equal(parseCommand("stop sending"), "live-off");
+  assert.equal((h.any.checkLiveStop as (u: string) => boolean).call(h.c, "شنوة قدّامي"), false, "other words don't");
+  assert.equal(session.stopped, 0);
+  assert.equal((h.any.checkLiveStop as (u: string) => boolean).call(h.c, "وقّف المحادثة"), true);
+  assert.equal(session.stopped, 1);
+  assert.equal(h.any.liveSession, null);
+  h.drain();
+  assert.ok(h.engine.said.includes(T.liveOff));
+  assert.match(T.liveOff, /ما عادش يتبعث/);
+});
+
+test("live: a spoken reminder every few minutes that voice and pictures are going to Google", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  fakeLive(h);
+  h.any.lastLiveReminderAt = Date.now() - 6 * 60_000;
+  h.tick();
+  h.drain();
+  assert.ok(h.engine.said.includes(T.liveReminder));
+  const n = h.engine.said.filter((x) => x === T.liveReminder).length;
+  h.tick();
+  h.drain();
+  assert.equal(h.engine.said.filter((x) => x === T.liveReminder).length, n, "not again at once");
+});
+
+test("withdrawing consent also forgets the live conversation's consent", async () => {
+  const h = setup();
+  storage.set("assistant.liveConsent.v1", "1");
+  h.c.withdrawConsent();
+  assert.equal(localStorage.getItem("assistant.liveConsent.v1"), null);
+});
+
+// --- no guarantee about stairs, holes or obstacles ---------------------------------------------------------
+
+test("the safety notice says stairs, holes and obstacles can't be guaranteed; later camera starts repeat it briefly", async () => {
+  for (const lang of ["tn", "ar", "fr", "en"] as const) assert.match(speech(lang).disclaimer, /الدروج|الدرج|escaliers|stairs/);
+  const h = setup();
+  await h.start();
+  h.drain();
+  assert.ok(!h.engine.said.includes(T.noGuarantee), "the first start has the full notice instead");
+  h.c.stopCamera();
+  await h.start();
+  h.drain();
+  assert.ok(h.engine.said.includes(T.noGuarantee));
+});
+
+test("walking with automatic descriptions off: a reminder that stairs and holes aren't seen, not repeated at once", async () => {
+  const h = setup({ auto: false });
+  await h.start(); // the fake camera's picture changes on every frame: like walking
+  h.drain();
+  h.tick();
+  h.any.movingSince = Date.now() - 5_000;
+  h.tick();
+  h.drain();
+  assert.ok(h.engine.said.includes(T.walkingNoScan));
+  const n = h.engine.said.filter((x) => x === T.walkingNoScan).length;
+  h.tick();
+  h.drain();
+  assert.equal(h.engine.said.filter((x) => x === T.walkingNoScan).length, n);
+  // With automatic descriptions on, no such reminder.
+  const on = setup();
+  await on.start();
+  on.drain();
+  on.any.movingSince = Date.now() - 5_000;
+  on.tick();
+  on.drain();
+  assert.ok(!on.engine.said.includes(T.walkingNoScan));
+});
+
+test("«شنوة قدّامي؟» is followed by the no-guarantee sentence, at most every few minutes", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  replies.push(scene({ spoken: "قدّامك باب.", changed: true }));
+  await h.c.runTask("front");
+  h.drain();
+  const i = h.engine.said.indexOf("قدّامك باب.");
+  assert.ok(i >= 0 && h.engine.said.slice(i).includes(T.noGuarantee));
+  const n = h.engine.said.filter((x) => x === T.noGuarantee).length;
+  replies.push(scene({ spoken: "قدّامك طاولة.", changed: true }));
+  await h.c.runTask("front");
+  h.drain();
+  assert.equal(h.engine.said.filter((x) => x === T.noGuarantee).length, n);
+});
+
+test("live: the notice says the voice stop is recognised by Google, and the screen button stops without sending; Stop assistance ends it", async () => {
+  for (const lang of ["tn", "ar", "fr", "en"] as const) assert.match(speech(lang).liveNotice, /Google/);
+  assert.match(T.liveNotice, /تفهمها Google/);
+  assert.match(T.liveNotice, /زر الإيقاف في الشاشة يوقّف في التليفون من غير ما يبعث شي/);
+  assert.match(speech("en").liveNotice, /stop button on the screen stops on the phone without sending anything/);
+  const h = setup();
+  await h.start();
+  const { session } = fakeLive(h);
+  h.c.stopAssistance();
+  assert.equal(session.stopped, 1, "the manual button ends the live conversation");
+  assert.equal(h.any.liveSession, null);
+});
+
+// --- AI_MODE (offline track, Phase 2) ------------------------------------------------------------
+
+test("offline mode on the server: a scan says why once, and scans wait instead of retrying", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  failures.push({ status: 503, error: "offline-mode" });
+  h.any.lastScanAt = -Infinity;
+  h.tick();
+  await flush();
+  assert.equal(h.engine.last, T.offlineMode);
+  assert.ok((h.any.backoffUntil as number) - Date.now() > 4 * 60_000);
+  h.drain();
+  const sent = posts.length;
+  h.tick();
+  await flush();
+  assert.equal(posts.length, sent, "no new request during the wait");
+});
+
+test("a question refused by offline mode or a missing internet says that reason, not 'failed'", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  failures.push({ status: 503, error: "offline-mode" });
+  await h.c.ask("شنوة قدّامي؟");
+  await flush();
+  assert.ok(h.engine.said.includes(T.offlineMode));
+  h.drain();
+  failures.push({ status: 503, error: "no-internet" });
+  await h.c.ask("شنوة قدّامي؟");
+  await flush();
+  const expected = h.c.state.detector === "ready" ? T.offline : T.analysisDown;
+  assert.ok(h.engine.said.includes(expected), "only claims on-device warnings work when they do");
+  assert.ok(!h.engine.said.includes(T.questionFailed));
+});
+
+test("offline mode never picks the browser's speech recognition (a cloud service)", () => {
+  const h = setup();
+  const pick = () => (h.any.pickVoiceInput as () => { kind: string } | null).call(h.c);
+  h.any.voiceInput = null;
+  h.c.store.set({ ...h.c.state, status: { mode: "offline", available: false, providers: [], canTranscribe: false } });
+  assert.equal(pick(), null, "no local transcription yet: no voice input rather than a cloud one");
+  h.c.store.set({ ...h.c.state, status: { mode: "offline", available: true, providers: [], canTranscribe: true } });
+  assert.notEqual(pick()?.kind, "recognition");
 });

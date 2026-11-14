@@ -101,8 +101,11 @@ export class SpeechQueue {
     if (!chunks.length) return;
     const at = this.now();
     if (priority === "narration") this.pending = this.pending.filter((i) => i.priority !== "narration");
+    // The same status, warning or narration already waiting is not said twice. An answer is: a reading
+    // repeats «check it with the pharmacist» after every dose on purpose, and dropping the repeats
+    // left later doses without it (found by the browser test, 2026-11-13).
     const same = normalizeArabic(text);
-    if (normalizeArabic(this.current?.text ?? "") === same || this.pending.some((i) => normalizeArabic(i.text) === same)) return;
+    if (priority !== "answer" && (normalizeArabic(this.current?.text ?? "") === same || this.pending.some((i) => normalizeArabic(i.text) === same))) return;
 
     const items = chunks.map((chunk) => ({ text: chunk, priority, at, lang, key }));
     const rank = RANK[priority];

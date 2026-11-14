@@ -34,6 +34,70 @@ Speaker ◄─ 24 kHz PCM, played as it arrives, flushed on `interrupted` ◄─
 - The controller pauses cloud scans while live, keeps the on-device detector running, and lets a warning cut the live answer off. The live microphone is never muted: the user's words stop status sentences instead.
 - Tests: `tests/live.test.ts` (no network); `e2e/live/latency.ts` and `e2e/live/browser.mjs` use the real service (see their headers).
 
+## Reading documents and medicine boxes
+
+The rule above all others: **Nadhra never states an unverified dose or date as fact.** A transcription is not proof, a model's "confirmed" is not proof, and two readings that agree are not proof either.
+
+Voice only, no button: «اقرالي الدوا», «اقرالي الورقة», «lis l'ordonnance», "read the prescription", and «اقرا الكل» / "read all".
+
+```
+voice ── first time only: spoken notice (Google, free tier, no real prescriptions) ── «موافق»
+      ── on-device: too dark? no sharp tile (640 px)? ── refuse, say why (nothing sent)
+      ── automatic frames stop (scans, live) ── frame A (still photo if possible) + frame B 0.4 s later
+      ── POST /api/vision {mode:"read", image, secondImage} ── Gemini only, never OpenRouter
+            reading A: first model, frame A ─┐ in parallel, temperature 0, readSystemPrompt
+            reading B: other model, frame B ─┘
+      ── document.ts sanitizeDocument(A, confirm: B) ── checked, labelled speech
+voice ◄── «قريت…» + the paper's text in its own language's voice + "check it with the pharmacist" after each dose and date
+```
+
+What `document.ts` enforces (tests: `tests/document.test.ts`, F1–F6 marked):
+
+- **Medical papers** (medicine, prescription, other medical): a line, whether a name, a dose or a date, is said only when all of these hold:
+  - the model calls it confirmed and fully visible, with no unreadable mark (`[?]`, `5?0`, `…`);
+  - reading B has the **same whole line**, word for word and number for number;
+  - **the pixel check passes in both frames** (`lineCheck.ts`). It uses no AI: at the position each reading gives for the line (`box_2d`), the line must not touch the picture edge, must not be covered by a solid mass in it or right after it, must not claim characters over unprinted paper (glare), and must not be nearly empty. Its printed ink must also be about as wide as the characters claimed (0.22–1.3 line heights per character): this catches a box drawn around only the visible part («50» for «500 mg») and a box on a much longer line.
+
+  **Line positions in frame A** come from the accurate model (gemini-3.1-flash-lite) when the first reading came from another model. As soon as that reading is in, the accurate model is asked to *locate* its lines in frame A, text unchanged (`LOCATE_SYSTEM_PROMPT`, `withLocatedBoxes`).
+  - The located box replaces the first reading's own box only when the own box failed softly (faint, incomplete, mismatch, none).
+  - An own box showing a solid mass or the picture edge still withholds the line.
+  - A line the locator answers null for (not fully visible), or leaves out, is withheld.
+  - Two lines located in the same spot are both withheld.
+  - If locating fails, the own boxes are used as before.
+
+  The two readings stay with two different models; frame B is checked with the second reading's own boxes. A line without a usable position, or a picture that can't be decoded, can't be checked, so it isn't read. If the second reading fails altogether (a busy service), nothing medical is read, and the user is told to ask again rather than to retake the picture. A strength must carry its unit, and a bare number is never read. When the model reports glare, blur, darkness, angle, distance or handwriting, numbered lines are held back too. Anything withheld is said once, with how to take the next picture (move back, move the finger, tilt against glare).
+- **Fields** (name, substance, strength, form, quantity, expiry) must appear as whole words and whole numbers in those lines: "500 mg" is not on a 1500 mg box.
+- **Wording:** «قريت الجرعة: … ثبّت فيها مع الصيدلي» ("I read the dose as …, check it with the pharmacist"), the check right after every dose, date and medicine name. The speech queue doesn't drop repeated answer sentences: it used to drop the repeated check, so later doses went unchecked (fixed and tested). Expiry status is computed in code, said conditionally («كان القراية صحيحة…», "if the reading is right…"), and not at all for ambiguous dates (03/04/2027).
+- **No AI explanation of medical papers.** The model's explanation is dropped. A Derja rendering of an instruction can only come from a fixed word-for-word glossary (`derjaInstruction`), switched off (`DERJA_GLOSSARY_APPROVED = false`) until a pharmacist approves it.
+- **Questions** about a document: a quote that must be in the checked text, then the check. "Can I take…?" always gets "only your doctor or pharmacist". Bills and letters keep a labelled explanation, without numbers that aren't printed or any dose.
+- **Medicine questions never bypass this.**
+  - Client: `isMedicalQuestion` sends them to reading mode, or declines them with the camera off.
+  - Server: a medicine question in question or chat mode is read under these rules (one frame, so no numbers) or declined.
+  - Scans, questions, chat and streamed sentences: any sentence with a dose is dropped (`mentionsDose`).
+  - Live conversation: its prompt forbids doses; a medicine question takes the turn from the live model to reading mode; a dose in a live answer is cut and the refusal said.
+- **Automatic descriptions are off by default** (`settings.autoDescribe`). No picture leaves the phone unless the user asks: a question, a reading, a live conversation. The camera-start notice says that stairs and drops are then not detected, since only the cloud scan finds them; on-device warnings for people and vehicles run either way. «شعّل الوصف التلقائي» ("turn on automatic descriptions") or the Settings toggle turns them on, with a spoken note that a picture goes to Google every few seconds, papers included.
+- **No guarantee about obstacles:**
+  - The safety notice at the first camera start of a visit says Nadhra can't guarantee seeing stairs, holes or obstacles; later starts repeat it briefly.
+  - With automatic descriptions off or paused and no live conversation, a camera that keeps moving (probably walking) brings a reminder at most every 3 minutes that stairs and holes aren't seen.
+  - "What's in front of me?" and "describe" answers end with the no-guarantee sentence at most every 5 minutes.
+- **When automatic descriptions are on:** a scan that sees a document (`document_in_view`) keeps none of its text and says nothing about it, and scans and live frames pause until the view clearly changes. A reading starts the same pause.
+- **Memory:** the last document stays in the page's memory for 5 minutes, outside the general conversation history. It's forgotten when consent is withdrawn or the language changes. «اقرا الكل» reads from memory with the same checks.
+- `speechText` keeps "/" between digits and units: «03/2027» and «1/2 comprimé» are not read as «03 أو 2027», «1 ou 2».
+- **Real-model tests:** `e2e/read/make_plan_set.py` and `e2e/read/plan.ts` (30 mock cases, scored for critical errors), `e2e/read/run.ts` and `e2e/read/browser.mjs`. All documents are rendered mocks with invented names.
+
+## Live conversation privacy
+
+- **Its own spoken consent**, after the camera's: voice and about one picture a second go to Google Gemini for as long as it runs; what the free service may do; no personal papers; how to stop. Nothing is sent until «موافق» ("I agree") or a second press of the button, which then reads "I agree: start the live conversation". «رجّع» ("go back") cancels. Withdrawing consent forgets it.
+- **While it runs:** "voice and pictures are going to Google now" at the start, a reminder every 5 minutes, and "nothing more is being sent" at the end.
+- **Stopping:**
+  - **On the phone, sending nothing:** the "Stop assistance" button on the main screen, or "End live conversation" in Settings.
+  - **By voice:** «وقّف المحادثة», «وقّف الإرسال», "stop live", "stop sending" (and "stop listening", "close the camera") are matched on every partial transcript of the user's words, so sending stops as soon as the phrase is recognised. That transcript comes from Gemini Live, so the stop words reach Google; the notice and the Settings hint say so.
+  - An on-device stop word is a separate future task.
+
+## Test capture (real-camera sessions only)
+
+`READ_CAPTURE_DIR` on a local server saves each reading: both frames, both raw readings, what was said and each line's verdict. It is for scoring sessions with the printed synthetic kit (`docs/PHASE1_REAL_CAMERA_TEST_PROTOCOL.md`, `e2e/read/realcam.ts`). It is off unless set, refused on Vercel, and never to be used with real documents.
+
 ## Code map
 
 | Path | Responsibility |
@@ -50,6 +114,8 @@ Speaker ◄─ 24 kHz PCM, played as it arrives, flushed on `interrupted` ◄─
 | `src/lib/assistant/speechQueue.ts` | One voice at a time, by priority |
 | `src/lib/assistant/voiceInput.ts`, `commands.ts`, `wav.ts` | Hearing the user |
 | `src/lib/assistant/prompts.ts` | Model instructions, per speech language |
+| `src/lib/assistant/document.ts` | Reading documents: checks the transcription and builds what is said |
+| `src/lib/assistant/lineCheck.ts` | Pixel check (no AI) that a printed line is whole in the picture |
 | `src/lib/assistant/lang.ts` | The four speech languages: recognition, voices, lang attributes |
 | `src/lib/ai/vision.ts` | Server only: providers and fallback |
 | `src/lib/speech/` | Voice output: browser voice first, Edge voice as fallback |
@@ -107,6 +173,25 @@ The model always reports image sides, and is told the user stands behind the cam
 ## Adding another camera
 
 Implement `CameraSource` and register it in `createCameraSource`. Glasses that stream into a video element can reuse most of `WebcamSource`. A source without a video element returns `null` from `videoElement()`, which turns off the on-device detector, so warnings then depend only on the cloud model.
+
+## AI mode and routing (offline track)
+
+`AI_MODE` (server): `cloud` (default, today's behaviour), `hybrid` or `offline`. Proposal and plan: `docs/OFFLINE_ARCHITECTURE_PROPOSAL.md`.
+
+- **Providers declare what they do.** Each `VisionProvider` has `locality` (`local` or `cloud`) and `tasks` (`scan`, `question`, `chat`, `read`, `transcribe`, each `full` or `limited`). `src/lib/ai/router.ts` only ever gives a provider a task it declares. Gemini declares all five; OpenRouter never `read` (documents) or `transcribe`.
+- **Order:** cloud mode uses cloud providers in their configured order. Offline mode uses local providers only, full before limited. Hybrid mode uses local full, then cloud, then local limited, and skips cloud when the internet is known to be down.
+- **Refusals are said, not hidden.** When the mode or the connection leaves a task without a provider, the route answers 503 `offline-mode` or `no-internet` before any budget is counted. The page says «المساعد مضبوط باش يخدم بلاش إنترنت، وهاذا يستحقّ الإنترنت» or the existing offline sentence, which claims that on-device warnings work only when the detector runs.
+- **Offline mode sends nothing:**
+  - `/api/vision`, `/api/vision/transcribe` and `/api/live/token` refuse.
+  - The Edge voice is off, so the device's own voice speaks.
+  - The browser's speech recognition, a cloud service, is never chosen. Voice input then needs an on-device transcription engine, and none exists yet.
+  - The internet probe doesn't run.
+- **DeviceCapabilities** (`src/lib/server/deviceCapabilities.ts`):
+  - Architecture, CPU, load, `MemAvailable`, hottest thermal zone, AI mode.
+  - The internet probe, hybrid mode only.
+  - With the per-task routing (`capabilitySummary`), shown by `/api/health` with the health token only. A public deployment doesn't describe its machine.
+- **Not yet:** no on-device language model, OCR, speech recognition or voice engine is wired in. Adding one means a provider with `locality: "local"` and honest `tasks`, from benchmarks.
+- **Reading rules don't change with the mode.** Medicine papers still need two independent readings and the pixel check (`document.ts`).
 
 ## Adding an AI provider
 

@@ -20,6 +20,10 @@ export type VoiceCommand =
   | "front"
   | "describe"
   | "read"
+  | "read-all"
+  | "auto-on"
+  | "auto-off"
+  | "live-off"
   | "identify"
   | "emergency"
   | "call"
@@ -113,6 +117,40 @@ const COMMANDS: [VoiceCommand, string[]][] = [
     "اقرأ النص", "اقرأ لي", "ماذا كتب", "ماذا مكتوب",
     "lis le texte", "lis moi ça", "lis ce texte", "qu est ce qui est écrit",
     "read this text", "read the text", "read this", "what does it say", "what does this say",
+    // Medicines and papers.
+    "اقرالي الدوا", "اقرا الدوا", "اقرالي الدواء", "شنوة الدوا هذا", "شنوة هالدوا", "اقرالي العلبة",
+    "اقرالي الورقة", "اقرا الورقة", "اقرالي الوصفة", "اقرا الوصفة", "اقرالي الفاتورة", "اقرالي الجواب", "اقرالي الرسالة",
+    "اقرأ الدواء", "ما هذا الدواء", "اقرأ العلبة", "اقرأ الورقة", "اقرأ الوصفة", "اقرأ الفاتورة", "اقرأ الرسالة",
+    "lis le médicament", "lis la boîte", "lis l ordonnance", "lis la facture", "lis la lettre", "lis le document", "lis le papier", "c est quel médicament",
+    "read the medicine", "read the label", "read the box", "read the prescription", "read the bill", "read the invoice", "read the letter", "read the document", "what medicine is this",
+  ]],
+  // Ends a live conversation at once: no more voice or pictures are sent. Checked on every partial
+  // transcript of a live conversation, not only when the model starts answering.
+  ["live-off", [
+    "وقف المحادثة", "سكر المحادثة", "وقف المباشر", "سكر المباشر", "وقف الإرسال", "وقف البعث",
+    "أوقف المحادثة", "أنه المحادثة", "أوقف الإرسال",
+    "arrête la conversation", "arrête l envoi", "termine la conversation", "arrête le direct",
+    "stop live", "end live", "stop the conversation", "end the conversation", "stop sending", "stop the live conversation",
+  ]],
+  // Automatic descriptions: off by default, so no picture leaves the phone unless asked for.
+  ["auto-on", [
+    "شعل الوصف التلقائي", "حل الوصف التلقائي", "ولع الوصف التلقائي",
+    "شغل الوصف التلقائي", "فعل الوصف التلقائي",
+    "active la description automatique", "allume la description automatique", "active les descriptions automatiques",
+    "turn on automatic descriptions", "turn on automatic description", "describe automatically", "automatic descriptions on",
+  ]],
+  ["auto-off", [
+    "سكر الوصف التلقائي", "طفي الوصف التلقائي", "وقف الوصف التلقائي",
+    "أوقف الوصف التلقائي", "أطفئ الوصف التلقائي",
+    "désactive la description automatique", "arrête la description automatique", "désactive les descriptions automatiques",
+    "turn off automatic descriptions", "turn off automatic description", "automatic descriptions off", "stop describing automatically",
+  ]],
+  // Reads the rest of the last document, without another picture.
+  ["read-all", [
+    "اقرا الكل", "اقرالي الكل", "اقرا كل شي", "اقرالي كل شي", "اقرا الباقي", "اقرالي الباقي", "اقرا الكتابة الكل",
+    "اقرأ الكل", "اقرأ كل شيء", "اقرأ الباقي", "اقرأ النص كله",
+    "lis tout", "lis la suite", "lis le reste", "lis tout le texte",
+    "read all", "read everything", "read the rest", "read it all", "read all of it",
   ]],
   ["identify", [
     "شنوة هاذي", "شنوة هاذا", "شنية هاذي", "شنوة هاذي الحاجة", "شنوة الحاجة هاذي",
@@ -179,6 +217,10 @@ const EXAMPLES: [VoiceCommand, [string, string, string, string]][] = [
   ["front", ["شنوة قدّامي؟", "ماذا أمامي؟", "Qu'y a-t-il devant moi ?", "What's in front of me?"]],
   ["describe", ["وصفلي البلاصة", "صف المكان", "Décris les alentours", "Describe my surroundings"]],
   ["read", ["اقرالي الكتابة", "اقرأ النص", "Lis le texte", "Read this text"]],
+  ["read-all", ["اقرا الكل", "اقرأ الكل", "Lis tout", "Read all"]],
+  ["auto-on", ["شعّل الوصف التلقائي", "شغّل الوصف التلقائي", "Active la description automatique", "Turn on automatic descriptions"]],
+  ["live-off", ["وقّف المحادثة", "أوقف المحادثة", "Arrête la conversation", "Stop live"]],
+  ["auto-off", ["سكّر الوصف التلقائي", "أوقف الوصف التلقائي", "Désactive la description automatique", "Turn off automatic descriptions"]],
   ["identify", ["شنوة هاذي؟", "ما هذا؟", "Qu'est-ce que c'est ?", "What is this?"]],
   ["repeat", ["عاود", "أعد", "Répète", "Repeat"]],
   ["stop-speech", ["اسكت", "اسكت", "Tais-toi", "Stop talking"]],

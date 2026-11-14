@@ -6,6 +6,7 @@ import "server-only";
 import { LIVE_WS_URL, liveSystemPrompt, parseLiveModels, pickLiveVoice } from "../live/config.ts";
 import type { SpeechLang } from "../assistant/lang.ts";
 import type { CameraFacing } from "../assistant/types.ts";
+import { aiMode } from "../ai/router.ts";
 
 const AUTH_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 
@@ -22,7 +23,8 @@ export interface LiveConfig {
 export function liveConfig(): LiveConfig {
   const silence = Number(process.env.GEMINI_LIVE_SILENCE_MS);
   return {
-    enabled: !!process.env.GEMINI_API_KEY?.trim() && !/^(1|true|yes)$/i.test(process.env.GEMINI_LIVE_DISABLED?.trim() ?? ""),
+    // Gemini Live is cloud only: there is no local equivalent, so offline mode turns it off.
+    enabled: !!process.env.GEMINI_API_KEY?.trim() && !/^(1|true|yes)$/i.test(process.env.GEMINI_LIVE_DISABLED?.trim() ?? "") && aiMode() !== "offline",
     models: parseLiveModels(process.env.GEMINI_LIVE_MODELS),
     voice: pickLiveVoice(process.env.GEMINI_LIVE_VOICE),
     silenceMs: Number.isFinite(silence) && silence >= 200 && silence <= 2000 ? Math.round(silence) : 500,

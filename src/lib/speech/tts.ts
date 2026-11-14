@@ -41,15 +41,36 @@ export interface TtsEngine {
   setLanguage?(lang: SpeechLang): void;
   /** Stop and release everything (event listeners, audio context). The engine is unusable afterwards. */
   dispose?(): void;
+  /**
+   * Nadhra AI: speak only with voices installed on this device. No cloud voice, and no browser voice
+   * that is a network service (such as "Google العربية" on desktop Chrome), since either would send
+   * the sentence away. With no installed voice, speaking fails and the screen reader takes over.
+   */
+  setLocalOnly?(on: boolean): void;
 }
 
 /**
  * Text as it should be read aloud: labels like «خال / عم» are read «خال أو عم» (not "slash"),
  * Latin punctuation and symbols a voice would spell out are removed, whitespace collapsed.
  */
+// A "/" between numbers or units is part of a date, a fraction or a unit (03/2027, 1/2, mg/ml):
+// read as "or", "1/2 comprimé" would become "1 or 2 tablets". Only a slash between words is "or".
+const UNIT = /^(?:mg|g|kg|µg|mcg|ml|l|dl|cl|mmol|ui|h|km|m|cm|j|jour|day|dose|cp|سم|كغ|مغ|مل)$/i;
+const DIGIT = /[0-9٠-٩۰-۹]/;
+function readSlash(text: string, or: string): string {
+  return text.replace(/\s*\/\s*/g, (m, at: number) => {
+    const before = text.slice(0, at);
+    const after = text.slice(at + m.length);
+    const left = /(\S+)$/.exec(before)?.[1] ?? "";
+    const right = /^(\S+)/.exec(after)?.[1] ?? "";
+    if (DIGIT.test(left.slice(-1)) || DIGIT.test(right[0] ?? "")) return "/";
+    if (UNIT.test(left.replace(/^[0-9.,]+/, "")) || UNIT.test(right.replace(/[.,;:]+$/, ""))) return "/";
+    return ` ${or} `;
+  });
+}
+
 export function speechText(text: string, lang: SpeechLang = "tn"): string {
-  return text
-    .replace(/\s*\/\s*/g, ` ${LANGS[lang].or} `)
+  return readSlash(text, LANGS[lang].or)
     .replace(/[()[\]{}<>«»"“”_*#|~^]/g, " ")
     .replace(/\s+([،؟.!,?])/g, "$1")
     .replace(/\s+/g, " ")
@@ -64,11 +85,12 @@ export class BrowserTts implements TtsEngine {
   private voice: SpeechSynthesisVoice | null = null;
   private cleanup: (() => void)[] = [];
   private lang: SpeechLang = "tn";
+  private localOnly = false;
   private repick: () => void = () => {};
 
   constructor(onVoicesChanged?: () => void) {
     if (!this.available()) return;
-    const pick = () => (this.voice = pickVoice(speechSynthesis.getVoices(), this.lang, { offline: typeof navigator !== "undefined" && navigator.onLine === false }));
+    const pick = () => (this.voice = pickVoice(speechSynthesis.getVoices(), this.lang, { offline: typeof navigator !== "undefined" && navigator.onLine === false, localOnly: this.localOnly }));
     pick();
     const repick = () => {
       pick();
@@ -102,6 +124,12 @@ export class BrowserTts implements TtsEngine {
     this.repick();
   }
 
+  setLocalOnly(on: boolean) {
+    if (on === this.localOnly) return;
+    this.localOnly = on;
+    this.repick();
+  }
+
   available() {
     return typeof window !== "undefined" && "speechSynthesis" in window;
   }
@@ -115,6 +143,8 @@ export class BrowserTts implements TtsEngine {
   speak(text: string, opts: SpeakOptions, onFailure?: (code: string) => boolean) {
     const { rate, onStart, onEnd, onError } = opts;
     if (!this.available()) return onError?.("Speech synthesis is not supported in this browser.");
+    // Without a chosen voice the browser picks one itself, possibly a network voice: not allowed then.
+    if (this.localOnly && !this.voice) return onError?.("No voice is installed on this device for this language.");
     if (opts.interrupt !== false || !speechSynthesis.speaking) speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(speechText(text, this.lang));
     u.lang = this.voice?.lang ?? LANGS[this.lang].recognition;
@@ -149,10 +179,12 @@ function exactDialect(voiceLang: string, lang: SpeechLang): boolean {
 }
 
 /** The best installed voice for a speech language, or null when there is none in that language. */
-export function pickVoice(voices: SpeechSynthesisVoice[], lang: SpeechLang, { offline = false } = {}): SpeechSynthesisVoice | null {
+export function pickVoice(voices: SpeechSynthesisVoice[], lang: SpeechLang, { offline = false, localOnly = false } = {}): SpeechSynthesisVoice | null {
   const prefs = LANGS[lang].voices;
   const base = prefs[prefs.length - 1];
   let same = voices.filter((v) => norm(v.lang).split("-")[0] === base);
+  // localOnly (Nadhra AI): installed voices only, even when that leaves none.
+  if (localOnly) same = same.filter((v) => v.localService);
   // offline: only voices installed on the device can speak
   if (offline && same.some((v) => v.localService)) same = same.filter((v) => v.localService);
   // The assistant's voice is female: among voices of the same language, a female one wins, and a
@@ -442,26 +474,37 @@ export class HybridTts implements TtsEngine {
   private browser: BrowserTts;
   private cloud: CloudTts;
   private gen = 0;
+  private localOnly = false;
+  private onChange?: () => void;
 
   constructor(onChange?: () => void, endpoint?: string) {
+    this.onChange = onChange;
     this.browser = new BrowserTts(onChange);
     this.cloud = new CloudTts(onChange, endpoint);
   }
 
+  setLocalOnly(on: boolean) {
+    if (on === this.localOnly) return;
+    this.stop();
+    this.localOnly = on;
+    this.browser.setLocalOnly(on);
+    this.onChange?.();
+  }
+
   available() {
-    return this.cloud.available() || !!this.browser.voiceInfo();
+    return (!this.localOnly && this.cloud.available()) || !!this.browser.voiceInfo();
   }
 
   voiceInfo() {
-    return (this.cloud.usable() ? this.cloud.voiceInfo() : null) ?? this.browser.voiceInfo();
+    return (!this.localOnly && this.cloud.usable() ? this.cloud.voiceInfo() : null) ?? this.browser.voiceInfo();
   }
 
   checking() {
-    return this.cloud.checking();
+    return !this.localOnly && this.cloud.checking();
   }
 
   unlock() {
-    this.cloud.unlock();
+    if (!this.localOnly) this.cloud.unlock();
   }
 
   setLanguage(lang: SpeechLang) {
@@ -471,6 +514,8 @@ export class HybridTts implements TtsEngine {
   }
 
   speak(text: string, opts: SpeakOptions) {
+    // Nadhra AI: the cloud voice is never used, not even as a fallback.
+    if (this.localOnly) return this.browser.speak(text, opts);
     if (this.cloud.checking()) {
       // Startup race: wait for the availability check, then decide.
       const gen = this.gen;

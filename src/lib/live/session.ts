@@ -212,7 +212,7 @@ export class LiveSession {
     if (!res.ok || !d?.token) {
       const code = d?.error ?? `http-${res.status}`;
       // A spent daily budget doesn't come back by retrying in a few seconds.
-      throw new TokenError(code, code !== "not-configured" && code !== "forbidden" && code !== "quota-exhausted");
+      throw new TokenError(code, code !== "not-configured" && code !== "forbidden" && code !== "quota-exhausted" && code !== "offline-mode");
     }
     return d;
   }

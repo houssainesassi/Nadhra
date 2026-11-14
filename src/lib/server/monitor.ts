@@ -36,6 +36,7 @@ export const CLIENT_EVENTS = new Set([
   "tts-failed",
   "warning-expired",
   "live-safety-claim",
+  "live-medical",
   "consent-withdrawn",
 ]);
 

@@ -6,6 +6,7 @@ import { readJsonBody } from "../../../../lib/server/http.ts";
 import { charge, checkRequest } from "../../../../lib/server/guard.ts";
 import { record } from "../../../../lib/server/monitor.ts";
 import { isSpeechLang } from "../../../../lib/assistant/lang.ts";
+import { aiMode, requestedFamily } from "../../../../lib/ai/router.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +27,9 @@ export async function POST(req: Request) {
   const body = await readJsonBody<Record<string, unknown>>(req, 4096);
   if (!body.ok) return json({ error: body.error }, body.status);
   const raw = body.value && typeof body.value === "object" ? body.value : {};
+  // The live conversation is Gemini Live: never opened for Nadhra AI.
+  if (requestedFamily(raw.provider) === "nadhra") return json({ error: "nadhra-unavailable" }, 503);
+  if (aiMode() === "offline") return json({ error: "offline-mode" }, 503);
   if (!liveStatus().configured) return json({ error: "not-configured" }, 503);
   const limited = await charge(ctx, "live");
   if (limited) return limited;

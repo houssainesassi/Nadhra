@@ -8,18 +8,19 @@ import { analyzeFrame, askStreaming, fetchVisionStatus, transcribeWav, VisionApi
 import { parseCommand, type VoiceCommand } from "./commands.ts";
 import { createCameraSource, type CameraSource, type CapturedFrame } from "./cameraSource.ts";
 import { Earcons, type Earcon } from "./earcons.ts";
-import { changedFraction, classifyQuality, frameStats, rgbaToGray, type LocalQuality } from "./frameAnalysis.ts";
+import { changedFraction, classifyQuality, frameStats, QUALITY_LIMITS, READ_BLUR_LIMIT, rgbaToGray, sharpestTile, type LocalQuality } from "./frameAnalysis.ts";
+import { documentContext, isMedicalQuestion, isReadRequest, MAX_CONTEXT_LINES, mentionsDose, readAllSegments } from "./document.ts";
 import { HazardTracker } from "./hazardTracker.ts";
 import { hazardKey, hazardUrgency, WarningGate } from "./hazards.ts";
 import { LocalDetector } from "./localDetector.ts";
 import { cameraErrorText, PHRASES, speech, warningPhrase, type Phrases } from "./phrases.ts";
 import { LANGS, questionLang, type SpeechLang } from "./lang.ts";
 import { backoffMs, decideScan } from "./scheduler.ts";
-import { flushReports, report } from "./api.ts";
+import { flushReports, report, setLocalOnly } from "./api.ts";
 import { isSafetyClaim, splitSentences } from "./schema.ts";
-import { DEFAULT_VISION_SETTINGS, hasConsent, loadVisionSettings, RATE_CHOICES, saveVisionSettings, setConsent, VOLUME_CHOICES, type VisionSettings } from "./settings.ts";
+import { DEFAULT_VISION_SETTINGS, hasConsent, providerOf, type AiProvider, hasLiveConsent, hasReadConsent, loadVisionSettings, RATE_CHOICES, saveVisionSettings, setConsent, setLiveConsent, setReadConsent, VOLUME_CHOICES, type VisionSettings } from "./settings.ts";
 import { isRepeat, SpeechQueue, type SpeechPriority } from "./speechQueue.ts";
-import type { CameraFacing, Detection, Hazard, SceneAnalysis, SceneText, VisionMode, VisionStatus } from "./types.ts";
+import type { CameraFacing, Detection, DocumentReading, Hazard, SceneAnalysis, SceneText, SpeechSegment, VisionMode, VisionStatus } from "./types.ts";
 import { RecognitionInput, RecorderInput, recognitionSupported, recordingSupported, VoiceError, type VoiceInput } from "./voiceInput.ts";
 import { LiveSession, type LiveStatus } from "../live/session.ts";
 import { LiveAudio, MicError } from "../live/audioIO.ts";
@@ -30,6 +31,29 @@ const THUMB = { width: 160, height: 120 };
 const SCAN_FRAME = { maxSide: 768, quality: 0.7 };
 const QUESTION_FRAME = { maxSide: 1280, quality: 0.82 }; // small print stays readable
 const MOTION_FRAME = { maxSide: 384, quality: 0.5 };
+/** Reading: a still photo when the phone can take one, so small print on a box stays readable. */
+const READ_FRAME = { maxSide: 1920, quality: 0.85 };
+/** The size of the on-device sharpness check before reading (see READ_BLUR_LIMIT). */
+const READ_CHECK = { width: 640, height: 480 };
+/** How long to wait for a steady, sharp frame before saying "hold still". */
+const READ_STEADY_WAIT_MS = 2_500;
+/** Questions within this time of a reading are about that document (and say so if they're not). */
+const DOCUMENT_TTL_MS = 5 * 60_000;
+/** The second frame for the independent second reading is taken this long after the first. */
+const SECOND_FRAME_DELAY_MS = 400;
+/**
+ * While a document is in front of the camera, automatic frames (scans, live) stop. They start again
+ * when the view has changed this much from it, on two ticks in a row: the paper was put away.
+ */
+const DOCUMENT_AWAY_CHANGE = 0.5;
+/** While a live conversation runs, the user is reminded this often that it is sending to Google. */
+const LIVE_REMINDER_MS = 5 * 60_000;
+/** Moving camera with automatic descriptions off: reminded that stairs and holes aren't seen, at most this often… */
+const WALKING_REMINDER_MS = 3 * 60_000;
+/** …after the camera has kept moving this long. */
+const WALKING_AFTER_MS = 4_000;
+/** "What's in front of me?" answers carry the no-guarantee sentence at most this often. */
+const FRONT_CAVEAT_MS = 5 * 60_000;
 const MOTION_FRAME_EVERY_MS = 1_000;
 /** A warning based on an older frame than this is no longer about "now". */
 const MAX_RESULT_AGE_MS = 12_000;
@@ -49,7 +73,11 @@ const LIVE_HAZARD_SCAN_MS = 8_000;
 const QUOTA_BACKOFF_MS = 15 * 60_000;
 
 export type CameraState = "off" | "starting" | "on" | "error";
-export type AnalysisState = "off" | "watching" | "analyzing" | "paused" | "unavailable" | "poor-image" | "hidden";
+/**
+ * "manual": automatic descriptions are off, so pictures go out only when the user asks.
+ * "local": Nadhra AI is selected: no picture goes anywhere, only the on-device warnings run.
+ */
+export type AnalysisState = "off" | "watching" | "manual" | "local" | "analyzing" | "paused" | "unavailable" | "poor-image" | "hidden";
 export type MicState = "off" | "listening" | "processing" | "denied" | "unavailable";
 export type DetectorState = "off" | "loading" | "ready" | "failed";
 /** The panels over the main screen. The controller owns this so voice can open and close them. */
@@ -112,6 +140,8 @@ export interface VisionState {
   answer: { text: string; live: boolean; web: boolean; lang?: SpeechLang };
   /** Live conversation: microphone and camera stream to the model, which answers by voice. */
   live: LiveState;
+  /** The notice about the live conversation was said and waits for «موافق» or a second press. */
+  liveNotice: boolean;
 }
 
 export interface LiveState {
@@ -134,6 +164,7 @@ export interface LiveState {
 const LIVE_OFF: LiveState = { status: "off", user: "", ai: "", playing: false, userTalking: false, latencyMs: null, model: "", voice: "", framesSent: 0 };
 
 const INITIAL: VisionState = {
+  liveNotice: false,
   camera: "off",
   cameraError: "",
   analysis: "off",
@@ -210,6 +241,8 @@ export class SmartVisionController {
 
   private recent: string[] = [];
   private history: { q: string; a: string }[] = [];
+  /** The language of the last answer: a follow-up too short to tell («OK», «w ba3d?») keeps it. */
+  private lastAnswerLang: SpeechLang | undefined;
   private voiceInput: VoiceInput | null = null;
   private forceRecorder = false;
   private listening = false;
@@ -221,6 +254,23 @@ export class SmartVisionController {
   private pushToTalkOpen = false;
   /** Asked for while the camera was off: runs once it is on. */
   private pendingTask: Task | null = null;
+  /** The last document read, kept in this page's memory only, for follow-up questions and "read all". */
+  private document: { reading: DocumentReading; at: number } | null = null;
+  /** Shortened by tests. */
+  private readSteadyWaitMs = READ_STEADY_WAIT_MS;
+  /** The notice that automatic descriptions are off was said in this visit. */
+  private autoNoticeSaid = false;
+  /** The notice about what Nadhra AI can do with the camera was said in this visit. */
+  private nadhraNoticeSaid = false;
+  private cameraStarts = 0;
+  private lastLiveReminderAt = 0;
+  private movingSince: number | null = null;
+  private lastWalkingReminderAt = -Infinity;
+  private lastFrontCaveatAt = -Infinity;
+  /** A reading waiting for the spoken notice about documents to be accepted («موافق»). */
+  private pendingRead: { question?: string } | null = null;
+  /** A document is in front of the camera: no automatic frame is sent until the view changes (see DOCUMENT_AWAY_CHANGE). */
+  private docHold: { gray: Uint8Array | null; away: number } | null = null;
   private locationWatch = 0;
   /** The camera was released because the page was hidden: it comes back when the user does. */
   private resumeOnReturn = false;
@@ -263,9 +313,49 @@ export class SmartVisionController {
     return speech(this.lang);
   }
 
+  /** Nadhra AI is selected: nothing may leave the device, and features it can't do yet are refused. */
+  private get nadhra(): boolean {
+    return providerOf(this.state.settings) === "nadhra";
+  }
+
+  /** Nadhra AI can't do this yet: said out loud, with how to get it. Nothing is sent, nor handed to Gemini. */
+  private refuseNadhra(lang: SpeechLang = this.lang) {
+    const t = speech(lang);
+    this.feedback("error");
+    this.queue?.stop();
+    this.liveAudio?.flush();
+    this.say(`${t.nadhra.unavailable} ${t.nadhra.needsGemini}`, "answer", lang);
+  }
+
+  /** Puts the page's network guard and the voice in line with the chosen AI. */
+  private applyProvider(provider: AiProvider) {
+    const local = provider === "nadhra";
+    setLocalOnly(local);
+    this.tts?.setLocalOnly?.(local);
+    this.patch({ voice: this.tts?.voiceInfo() ?? null });
+  }
+
   /** Offline: only claims that on-device warnings work when the detector is actually running. */
   private get offlineText(): string {
     return this.state.detector === "ready" ? this.t.offline : this.t.analysisDown;
+  }
+
+  /** Why a question or reading failed, in words. offline-mode / no-internet come from the server's AI_MODE routing. */
+  private failureText(err: VisionApiError | null, t: Phrases): string {
+    const detectorOn = this.state.detector === "ready";
+    switch (err?.code) {
+      case "offline-mode":
+        return t.offlineMode;
+      case "no-internet":
+        return detectorOn ? t.offline : t.analysisDown;
+      case "not-configured":
+        return t.aiNotConfigured;
+      case "quota-exhausted":
+        return t.quotaExhausted;
+      case "nadhra-unavailable":
+        return `${t.nadhra.unavailable} ${t.nadhra.needsGemini}`;
+    }
+    return err?.status === 429 || err?.code === "rate-limited" ? t.rateLimited : t.questionFailed;
   }
 
   /** A tone, and a vibration where the device has one and the user hasn't turned it off. */
@@ -322,6 +412,8 @@ export class SmartVisionController {
     const settings = loadVisionSettings();
     this.tts.setLanguage?.(settings.language);
     this.patch({ settings, voice: this.tts.voiceInfo(), online: navigator.onLine !== false, consentGiven: hasConsent() });
+    // Before anything can be sent: Nadhra AI chosen on an earlier visit closes the network at once.
+    this.applyProvider(providerOf(settings));
     void fetchVisionStatus().then((status) => this.patch({ status }));
 
     // A lost connection stops the cloud analysis: the user must know, and frames aren't sent for nothing.
@@ -429,7 +521,8 @@ export class SmartVisionController {
   async startCamera(quiet = false) {
     this.unlockAudio();
     if (!this.video || this.state.camera === "on" || this.state.camera === "starting") return;
-    if (!hasConsent()) {
+    // The notice is about sending pictures to Google: with Nadhra AI nothing is sent, so it isn't asked.
+    if (!this.nadhra && !hasConsent()) {
       this.patch({ needsConsent: true, sheet: "none" });
       this.say(this.t.privacy, "answer");
       return;
@@ -461,9 +554,21 @@ export class SmartVisionController {
     this.source = source;
     this.paused = false;
     this.resetAnalysisState();
-    this.patch({ camera: "on", analysis: "watching", facing: this.resolveFacing(), canSwitchCamera: false });
+    this.patch({ camera: "on", analysis: this.idleAnalysis(), facing: this.resolveFacing(), canSwitchCamera: false });
     this.feedback("on");
     if (!quiet) this.say(this.t.cameraOn, "status");
+    // Nadhra AI: once per visit, what works (on-device warnings only) and that nothing is sent.
+    if (!quiet && this.nadhra) {
+      if (!this.nadhraNoticeSaid) this.say(this.t.nadhra.cameraNotice, "status");
+      this.nadhraNoticeSaid = true;
+    }
+    // Once per visit: what "off" means, including that stairs and drops aren't detected then.
+    else if (!quiet && !this.state.settings.autoDescribe && !this.autoNoticeSaid) {
+      this.autoNoticeSaid = true;
+      this.say(this.t.autoOffNotice, "status");
+    }
+    // The first start of a visit hears the safety notice (which says so); later starts a short reminder.
+    if (!quiet && ++this.cameraStarts > 1) this.say(this.t.noGuarantee, "status");
     // The user came to hear what's in front of them, so the notice follows the first description,
     // but is never skipped if that description doesn't come.
     this.disclaimerDueAt = Date.now() + DISCLAIMER_LATEST_MS;
@@ -515,6 +620,7 @@ export class SmartVisionController {
     if (this.state.assistantOn || this.liveSession) return;
     if (!this.pickVoiceInput()) {
       this.patch({ mic: "unavailable" });
+      if (this.nadhra) this.say(this.t.nadhra.noVoice, "status");
       return;
     }
     this.patch({ assistantOn: true });
@@ -561,6 +667,12 @@ export class SmartVisionController {
     setConsent(false);
     this.patch({ consentGiven: false });
     this.history = [];
+    this.lastAnswerLang = undefined;
+    this.document = null;
+    this.pendingRead = null;
+    setReadConsent(false);
+    setLiveConsent(false);
+    this.patch({ liveNotice: false });
     this.recent = [];
     report("consent-withdrawn");
     this.queue?.stop();
@@ -579,6 +691,7 @@ export class SmartVisionController {
 
   private releaseCamera() {
     this.session++;
+    this.docHold = null;
     this.pendingTask = null; // asked for before a camera that was then stopped: not for the next one
     if (this.tickTimer) clearInterval(this.tickTimer);
     this.tickTimer = null;
@@ -654,6 +767,28 @@ export class SmartVisionController {
 
   // --- scheduled analysis ---------------------------------------------------------------------
 
+  /**
+   * The camera keeps moving (the user is probably walking) while nothing looks for stairs or holes:
+   * automatic descriptions off or paused, and no live conversation. Said at most every few minutes.
+   */
+  private remindWhileMoving(now: number) {
+    const unwatched = (!this.state.settings.autoDescribe || this.paused || this.nadhra) && !this.liveSession;
+    if (!unwatched || this.motion <= CAMERA_MOVING_FRACTION) {
+      this.movingSince = null;
+      return;
+    }
+    this.movingSince ??= now;
+    if (now - this.movingSince < WALKING_AFTER_MS || now - this.lastWalkingReminderAt < WALKING_REMINDER_MS) return;
+    this.lastWalkingReminderAt = now;
+    this.say(this.nadhra ? this.t.nadhra.cameraNotice : this.t.walkingNoScan, "status");
+  }
+
+  /** The state between analyses: describing automatically, or only when asked. */
+  private idleAnalysis(): AnalysisState {
+    if (this.nadhra) return "local";
+    return this.state.settings.autoDescribe ? "watching" : "manual";
+  }
+
   pause() {
     this.unlockAudio();
     if (this.state.camera !== "on" || this.paused) return;
@@ -672,9 +807,9 @@ export class SmartVisionController {
     this.paused = false;
     this.lastScanAt = -Infinity; // describe the scene right away
     this.backoffUntil = 0;
-    this.patch({ analysis: "watching" });
+    this.patch({ analysis: this.idleAnalysis() });
     this.feedback("on");
-    this.say(this.t.resumed, "status");
+    this.say(this.nadhra ? this.t.nadhra.cameraNotice : this.state.settings.autoDescribe ? this.t.resumed : this.t.autoOffHint, "status");
   }
 
   get isPaused() {
@@ -697,23 +832,31 @@ export class SmartVisionController {
     // Measured while paused too: the on-device warnings need to know whether the camera is moving.
     this.motion = this.lastGray ? changedFraction(this.lastGray, gray) : 0;
     this.lastGray = gray;
+    this.remindWhileMoving(now);
+    if (this.liveSession?.isOpen && now - this.lastLiveReminderAt >= LIVE_REMINDER_MS) {
+      this.lastLiveReminderAt = now;
+      this.say(this.t.liveReminder, "status");
+    }
     if (this.paused) return;
     this.blurSince = quality === "blurry" ? (this.blurSince ?? now) : null;
     this.trackQuality(quality, now);
 
     const live = !!this.liveSession;
+    if (this.documentHeld(gray)) return; // no automatic frame of a document, scan or live
     if (live) this.liveFrameTick(gray, now);
 
     // The older frame sent with a request: the only evidence allowed for motion claims.
-    // Offline nothing can be sent, so it isn't encoded either.
+    // Offline (or with Nadhra AI) nothing can be sent, so it isn't encoded either.
     const newestMotion = this.motionFrames[this.motionFrames.length - 1];
-    if (this.state.online && (!newestMotion || now - newestMotion.at >= MOTION_FRAME_EVERY_MS)) {
+    if (this.state.online && !this.nadhra && (!newestMotion || now - newestMotion.at >= MOTION_FRAME_EVERY_MS)) {
       const frame = source.capture(MOTION_FRAME.maxSide, MOTION_FRAME.quality);
       if (frame) this.motionFrames.push(frame);
       if (this.motionFrames.length > 3) this.motionFrames.shift();
     }
 
-    const decision = decideScan({
+    // Automatic descriptions off (the default): no picture leaves the phone unless the user asks.
+    // Nadhra AI: never; it has no scene analysis yet, and no picture may leave the device.
+    const decision = !this.state.settings.autoDescribe || this.nadhra ? { send: false } : decideScan({
       now,
       lastScanAt: this.lastScanAt,
       changed: this.lastScanGray ? changedFraction(this.lastScanGray, gray) : 1,
@@ -729,7 +872,7 @@ export class SmartVisionController {
       ...(live ? { minIntervalMs: LIVE_HAZARD_SCAN_MS } : {}),
     });
     if (decision.send) void this.scan(gray);
-    else if (this.state.analysis === "hidden") this.patch({ analysis: "watching" });
+    else if (this.state.analysis === "hidden") this.patch({ analysis: this.idleAnalysis() });
 
     // A long silence shouldn't feel like the assistant has died: a soft tone says it's still running.
     // (A live conversation has its own voice.)
@@ -744,7 +887,7 @@ export class SmartVisionController {
     if (!poor) {
       if (this.poorQuality?.announced) {
         this.say(this.t.imageBack, "status");
-        this.patch({ analysis: "watching" });
+        this.patch({ analysis: this.idleAnalysis() });
       }
       this.poorQuality = null;
       return;
@@ -789,13 +932,15 @@ export class SmartVisionController {
       this.unchangedStreak = res.analysis.changed ? 0 : this.unchangedStreak + 1;
       // Too old to be about "now". Better to say nothing than warn about where things used to be.
       if (Date.now() - frame.at <= MAX_RESULT_AGE_MS) this.applyAnalysis(res.analysis, "scan");
+      // A paper or a medicine box was in that frame: no more automatic frames until it is put away.
+      if (res.analysis.documentInView) this.holdDocument(this.source, true);
     } catch (e) {
       if (session !== this.session || ctrl.signal.aborted) return;
       this.onScanFailure(e);
     } finally {
       if (this.scanCtrl === ctrl) this.scanCtrl = null;
       if (session === this.session && !this.paused && !this.questionCtrl && this.state.analysis === "analyzing") {
-        this.patch({ analysis: this.failures >= FAILURES_BEFORE_ANNOUNCE ? "unavailable" : "watching" });
+        this.patch({ analysis: this.failures >= FAILURES_BEFORE_ANNOUNCE ? "unavailable" : this.idleAnalysis() });
       }
     }
   }
@@ -815,9 +960,17 @@ export class SmartVisionController {
     this.failures++;
     this.backoffUntil = Date.now() + backoffMs(this.failures, err.retryAfterMs);
     if (this.failures === FAILURES_BEFORE_ANNOUNCE || err.code === "quota-exhausted") report("scan-failed", err.code);
-    if (err.code === "not-configured") {
+    if (err.code === "not-configured" || err.code === "offline-mode" || err.code === "nadhra-unavailable") {
+      // Neither changes by itself: scans wait, and the reason is said once.
       this.backoffUntil = Date.now() + 5 * 60_000;
-      if (!this.downAnnounced) this.say(this.t.aiNotConfigured, "answer");
+      if (!this.downAnnounced) this.say(this.failureText(err, this.t), "answer");
+      this.downAnnounced = true;
+    } else if (err.code === "no-internet") {
+      this.backoffUntil = Date.now() + 60_000;
+      if (!this.downAnnounced) {
+        this.feedback("error");
+        this.say(this.offlineText, "answer");
+      }
       this.downAnnounced = true;
     } else if (err.code === "quota-exhausted") {
       this.backoffUntil = Date.now() + Math.max(QUOTA_BACKOFF_MS, err.retryAfterMs);
@@ -848,7 +1001,7 @@ export class SmartVisionController {
     // Scans keep running during a reading, for their warnings. Their description would only wait
     // behind the reading and be stale by then, so it is dropped.
     if (this.queue?.hasAtLeast("answer")) return;
-    if (this.state.settings.narration && analysis.changed && analysis.spoken && !isRepeat(analysis.spoken, this.recent)) {
+    if (this.state.settings.autoDescribe && analysis.changed && analysis.spoken && !isRepeat(analysis.spoken, this.recent)) {
       this.say(analysis.spoken, "narration");
     }
   }
@@ -933,10 +1086,26 @@ export class SmartVisionController {
    * questions), and a question about the surroundings asks for the camera. The answer is spoken
    * sentence by sentence as it arrives. A newer question cancels this one, here and on the server.
    */
-  async ask(question: string) {
+  async ask(question: string, opts: { plain?: boolean; caveat?: boolean } = {}): Promise<void> {
     this.unlockAudio();
     const q = question.trim();
     if (!q) return;
+    // Nadhra AI has no question answering yet: refused out loud, never sent to Gemini instead.
+    if (this.nadhra) return this.refuseNadhra(questionLang(q, this.lang, this.lastAnswerLang));
+    // Medicines and doses: never an ordinary answer, never the live model. Read under the reading
+    // rules when there is a picture or a document, otherwise declined.
+    if (isMedicalQuestion(q)) {
+      if (!opts.plain && ((this.state.camera === "on" && this.source) || this.activeDocument())) return this.readDocument(q);
+      const lang = questionLang(q, this.lang, this.lastAnswerLang);
+      this.queue?.stop();
+      this.liveAudio?.flush();
+      this.say(speech(lang).doc.medicalDeclined, "answer", lang);
+      return;
+    }
+    // A question about the document just read, or a request to read: answered from the text itself.
+    if (!opts.plain && !this.liveSession?.isOpen) {
+      if (this.activeDocument() || (isReadRequest(q) && this.state.camera === "on")) return this.readDocument(q);
+    }
     // In a live conversation the question goes into it, with a fresh view of the camera.
     if (this.liveSession?.isOpen) {
       this.queue?.stop();
@@ -949,7 +1118,7 @@ export class SmartVisionController {
       return;
     }
     // Answered in the language it was asked in, when that is clearly one the assistant speaks.
-    const lang = questionLang(q, this.lang);
+    const lang = questionLang(q, this.lang, this.lastAnswerLang);
     const t = speech(lang);
     const source = this.source;
     const cameraOn = !!source && this.state.camera === "on";
@@ -998,8 +1167,14 @@ export class SmartVisionController {
         return;
       }
       this.applyAnalysis(res.analysis, frame ? "question" : "chat", res.rest, lang);
+      // "What's in front of me?" can sound like "nothing dangerous is there": once in a while, it can't promise that.
+      if (opts.caveat && Date.now() - this.lastFrontCaveatAt >= FRONT_CAVEAT_MS) {
+        this.lastFrontCaveatAt = Date.now();
+        this.say(t.noGuarantee, "answer", lang);
+      }
       this.patch({ answer: { text: res.analysis.spoken, live: false, web: !!res.analysis.usedWeb, lang } });
       this.history = [...this.history, { q, a: res.analysis.spoken }].slice(-3);
+      this.lastAnswerLang = lang;
     } catch (e) {
       if (!current()) return;
       this.feedback("error");
@@ -1012,15 +1187,235 @@ export class SmartVisionController {
       }
       report("question-failed", err?.code ?? "unknown");
       this.say(
-        err?.code === "not-configured" ? t.aiNotConfigured : err?.code === "quota-exhausted" ? t.quotaExhausted : err?.status === 429 || err?.code === "rate-limited" ? t.rateLimited : t.questionFailed,
+        this.failureText(err, t),
         "answer",
         lang,
       );
     } finally {
       if (this.questionCtrl === ctrl) this.questionCtrl = null;
       if (this.state.answer.live && this.questionCtrl === null) this.patch({ answer: { ...this.state.answer, live: false } });
-      if (session === this.session && this.state.analysis === "analyzing") this.patch({ analysis: this.paused ? "paused" : "watching" });
+      if (session === this.session && this.state.analysis === "analyzing") this.patch({ analysis: this.paused ? "paused" : this.idleAnalysis() });
     }
+  }
+
+  // --- reading documents ---------------------------------------------------------------------------
+
+  /** The document read in the last few minutes, if any. */
+  private activeDocument(): DocumentReading | null {
+    if (!this.document || Date.now() - this.document.at > DOCUMENT_TTL_MS) return (this.document = null);
+    return this.document.reading;
+  }
+
+  /**
+   * Reads the document or package in front of the camera (medicine, prescription, bill, letter), or
+   * answers `question` about it. Too dark or too blurred a picture is refused on the device, before
+   * anything is sent. What is said comes from the server already checked and labelled (document.ts):
+   * text from the paper in its own language's voice, the assistant's words in the user's.
+   */
+  async readDocument(question?: string): Promise<void> {
+    this.unlockAudio();
+    const lang = question ? questionLang(question, this.lang, this.lastAnswerLang) : this.lang;
+    // Nadhra AI has no reader yet: nothing is captured or sent, and the reading rules below are untouched.
+    if (this.nadhra) return this.refuseNadhra(lang);
+    const t = speech(lang);
+    const known = question ? this.activeDocument() : null;
+    const source = this.source;
+    const cameraOn = !!source && this.state.camera === "on";
+    if (!cameraOn && !known) {
+      if (question) return this.ask(question, { plain: true }); // answered without a picture, as before
+      return this.runTask("read");
+    }
+    if (!this.state.online) {
+      this.feedback("error");
+      this.say(this.t.analysisDown, "answer");
+      return;
+    }
+    // Before the first document leaves the phone: who gets it, what Google may do with it on the
+    // free service, and that real prescriptions don't belong in this test version. Spoken «موافق».
+    if (!hasReadConsent()) {
+      this.pendingRead = { question };
+      this.queue?.stop();
+      this.liveAudio?.flush();
+      this.say(t.doc.notice, "answer", lang);
+      return;
+    }
+    // In a live conversation the reading comes from here, checked, not from the live model.
+    if (this.liveSession) {
+      this.liveMuted = true;
+      this.liveAudio?.flush();
+    }
+    this.scanCtrl?.abort();
+    this.questionCtrl?.abort();
+    const ctrl = new AbortController();
+    const session = this.session;
+    this.questionCtrl = ctrl;
+    const current = () => session === this.session && !ctrl.signal.aborted;
+    this.queue?.stop();
+    this.say(t.doc.reading, "narration", lang);
+    this.patch({ answer: { text: "", live: true, web: false, lang } });
+    try {
+      let image: string | undefined;
+      let secondImage: string | undefined;
+      if (cameraOn) {
+        this.holdDocument(source);
+        const check = await this.waitForReadableFrame(source, current);
+        if (!current()) return;
+        // A follow-up can still be answered from the text read before.
+        if (check !== "ok" && !known) {
+          this.feedback("error");
+          this.queue?.stop();
+          this.say(check === "dark" ? t.doc.tooDark : `${t.doc.unreadable} ${t.doc.tip.blurry}`, "answer", lang);
+          this.patch({ answer: { text: "", live: false, web: false, lang } });
+          return;
+        }
+        if (check === "ok") {
+          const frame = (await source.captureStill?.(READ_FRAME.maxSide, READ_FRAME.quality)) ?? source.capture(READ_FRAME.maxSide, READ_FRAME.quality);
+          if (!current()) return;
+          image = frame?.base64;
+          if (frame) this.lastScanAt = frame.at;
+          // A second frame a moment later, for the independent second reading of doses and dates.
+          await sleep(SECOND_FRAME_DELAY_MS);
+          if (!current()) return;
+          secondImage = image ? source.capture(READ_FRAME.maxSide, READ_FRAME.quality)?.base64 : undefined;
+        }
+        if (!image && !known) {
+          this.say(t.questionFailed, "answer", lang);
+          return;
+        }
+        this.patch({ analysis: "analyzing", scansSent: this.state.scansSent + (image ? 1 : 0) });
+      }
+      const body = { mode: "read" as const, image, secondImage, cameraFacing: this.state.facing, lang, question, ...(known ? { document: documentContext(known) } : {}) };
+      let res;
+      try {
+        res = await analyzeFrame(body, ctrl.signal);
+      } catch (e) {
+        // A dropped connection before any answer: the reading is still wanted, so it is sent once more.
+        if (!(e instanceof VisionApiError && e.code === "network") || !current() || navigator.onLine === false) throw e;
+        await sleep(600);
+        if (!current()) return;
+        res = await analyzeFrame(body, ctrl.signal);
+      }
+      if (!current()) return;
+      const doc = res.analysis.document;
+      this.patch({ lastLatencyMs: res.latencyMs });
+      if (!doc) throw new VisionApiError(0, "ai-unavailable");
+      if (doc.notAboutDocument && question) {
+        // Not about the paper: an ordinary question. The paper stays available for later questions.
+        if (this.questionCtrl === ctrl) this.questionCtrl = null;
+        return this.ask(question, { plain: true });
+      }
+      this.queue?.stop(); // the "reading…" notice
+      this.speakSegments(doc.segments, lang);
+      this.patch({ texts: res.analysis.texts, answer: { text: res.analysis.spoken, live: false, web: false, lang } });
+      // Not added to the conversation history: what a paper says isn't sent along with later,
+      // unrelated questions. Follow-ups about it carry its text on purpose (documentContext).
+      this.rememberDocument(doc, known);
+    } catch (e) {
+      if (!current()) return;
+      this.feedback("error");
+      const err = e instanceof VisionApiError ? e : null;
+      this.patch({ answer: { text: "", live: false, web: false, lang } });
+      report("question-failed", err?.code ?? "unknown");
+      this.queue?.stop();
+      this.say(
+        this.failureText(err, t),
+        "answer",
+        lang,
+      );
+    } finally {
+      if (this.questionCtrl === ctrl) this.questionCtrl = null;
+      if (session === this.session && this.state.analysis === "analyzing") this.patch({ analysis: this.paused ? "paused" : this.idleAnalysis() });
+    }
+  }
+
+  /** «موافق» to the notice about documents: remembered, and the waiting reading goes ahead. */
+  private acceptReadNotice() {
+    const pending = this.pendingRead;
+    this.pendingRead = null;
+    setReadConsent(true);
+    void this.readDocument(pending?.question);
+  }
+
+  /** A document is (or was just) in front of the camera: automatic frames stop until it is put away. */
+  private holdDocument(source: CameraSource | null, announce = false) {
+    const thumb = source?.thumbnail(THUMB.width, THUMB.height);
+    const first = !this.docHold;
+    this.docHold = { gray: thumb ? rgbaToGray(thumb.rgba) : this.lastGray, away: 0 };
+    this.scanCtrl?.abort();
+    if (announce && first) this.say(this.t.doc.inView, "status");
+  }
+
+  /** True while automatic frames are held for a document; releases the hold once the view has clearly moved on. */
+  private documentHeld(gray: Uint8Array): boolean {
+    const hold = this.docHold;
+    if (!hold) return false;
+    if (!hold.gray) {
+      hold.gray = gray;
+      return true;
+    }
+    hold.away = changedFraction(hold.gray, gray) > DOCUMENT_AWAY_CHANGE ? hold.away + 1 : 0;
+    if (hold.away < 2) return true;
+    this.docHold = null;
+    return false;
+  }
+
+  /**
+   * Waits for a frame that is bright and sharp enough to read, for up to READ_STEADY_WAIT_MS. The
+   * thumbnail used for scene checks is too small to see blurred print, so this looks at 640 × 480.
+   */
+  private async waitForReadableFrame(source: CameraSource, current: () => boolean): Promise<"ok" | "dark" | "blurry"> {
+    const until = Date.now() + this.readSteadyWaitMs;
+    let last: "dark" | "blurry" = "blurry";
+    while (current()) {
+      const frame = source.thumbnail(READ_CHECK.width, READ_CHECK.height);
+      if (frame) {
+        const gray = rgbaToGray(frame.rgba);
+        const stats = frameStats(gray, frame.width, frame.height);
+        if (stats.meanLuma < QUALITY_LIMITS.dark) last = "dark";
+        else if (sharpestTile(gray, frame.width, frame.height) < READ_BLUR_LIMIT) last = "blurry";
+        else return "ok";
+      }
+      if (Date.now() >= until) return last;
+      await sleep(250);
+    }
+    return last;
+  }
+
+  /** Each part in its voice: the paper's text in its own language, the rest in the user's. */
+  private speakSegments(segments: SpeechSegment[], lang: SpeechLang) {
+    for (const seg of segments) this.say(seg.text, "answer", seg.lang ?? lang);
+  }
+
+  /**
+   * Keeps the document for follow-up questions. A follow-up that showed more of the same paper adds
+   * its new lines; a new reading replaces it. Nothing readable: the earlier one stays.
+   */
+  private rememberDocument(doc: DocumentReading, known: DocumentReading | null) {
+    const readable = documentContext(doc).lines;
+    if (!known) {
+      if (readable.length) this.document = { reading: doc, at: Date.now() };
+      return;
+    }
+    const seen = new Set(documentContext(known).lines);
+    const added = doc.lines.filter((l) => readable.includes(l.text) && !seen.has(l.text));
+    const lines = [...known.lines, ...added].slice(0, MAX_CONTEXT_LINES * 2);
+    this.document = { reading: { ...known, lines }, at: Date.now() };
+  }
+
+  /** "Read all": the whole text of the last document, from memory. No new picture is taken. */
+  readAll() {
+    this.unlockAudio();
+    const doc = this.activeDocument();
+    if (!doc) {
+      if (this.state.camera === "on") return void this.readDocument();
+      this.queue?.stop();
+      return this.say(this.t.doc.nothingRead, "answer");
+    }
+    this.queue?.stop();
+    const segments = readAllSegments(doc, this.lang);
+    this.speakSegments(segments, this.lang);
+    this.patch({ answer: { text: segments.map((x) => x.text).join(" "), live: false, web: false, lang: this.lang } });
+    this.document = { reading: doc, at: Date.now() };
   }
 
   stopSpeech() {
@@ -1038,9 +1433,10 @@ export class SmartVisionController {
   // --- tasks, help, going back --------------------------------------------------------------------
 
   /** One of the main actions. Starts the camera first when it is off, then asks. */
-  async runTask(task: Task) {
+  async runTask(task: Task): Promise<void> {
     this.unlockAudio();
-    if (this.state.camera === "on") return this.ask(this.t.ask[task]);
+    if (this.nadhra) return this.refuseNadhra(); // not even the camera is started for it
+    if (this.state.camera === "on") return task === "read" ? this.readDocument() : this.ask(this.t.ask[task], { plain: true, caveat: task === "front" || task === "describe" });
     this.pendingTask = task;
     if (this.state.camera !== "starting") await this.startCamera();
   }
@@ -1050,7 +1446,9 @@ export class SmartVisionController {
     const until = Date.now() + CAMERA_READY_WAIT_MS;
     while (session === this.session && !this.source?.capture(64, 0.5) && Date.now() < until) await sleep(150);
     if (session === this.session) await sleep(CAMERA_SETTLE_MS);
-    if (session === this.session) await this.ask(this.t.ask[task]);
+    if (session !== this.session) return;
+    if (task === "read") await this.readDocument();
+    else await this.ask(this.t.ask[task], { plain: true, caveat: task === "front" || task === "describe" });
   }
 
   help() {
@@ -1062,6 +1460,18 @@ export class SmartVisionController {
   /** Closes the open panel, or cancels the question being answered, or stops the voice. */
   goBack() {
     this.unlockAudio();
+    if (this.state.liveNotice) {
+      this.patch({ liveNotice: false });
+      this.queue?.stop();
+      this.say(this.t.liveNoticeRefused, "status");
+      return;
+    }
+    if (this.pendingRead) {
+      this.pendingRead = null;
+      this.queue?.stop();
+      this.say(this.t.doc.noticeRefused, "status");
+      return;
+    }
     if (this.state.sheet !== "none") {
       this.closeSheet();
       this.queue?.stop();
@@ -1153,7 +1563,13 @@ export class SmartVisionController {
   // --- voice input -----------------------------------------------------------------------------
 
   private pickVoiceInput(): VoiceInput | null {
-    const wantRecorder = this.forceRecorder || !recognitionSupported();
+    // Nadhra AI: the browser's recognition sends the voice to Google, and recordings would go to the
+    // server; neither is allowed. No local recogniser is connected yet.
+    if (this.nadhra) return null;
+    // Offline mode: the browser's speech recognition is a cloud service (Chrome sends the audio to
+    // Google), so it is never used. Recording goes to the server, which transcribes only with an
+    // engine on the device, and otherwise says that this needs the internet.
+    const wantRecorder = this.forceRecorder || !recognitionSupported() || this.state.status?.mode === "offline";
     if (!wantRecorder) {
       if (this.voiceInput?.kind !== "recognition") this.voiceInput = new RecognitionInput(() => LANGS[this.lang].recognition);
     } else if (recordingSupported() && this.state.status?.canTranscribe) {
@@ -1187,7 +1603,7 @@ export class SmartVisionController {
     if (!this.pickVoiceInput()) {
       this.patch({ mic: "unavailable" });
       this.feedback("error");
-      this.say(this.t.voiceUnavailable, "answer");
+      this.say(this.nadhra ? this.t.nadhra.noVoice : this.t.voiceUnavailable, "answer");
       return;
     }
     this.patch({ assistantOn: true });
@@ -1239,7 +1655,7 @@ export class SmartVisionController {
     const input = this.pickVoiceInput();
     if (!input) {
       this.patch({ mic: "unavailable" });
-      if (pushToTalk) this.say(this.t.voiceUnavailable, "answer");
+      if (pushToTalk) this.say(this.nadhra ? this.t.nadhra.noVoice : this.t.voiceUnavailable, "answer");
       return;
     }
     this.listening = true;
@@ -1317,7 +1733,7 @@ export class SmartVisionController {
     }
     if (code === "api") {
       this.patch({ mic: "off" });
-      if (pushToTalk || !this.queue?.busy) this.say(this.t.questionFailed, "answer");
+      if (pushToTalk || !this.queue?.busy) this.say(this.failureText(e as VisionApiError, this.t), "answer");
       return;
     }
     if (code === "unknown") {
@@ -1359,6 +1775,12 @@ export class SmartVisionController {
       case "read":
       case "identify":
         return (void this.runTask(command), true);
+      case "read-all": return (this.readAll(), true);
+      case "auto-on": return (this.updateSettings({ autoDescribe: true }), true);
+      case "auto-off": return (this.updateSettings({ autoDescribe: false }), true);
+      case "live-off":
+        if (this.state.liveNotice) return (this.goBack(), true);
+        return (this.stopLive(), true);
       case "emergency": return (this.openSheet("emergency"), true);
       case "call": return (this.requestCall(), true);
       case "louder": return (this.step("volume", 1), true);
@@ -1366,6 +1788,8 @@ export class SmartVisionController {
       case "faster": return (this.step("rate", 1), true);
       case "slower": return (this.step("rate", -1), true);
       case "yes":
+        if (this.pendingRead) return (this.acceptReadNotice(), true);
+        if (this.state.liveNotice) return (void this.startLive(), true);
         // Otherwise a follow-up («yes, read it») for the model.
         if (!this.state.needsConsent) return false;
         this.acceptConsent();
@@ -1391,11 +1815,29 @@ export class SmartVisionController {
   async startLive() {
     this.unlockAudio();
     if (this.liveSession) return;
+    // The live conversation is Gemini Live: never opened while Nadhra AI is selected.
+    if (this.nadhra) {
+      this.pendingLive = false;
+      this.patch({ liveNotice: false });
+      return this.refuseNadhra();
+    }
     if (!hasConsent()) {
       this.pendingLive = true;
       this.patch({ needsConsent: true, sheet: "none" });
       this.say(this.t.privacy, "answer");
       return;
+    }
+    // Its own consent: voice and a picture a second go to Google for as long as it runs. Nothing is
+    // sent before «موافق» or a second press of the button.
+    if (!hasLiveConsent()) {
+      if (!this.state.liveNotice) {
+        this.patch({ liveNotice: true });
+        this.queue?.stop();
+        this.say(this.t.liveNotice, "answer");
+        return;
+      }
+      setLiveConsent(true);
+      this.patch({ liveNotice: false });
     }
     let audio: LiveAudio;
     try {
@@ -1446,6 +1888,7 @@ export class SmartVisionController {
         this.liveNewUserTurn = false;
         this.liveNewAnswer = true;
         this.patch({ live: { ...this.state.live, user }, lastHeard: user });
+        this.checkLiveStop(user);
       },
       aiText: (piece) => {
         if (gen !== this.liveGen) return;
@@ -1511,6 +1954,18 @@ export class SmartVisionController {
     }
   }
 
+  /**
+   * "Stop" in a live conversation acts as soon as it is heard, on the partial transcript of the
+   * user's words: no more voice or pictures are sent. Not when the model starts answering.
+   */
+  private checkLiveStop(user: string): boolean {
+    const stop = parseCommand(user);
+    if (stop !== "live-off" && stop !== "assistant-off" && stop !== "camera-off") return false;
+    this.stopLive();
+    if (stop === "camera-off") this.stopCamera();
+    return true;
+  }
+
   /** The first sound or word of a new live answer. */
   private startLiveAnswer() {
     this.liveNewAnswer = false;
@@ -1538,9 +1993,30 @@ export class SmartVisionController {
       }
       return true;
     }
-    if (command === "assistant-off" || command === "camera-off") {
+    if (command === "assistant-off" || command === "camera-off" || command === "live-off") {
       this.stopLive();
       if (command === "camera-off") this.stopCamera();
+      return true;
+    }
+    // The answer to the notice about documents, said during a live conversation.
+    if (this.pendingRead && (command === "yes" || command === "back")) {
+      this.liveMuted = true;
+      this.liveAudio?.flush();
+      if (command === "yes") this.acceptReadNotice();
+      else this.goBack();
+      return true;
+    }
+    // Reading, and anything about medicines, is not left to the live model: its answer is cut and
+    // the checked reading (or the refusal) is said instead.
+    const user = this.state.live.user;
+    if (command === "read" || command === "read-all" || isMedicalQuestion(user)) {
+      this.liveMuted = true;
+      this.liveAudio?.flush();
+      report("live-medical");
+      if (command === "read-all") this.readAll();
+      else if (command === "read") void this.readDocument();
+      else if (this.state.camera === "on" || this.activeDocument()) void this.readDocument(user);
+      else this.say(this.t.doc.liveMedical, "answer");
       return true;
     }
     return false;
@@ -1559,7 +2035,16 @@ export class SmartVisionController {
     if (end <= this.liveCheckedChars) return;
     const fresh = ai.slice(this.liveCheckedChars, end);
     this.liveCheckedChars = end;
-    if (!splitSentences(fresh).some(isSafetyClaim)) return;
+    const sentences = splitSentences(fresh);
+    // A dose from the live model is cut like a promise of safety: it was never checked.
+    if (sentences.some(mentionsDose)) {
+      this.liveMuted = true;
+      this.liveAudio?.flush();
+      report("live-medical");
+      this.say(this.t.doc.liveMedical, "warning");
+      return;
+    }
+    if (!sentences.some(isSafetyClaim)) return;
     this.liveMuted = true;
     this.liveAudio?.flush();
     report("live-safety-claim");
@@ -1576,6 +2061,7 @@ export class SmartVisionController {
       this.sendLiveFrame(true);
       if (before === "connecting") {
         this.feedback("on");
+        this.lastLiveReminderAt = Date.now();
         this.say(this.t.liveOn, "status");
       } else if (before === "reconnecting") {
         this.say(this.t.liveBack, "status");
@@ -1592,7 +2078,7 @@ export class SmartVisionController {
       report("live-failed", detail && /^[a-z0-9-]{1,40}$/.test(detail) ? detail : "other");
       this.stopLive(true);
       this.feedback("error");
-      this.say(detail === "quota-exhausted" ? this.t.quotaExhausted : this.t.liveFailed, "answer");
+      this.say(detail === "quota-exhausted" ? this.t.quotaExhausted : detail === "offline-mode" ? this.t.offlineMode : this.t.liveFailed, "answer");
     }
   }
 
@@ -1629,7 +2115,7 @@ export class SmartVisionController {
   private sendLiveFrame(force: boolean): boolean {
     const session = this.liveSession;
     const source = this.source;
-    if (!session?.isOpen || !source || this.state.camera !== "on" || document.hidden) return false;
+    if (!session?.isOpen || !source || this.state.camera !== "on" || document.hidden || this.docHold) return false;
     const now = Date.now();
     if (now - this.lastLiveFrameAt < (force ? LIVE_SPEECH_FRAME_GAP_MS : LIVE_MIN_FRAME_GAP_MS / 2)) return false;
     const frame = source.capture(LIVE_FRAME.maxSide, LIVE_FRAME.quality);
@@ -1643,13 +2129,26 @@ export class SmartVisionController {
 
   updateSettings(p: Partial<VisionSettings>) {
     const before = this.state.settings;
+    // Automatic descriptions are a Gemini feature: with Nadhra AI they can't be turned on (said why).
+    if (this.nadhra && p.autoDescribe === true && p.provider === undefined) {
+      const { autoDescribe: _refused, ...rest } = p;
+      this.refuseNadhra();
+      if (!Object.keys(rest).length) return;
+      p = rest;
+    }
     const settings = { ...before, ...p };
     saveVisionSettings(settings);
     this.patch({ settings });
+    if (p.provider !== undefined && providerOf(settings) !== providerOf(before)) {
+      this.switchProvider(providerOf(settings));
+      return;
+    }
     if (p.language && p.language !== before.language) {
       // Earlier sentences were in the other language: the model mustn't continue in it.
       this.recent = [];
       this.history = [];
+      this.lastAnswerLang = undefined;
+      this.document = null;
       this.gate.clear();
       this.queue?.stop();
       this.tts?.setLanguage?.(p.language);
@@ -1658,6 +2157,13 @@ export class SmartVisionController {
       this.say(this.t.languageSet, "answer");
     }
     if (typeof p.volume === "number") this.liveAudio?.setVolume(p.volume);
+    if (typeof p.autoDescribe === "boolean" && p.autoDescribe !== before.autoDescribe) {
+      if (!p.autoDescribe) this.scanCtrl?.abort();
+      else this.lastScanAt = -Infinity; // describe at once
+      if (this.state.camera === "on" && !this.paused && (this.state.analysis === "watching" || this.state.analysis === "manual")) this.patch({ analysis: this.idleAnalysis() });
+      this.queue?.stop();
+      this.say(p.autoDescribe ? this.t.autoOn : this.t.autoOff, "status");
+    }
     // The instructions are fixed for a live session: a new language needs a new one.
     if (p.language && p.language !== before.language && this.liveSession) {
       this.stopLive(true);
@@ -1667,6 +2173,47 @@ export class SmartVisionController {
       this.tracker.clear();
       this.gate.clear();
       this.patch({ facing: this.resolveFacing() });
+    }
+  }
+
+  /**
+   * The user chose the other AI, explicitly, in Settings. Never done by the app on its own.
+   * To Nadhra: everything that sends stops at once (scans, questions, voice, live), and the network
+   * guard closes. To Gemini: today's behaviour again, with today's consent asked first if it hasn't
+   * been given (the camera, if it was running without it, waits for it).
+   */
+  private switchProvider(to: AiProvider) {
+    this.queue?.stop();
+    if (to === "nadhra") {
+      this.scanCtrl?.abort();
+      this.questionCtrl?.abort();
+      if (this.liveSession) this.stopLive(true);
+      if (this.state.assistantOn) this.stopAssistantLoop();
+      else if (this.listening) this.voiceInput?.abort();
+      this.voiceInput = null;
+      this.pendingRead = null;
+      this.pendingLive = false;
+      this.pendingTask = null;
+      this.motionFrames = [];
+      this.applyProvider("nadhra");
+      this.patch({ needsConsent: false, liveNotice: false, ...(this.state.camera === "on" && !this.paused ? { analysis: "local" as const } : {}) });
+      this.nadhraNoticeSaid = true; // the confirmation below says the same
+      this.say(this.t.nadhra.selected, "answer");
+      return;
+    }
+    this.applyProvider("gemini");
+    this.say(this.t.nadhra.geminiSelected, "answer");
+    if (this.state.camera === "on" || this.state.camera === "starting") {
+      if (!hasConsent()) {
+        // Started under Nadhra without the notice about Google: it is asked before any picture goes out.
+        this.releaseCamera();
+        this.feedback("off");
+        this.patch({ needsConsent: true, sheet: "none" });
+        this.say(this.t.privacy, "answer");
+        return;
+      }
+      this.resetAnalysisState();
+      if (!this.paused) this.patch({ analysis: this.idleAnalysis() });
     }
   }
 }

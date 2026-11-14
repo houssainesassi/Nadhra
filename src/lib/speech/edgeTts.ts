@@ -10,6 +10,7 @@ import { CHROMIUM_MAJOR_VERSION, SEC_MS_GEC_VERSION, TRUSTED_CLIENT_TOKEN, secMs
 import { clientKey, RateLimiter, readJsonBody } from "../server/http.ts";
 import { charge, checkRequest } from "../server/guard.ts";
 import { CLOUD_VOICES, isSpeechLang } from "../assistant/lang.ts";
+import { aiMode } from "../ai/router.ts";
 
 export const MAX_TTS_CHARS = 500; // a recognized sentence is far shorter; the service splits at 4096 bytes
 /** Tunisian Arabic, female. The assistant speaks with a female voice only. */
@@ -38,7 +39,8 @@ export function ttsConfig(): TtsConfig {
   const envVoice = process.env.EDGE_TTS_VOICE?.trim() ?? "";
   const voice = VOICE_RE.test(envVoice) && (FEMALE_EDGE_VOICES as readonly string[]).includes(envVoice) ? envVoice : DEFAULT_VOICE;
   return {
-    enabled: !/^(1|true|yes)$/i.test(process.env.EDGE_TTS_DISABLED?.trim() ?? ""),
+    // The Edge voice is a cloud service: off in offline mode (the page then uses the device's voice).
+    enabled: !/^(1|true|yes)$/i.test(process.env.EDGE_TTS_DISABLED?.trim() ?? "") && aiMode() !== "offline",
     voice,
     languageCode: voice.split("-").slice(0, 2).join("-"),
     // Test hook only (points the server at a local mock). Leave unset in production.

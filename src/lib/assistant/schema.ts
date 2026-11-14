@@ -2,13 +2,14 @@
 // than trusting the prompt: no safety promises, no invented distances, no motion claims without a
 // second frame. Pure logic, used by the API route and covered by tests/visionSchema.test.ts.
 import { speech } from "./phrases.ts";
+import { mentionsDose } from "./document.ts";
 import type { SpeechLang } from "./lang.ts";
 import type { CameraFacing, Category, Confidence, Detection, Hazard, HazardKind, ImageQuality, Motion, Proximity, SceneAnalysis, SceneText, Side, VisionMode } from "./types.ts";
 
 const MAX_ITEMS = 12;
 const MAX_LABEL = 60;
 const MAX_TEXT = 1500;
-const MAX_SPOKEN: Record<VisionMode, number> = { scan: 320, question: 1800, chat: 1800 };
+const MAX_SPOKEN: Record<VisionMode, number> = { scan: 320, question: 1800, chat: 1800, read: 1800 };
 
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[], def: T): T => (allowed.includes(v as T) ? (v as T) : def);
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
@@ -249,8 +250,16 @@ export function sanitizeAnalysis(raw: Record<string, unknown>, ctx: SanitizeCont
   const env = raw.environment && typeof raw.environment === "object" ? (raw.environment as Record<string, unknown>) : null;
   const envLabel = env ? str(env.label, MAX_LABEL) : "";
 
+  // A paper or a medicine box held up to the camera: nothing of it is kept from an automatic scan.
+  // Documents are read only when the user asks, through the reading mode and its checks.
+  const documentInView = ctx.mode === "scan" && raw.document_in_view === true;
+  if (documentInView) texts.length = 0;
+
   // The vision model has no web search: any "according to the internet" in its answer is false.
   let spoken = dropFalseSearchClaims(guardSpoken(str(raw.spoken, MAX_SPOKEN[ctx.mode]), texts), texts);
+  // A medicine dose is never said outside the reading mode, not even quoted from the picture.
+  const { text: withoutDoses, dropped: doseDropped } = dropDoses(spoken);
+  spoken = documentInView ? "" : withoutDoses;
   if (mirrored) spoken = swapSidesOutsideQuotes(spoken, texts);
 
   const question = ctx.question ?? "";
@@ -259,6 +268,7 @@ export function sanitizeAnalysis(raw: Record<string, unknown>, ctx: SanitizeCont
   // Path questions get their own caveat below; this one covers descriptions and other answers.
   if (spoken && !asksAboutPath && impliesClearWay(spoken)) spoken = `${spoken} ${say.notSafe}`;
   if (ctx.mode === "question") {
+    if (doseDropped) spoken = spoken ? `${spoken} ${say.doc.medicalDeclined}` : say.doc.medicalDeclined;
     // A removed safety promise leaves nothing to say: "move the camera" would be the wrong answer here.
     if (!spoken) spoken = asksAboutPath ? say.pathUnknown : say.unsure;
     else if (asksAboutPath) spoken = `${spoken} ${say.pathCaveat}`;
@@ -273,7 +283,15 @@ export function sanitizeAnalysis(raw: Record<string, unknown>, ctx: SanitizeCont
     hazards,
     texts,
     uncertain: raw.uncertain === true,
+    ...(documentInView ? { documentInView: true } : {}),
   };
+}
+
+/** Removes every sentence that states a medicine dose («2 حبات», «500 mg»). Used outside the reading mode. */
+export function dropDoses(spoken: string): { text: string; dropped: boolean } {
+  const sentences = splitSentences(spoken);
+  const kept = sentences.filter((s) => !mentionsDose(s));
+  return { text: kept.join(" "), dropped: kept.length < sentences.length };
 }
 
 // --- streamed answers -------------------------------------------------------------------------
@@ -368,6 +386,8 @@ export class SentenceStreamer {
   private safeEarly(sentence: string): boolean {
     // Whether a search really happened is only known at the end (grounding metadata): held until then.
     if (claimsWebSearch(sentence)) return false;
+    // A dose is removed by the final check: it must never be spoken early.
+    if (mentionsDose(sentence)) return false;
     // Chat answers have no picture, so the scene rules (distances, "the way is clear") don't apply,
     // except to path questions, which the constructor already holds back.
     if (this.ctx.mode === "chat") return !CAMERA_MARKER.test(sentence) && !/\[|https?:|www\./i.test(sentence);
@@ -403,6 +423,9 @@ export function sanitizeChat(raw: string, ctx: { question?: string; lang?: Speec
     spoken = guardSpoken(text, []);
     spoken = spoken ? `${spoken} ${say.pathCaveat}` : say.pathUnknown;
   }
+  // No medicine doses from general knowledge.
+  const doses = dropDoses(spoken);
+  if (doses.dropped) spoken = doses.text ? `${doses.text} ${say.doc.medicalDeclined}` : say.doc.medicalDeclined;
   if (!spoken) throw new Error("empty chat answer"); // counts as a provider failure: nothing is made up
   return { ...base, spoken };
 }

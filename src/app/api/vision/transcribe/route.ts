@@ -1,7 +1,8 @@
 // Speech to text for browsers without working speech recognition (Firefox, Brave, Chromium builds).
 // The audio is forwarded to the provider and not stored or logged.
-import { transcribeAudio, visionStatus } from "../../../../lib/ai/vision.ts";
+import { refusalFor, transcribeAudio, visionStatus } from "../../../../lib/ai/vision.ts";
 import { isSpeechLang } from "../../../../lib/assistant/lang.ts";
+import { requestedFamily } from "../../../../lib/ai/router.ts";
 import { readJsonBody } from "../../../../lib/server/http.ts";
 import { charge, checkRequest } from "../../../../lib/server/guard.ts";
 import { record } from "../../../../lib/server/monitor.ts";
@@ -16,11 +17,18 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 export async function POST(req: Request) {
   const ctx = checkRequest(req, "transcribe");
   if (ctx instanceof Response) return ctx;
-  const body = await readJsonBody<{ audio?: unknown; lang?: unknown }>(req, MAX_AUDIO_BASE64 + 1024);
+  const body = await readJsonBody<{ audio?: unknown; lang?: unknown; provider?: unknown }>(req, MAX_AUDIO_BASE64 + 1024);
   if (!body.ok) return json({ error: body.error }, body.status);
+  // Nadhra AI: no local speech recognition is connected yet (N1). Refused, never sent to the cloud.
+  if (requestedFamily(body.value?.provider) === "nadhra") {
+    record("transcribe.refused", "nadhra-unavailable");
+    return json({ error: "nadhra-unavailable" }, 503);
+  }
   const audio = body.value?.audio;
   if (typeof audio !== "string" || audio.length < 64 || audio.length > MAX_AUDIO_BASE64) return json({ error: "audio required" }, 400);
   if (Buffer.from(audio.slice(0, 8), "base64").toString("latin1", 0, 4) !== "RIFF") return json({ error: "audio must be WAV" }, 400);
+  const refusal = refusalFor("transcribe");
+  if (refusal) return json({ error: refusal }, 503);
   if (!visionStatus().canTranscribe) return json({ error: "not-configured" }, 503);
   const limited = await charge(ctx, "transcribe");
   if (limited) return limited;
