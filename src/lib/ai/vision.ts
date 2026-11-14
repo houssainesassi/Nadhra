@@ -180,9 +180,10 @@ export function getVisionProviders(): VisionProvider[] {
 const usable = (p: VisionProvider) => p.configured && !p.disabledReason;
 
 /** AI_MODE and what is known about the internet (probed in hybrid mode only), for routing. */
-function routeContext(): RouteContext {
+/** `probe: false` (the status request): never starts an opt-in probe, only reads what is known. */
+function routeContext({ probe = true }: { probe?: boolean } = {}): RouteContext {
   const mode = aiMode();
-  return { mode, internet: internetForRouting(mode) };
+  return { mode, internet: internetForRouting(mode, Date.now(), { probe }) };
 }
 
 /** The providers that may do `task`, in the order to try them (router.ts). */
@@ -223,7 +224,7 @@ export function taskOf(req: Pick<VisionRequestBody, "mode" | "image" | "question
 const searchUsable = (p: VisionProvider) => !!p.canSearch && (searchCooldownUntil.get(p.family) ?? 0) <= Date.now();
 
 export function visionStatus(): VisionStatus {
-  const ctx = routeContext();
+  const ctx = routeContext({ probe: false });
   // Only providers the current mode may use: in offline mode no company is listed as a recipient.
   const ok = getVisionProviders().filter(usable).filter((p) => AI_TASKS.some((t) => routeProviders([p], t, ctx).length > 0));
   return {
@@ -604,11 +605,12 @@ export const restOfAnswer = (analysis: SceneAnalysis, sent: string[]) => remaini
 
 export type TranscribeResult = { ok: true; text: string; attempts: Attempt[] } | { ok: false; attempts: Attempt[]; refusal?: RouteRefusal };
 
-export async function transcribeAudio(wavBase64: string, lang: SpeechLang = "tn"): Promise<TranscribeResult> {
+/** `signal`: the page's request. Once it is aborted, no further provider is tried (no fallback). */
+export async function transcribeAudio(wavBase64: string, lang: SpeechLang = "tn", { signal }: { signal?: AbortSignal } = {}): Promise<TranscribeResult> {
   const refusal = refusalFor("transcribe");
   if (refusal) return { ok: false, attempts: [], refusal };
   const providers = providersFor("transcribe").filter((p) => p.transcribe);
-  const out = await withFallback(providers, { timeoutMs: num(process.env.VISION_TIMEOUT_MS, 9_000), budgetMs: 15_000 }, async (p, signal) => parseTranscript(await p.transcribe!(wavBase64, signal, lang)));
+  const out = await withFallback(providers, { timeoutMs: num(process.env.VISION_TIMEOUT_MS, 9_000), budgetMs: 15_000, signal }, async (p, s) => parseTranscript(await p.transcribe!(wavBase64, s, lang)));
   return out.result !== null ? { ok: true, text: out.result, attempts: out.attempts } : { ok: false, attempts: out.attempts };
 }
 

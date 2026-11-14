@@ -400,7 +400,10 @@ export class SmartVisionController {
         // The voice failed, so the screen reader takes over this sentence and the following ones.
         if (!this.state.ttsFailed) report("tts-failed");
         this.feedback("error");
-        this.patch({ ttsFailed: true, announce: { text, urgent: false, id: this.state.announce.id + 1 } });
+        // The sentence was handed to the screen-reader channel as it started (onUtterance): the same
+        // announcement, now read because the voice failed. A new one would make it read twice.
+        const same = this.state.announce.text === text;
+        this.patch({ ttsFailed: true, ...(same ? {} : { announce: { text, urgent: false, id: this.state.announce.id + 1 } }) });
       },
       // A warning that was never heard mustn't be held back as "already said": the next detection
       // of the same hazard says it again, if it is still there.
@@ -2183,8 +2186,13 @@ export class SmartVisionController {
    * been given (the camera, if it was running without it, waits for it).
    */
   private switchProvider(to: AiProvider) {
-    this.queue?.stop();
     if (to === "nadhra") {
+      // First of all: every request of the page still open is aborted, so nothing more is sent.
+      // Something was in progress (a request, the live conversation, the browser's speech recognition):
+      // the user is told it was stopped, and that what had already arrived can't be taken back.
+      const busy = !!(this.scanCtrl || this.questionCtrl || this.liveSession || this.listening || this.state.mic === "processing");
+      const cancelled = setLocalOnly(true);
+      this.queue?.stop();
       this.scanCtrl?.abort();
       this.questionCtrl?.abort();
       if (this.liveSession) this.stopLive(true);
@@ -2199,8 +2207,10 @@ export class SmartVisionController {
       this.patch({ needsConsent: false, liveNotice: false, ...(this.state.camera === "on" && !this.paused ? { analysis: "local" as const } : {}) });
       this.nadhraNoticeSaid = true; // the confirmation below says the same
       this.say(this.t.nadhra.selected, "answer");
+      if (busy || cancelled > 0) this.say(this.t.nadhra.stoppedSending, "answer");
       return;
     }
+    this.queue?.stop();
     this.applyProvider("gemini");
     this.say(this.t.nadhra.geminiSelected, "answer");
     if (this.state.camera === "on" || this.state.camera === "starting") {

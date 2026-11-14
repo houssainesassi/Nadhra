@@ -31,8 +31,18 @@ g.SpeechRecognition = function () {};
 /** Every request the page makes. Only the status GET (no user data) is expected with Nadhra AI. */
 const requests: { url: string; method: string; body: string }[] = [];
 const sent = () => requests.filter((r) => !(r.method === "GET" && r.url === "/api/vision"));
-g.fetch = async (url: string, init?: { method?: string; body?: string }) => {
+/** POST /api/vision waits until aborted (a slow upstream), when set. */
+let hangVision = false;
+g.fetch = async (url: string, init?: { method?: string; body?: string; signal?: AbortSignal }) => {
   requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ?? "" });
+  if (hangVision && init?.method === "POST" && String(url) === "/api/vision") {
+    return new Promise<Response>((_, reject) => {
+      const s = init.signal;
+      const fail = () => reject(s?.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
+      if (s?.aborted) return fail();
+      s?.addEventListener("abort", fail, { once: true });
+    });
+  }
   if (String(url).includes("/api/report") || String(url).includes("/api/session")) return new Response("{}", { status: 200 });
   if (init?.method === "POST") return new Response(JSON.stringify({ analysis: scene(), provider: "fake", latencyMs: 1 }), { status: 200 });
   return new Response(JSON.stringify({ available: true, providers: [], canTranscribe: true, nadhra: { experimental: true, tasks: [] } }), { status: 200 });
@@ -92,6 +102,7 @@ const open: InstanceType<typeof SmartVisionController>[] = [];
 afterEach(() => {
   for (const c of open.splice(0)) c.detach();
   api.setLocalOnly(false);
+  hangVision = false;
   storage.clear();
   requests.length = 0;
 });
@@ -295,4 +306,66 @@ test("Gemini (default): no Nadhra wording, no guard, the voice is not local-only
   h.drain();
   const nadhraWords = Object.values(T.nadhra);
   assert.ok(h.engine.said.every((s) => !nadhraWords.includes(s)));
+});
+
+// --- switching while something is being sent ----------------------------------------------------------
+
+test("guard: switching aborts the page's open requests at once and says how many", async () => {
+  hangVision = true;
+  const pending = api.apiFetch("/api/vision", { method: "POST", body: "{}" });
+  await flush();
+  assert.equal(api.setLocalOnly(true), 1, "one open request aborted");
+  await assert.rejects(pending, (e: unknown) => e instanceof api.LocalOnlyError);
+  assert.equal(api.setLocalOnly(true), 0, "nothing left open");
+});
+
+test("switch to Nadhra during a Gemini question: aborted, the warning is said, nothing more is sent", async () => {
+  consent();
+  const h = setup();
+  await h.start();
+  hangVision = true;
+  const asking = h.c.ask("شنوة قدّامي؟");
+  await flush();
+  assert.equal(requests.filter((r) => r.method === "POST" && r.url === "/api/vision").length, 1, "the question was on its way");
+  const before = requests.length;
+  h.c.updateSettings({ provider: "nadhra" });
+  await asking;
+  await flush();
+  h.drain();
+  assert.ok(h.engine.said.includes(T.nadhra.selected));
+  assert.ok(h.engine.said.includes(T.nadhra.stoppedSending), "the user hears that sending stopped and what can't be taken back");
+  assert.ok(h.engine.said.indexOf(T.nadhra.stoppedSending) > h.engine.said.indexOf(T.nadhra.selected));
+  assert.ok(!h.engine.said.includes(T.questionFailed), "no failure message for a question the user left");
+  for (let i = 0; i < 4; i++) { h.any.lastScanAt = -Infinity; h.tick(); }
+  await flush();
+  assert.equal(requests.slice(before).filter((r) => r.method !== "GET").length, 0, "nothing sent after the switch");
+});
+
+test("switch to Nadhra with nothing in progress: no warning", async () => {
+  consent();
+  const h = setup();
+  await h.start();
+  h.c.updateSettings({ provider: "nadhra" });
+  h.drain();
+  assert.ok(h.engine.said.includes(T.nadhra.selected));
+  assert.ok(!h.engine.said.includes(T.nadhra.stoppedSending));
+});
+
+test("the warning in all four languages says the same thing, and names Gemini as spoken", () => {
+  for (const l of ["tn", "ar", "fr", "en"] as const) assert.ok(speech(l).nadhra.stoppedSending.length > 20, l);
+  assert.equal(speech("tn").nadhra.stoppedSending, "أوقفنا أي إرسال إضافي من جهازك. أمّا المعلومات اللي وصلت لجيميني أو لأي خدمة أخرى قبل التبديل، ما ننجموش نرجّعوها.");
+  assert.match(speech("ar").nadhra.stoppedSending, /جيميني/);
+});
+
+test("screen reader: a sentence whose voice fails is one announcement, and the same sentence again is a new one", () => {
+  const h = setup({ provider: "nadhra" });
+  // The device has no usable voice: every sentence fails as it starts.
+  (h.engine as unknown as { speak: TtsEngine["speak"] }).speak = (_t, opts) => opts.onError?.("no voice");
+  const id0 = h.c.state.announce.id;
+  h.c.updateSettings({ autoDescribe: true }); // refused: one sentence
+  assert.equal(h.c.state.announce.id, id0 + 1, "one announcement, not two");
+  assert.equal(h.c.state.ttsFailed, true);
+  h.c.updateSettings({ autoDescribe: true }); // the same refusal again
+  assert.equal(h.c.state.announce.id, id0 + 2, "the repeat is a new announcement");
+  assert.equal(h.c.state.announce.text, `${T.nadhra.unavailable} ${T.nadhra.needsGemini}`);
 });

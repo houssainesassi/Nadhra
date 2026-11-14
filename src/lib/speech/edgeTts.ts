@@ -139,6 +139,8 @@ function parseHeaders(block: string): Record<string, string> {
 /** One synthesis over one WebSocket: speech.config + ssml -> MP3 chunks until turn.end. */
 export function synthesize(text: string, rate: number, c: TtsConfig, signal: AbortSignal): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
+    // Already aborted (the page went away, or switched to Nadhra): no connection is opened at all.
+    if (signal.aborted) return reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
     const url = `${c.endpoint}&ConnectionId=${connectId()}&Sec-MS-GEC=${secMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
     const ua = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`;
     let ws: WsLike;
@@ -269,13 +271,17 @@ export async function handleTtsPost(req: Request): Promise<Response> {
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), c.timeoutMs);
+  // The page aborted (closed, or switched to Nadhra): stop, and never retry for a page that has gone.
+  const onGone = () => ctrl.abort();
+  if (req.signal?.aborted) ctrl.abort();
+  else req.signal?.addEventListener("abort", onGone, { once: true });
   try {
     let audio: Uint8Array;
     try {
       audio = await synthesize(v.text, rate, vc, ctrl.signal);
     } catch (e) {
       // A refused handshake is often transient (or a token window edge): one fresh attempt.
-      if (!(e instanceof UpstreamError && e.kind === "handshake")) throw e;
+      if (!(e instanceof UpstreamError && e.kind === "handshake") || ctrl.signal.aborted) throw e;
       audio = await synthesize(v.text, rate, vc, ctrl.signal);
     }
     consecutiveFailures = 0;
@@ -290,6 +296,8 @@ export async function handleTtsPost(req: Request): Promise<Response> {
     });
   } catch (e) {
     const err = e as Error;
+    // Cancelled by the page: not an upstream failure, and nobody is waiting for an answer.
+    if (req.signal?.aborted) return json(499, { error: "cancelled" });
     if (++consecutiveFailures >= FAILURES_BEFORE_COOLDOWN) {
       cooldownUntil = Date.now() + c.cooldownMs; // upstream down or blocking us: stop hammering it
       consecutiveFailures = 0;
@@ -302,5 +310,6 @@ export async function handleTtsPost(req: Request): Promise<Response> {
     return json(502, { error: "upstream-error" });
   } finally {
     clearTimeout(timer);
+    req.signal?.removeEventListener("abort", onGone);
   }
 }

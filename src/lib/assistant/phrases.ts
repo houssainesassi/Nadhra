@@ -4,33 +4,46 @@
 import type { Hazard, Side } from "./types.ts";
 import type { SpeechLang } from "./lang.ts";
 
-// Nadhra AI (experimental, step N1): what is said when the user switches between Gemini AI and
-// Nadhra AI, and when Nadhra can't do something yet. Nothing here claims an ability it doesn't have.
-// The Tunisian wording is waiting for review (docs/NADHRA_N1_REPORT.md): until it is approved,
-// Tunisian uses the Standard Arabic sentences below.
-const NADHRA_AR = {
-  selected: "تم اختيار ذكاء نظرة. هو تجريبي وما زال قيد التطوير: ذكاؤه الاصطناعي غير موصول بعد، لذلك لا يستطيع الآن الوصف ولا القراءة ولا الإجابة عن الأسئلة ولا فهم الأوامر الصوتية. لا يُرسَل أي شيء من هذا الجهاز. عندما تكون الكاميرا مشغّلة، تعمل فقط تنبيهات الجهاز عن الأشخاص والمركبات، ولا يتم اكتشاف الدرج ولا الحفر. لاستعمال هذه الميزات، اختر Gemini في الإعدادات.",
-  geminiSelected: "تم اختيار Gemini. الصور والأسئلة والصوت تُرسَل إلى Google Gemini، كما هو موضّح في الخصوصية والسلامة.",
-  unavailable: "ذكاء نظرة لا يستطيع فعل هذا بعد: ذكاؤه الاصطناعي غير موصول على هذا الجهاز. لم يُرسَل أي شيء.",
-  needsGemini: "لهذا، اختر Gemini في الإعدادات.",
-  cameraNotice: "ذكاء نظرة تجريبي: تعمل فقط تنبيهات الجهاز عن الأشخاص والمركبات. لا يتم اكتشاف الدرج ولا الحفر. لا يُرسَل أي شيء من هذا الجهاز.",
-  noVoice: "مع ذكاء نظرة، الأوامر الصوتية لا تعمل بعد، لأن التعرّف على الكلام في المتصفح يرسل صوتك إلى Google. استعمل الأزرار.",
+// Nadhra (experimental, step N1): what is said when the user switches between Gemini and Nadhra,
+// and when Nadhra can't do something yet. Nothing here claims an ability it doesn't have.
+// Spoken names: «جيميني» and «ذكاء نظرة» in Arabic; "Gemini" and "Nadhra" in French and English.
+// Tunisian wording approved by the project owner on 2026-11-14; the other languages say the same.
+const NADHRA_TN = {
+  selected: "اخترت ذكاء نظرة. راهو مازال تجريبي وتحت التطوير. توّا مازال ما ينجمش يفهم الصور، ولا يقرا الوثائق، ولا يجاوب على أسئلتك، ولا يفهم الأوامر بالصوت. ما يتبعث حتى تصويرة ولا معلومة من جهازك لخدمات الذكاء الاصطناعي. حالياً، الكاميرا تنجم تعطي تحذيرات على العباد والكراهب فقط. الدروج والحفر مازال ما ينجمش يكتشفهم. باش تستعمل بقية الخدمات، اختار جيميني من الإعدادات.",
+  geminiSelected: "اخترت جيميني. الصور والأسئلة والصوت متاعك ينجموا يتبعثوا لخدمة جيميني متاع Google عبر الإنترنت، حسب إعدادات الخصوصية والموافقة متاعك.",
+  unavailable: "ذكاء نظرة مازال ما ينجمش يعمل هاذي. ما تبعث حتى شي من جهازك.",
+  needsGemini: "باش تعملها، اختار جيميني من الإعدادات.",
+  cameraNotice: "ذكاء نظرة مازال تجريبي. الكاميرا تعطي تحذيرات على العباد والكراهب فقط، والدروج والحفر مازال ما ينجمش يكتشفهم. ما يتبعث حتى تصويرة ولا معلومة من جهازك لخدمات الذكاء الاصطناعي.",
+  noVoice: "مع ذكاء نظرة، الأوامر بالصوت مازالت ما تخدمش، خاطر التعرّف على الصوت في المتصفح يبعث صوتك لـ Google. استعمل الأزرار.",
+  /** Said after switching to Nadhra when something was still being sent or awaited, and was stopped. */
+  stoppedSending: "أوقفنا أي إرسال إضافي من جهازك. أمّا المعلومات اللي وصلت لجيميني أو لأي خدمة أخرى قبل التبديل، ما ننجموش نرجّعوها.",
 };
-const NADHRA_FR: typeof NADHRA_AR = {
-  selected: "Nadhra AI est sélectionnée. Elle est expérimentale et encore en développement : son IA n'est pas encore connectée, donc pour l'instant elle ne peut ni décrire, ni lire, ni répondre aux questions, ni comprendre les commandes vocales. Rien n'est envoyé depuis cet appareil. Caméra allumée, seules les alertes de l'appareil sur les personnes et les véhicules fonctionnent ; les escaliers et les trous ne sont pas détectés. Pour ces fonctions, choisissez Gemini dans les réglages.",
-  geminiSelected: "Gemini est sélectionnée. Les images, les questions et la voix sont envoyées à Google Gemini, comme indiqué dans Confidentialité et sécurité.",
-  unavailable: "Nadhra AI ne peut pas encore faire cela : son IA n'est pas connectée sur cet appareil. Rien n'a été envoyé.",
+const NADHRA_AR: typeof NADHRA_TN = {
+  selected: "اخترتَ ذكاء نظرة. ما زال تجريبيًا وقيد التطوير. لا يستطيع الآن فهم الصور، ولا قراءة الوثائق، ولا الإجابة عن أسئلتك، ولا فهم الأوامر الصوتية. لا تُرسَل أي صورة أو معلومة من جهازك إلى خدمات الذكاء الاصطناعي. حاليًا، تستطيع الكاميرا إعطاء تحذيرات عن الأشخاص والمركبات فقط. ولا يستطيع بعدُ اكتشاف الدرج والحفر. لاستعمال بقية الخدمات، اختر جيميني من الإعدادات.",
+  geminiSelected: "اخترتَ جيميني. قد تُرسَل صورك وأسئلتك وصوتك إلى خدمة جيميني من Google عبر الإنترنت، حسب إعدادات الخصوصية والموافقة لديك.",
+  unavailable: "ذكاء نظرة لا يستطيع فعل هذا بعد. لم يُرسَل أي شيء من جهازك.",
+  needsGemini: "لفعل ذلك، اختر جيميني من الإعدادات.",
+  cameraNotice: "ذكاء نظرة ما زال تجريبيًا. تعطي الكاميرا تحذيرات عن الأشخاص والمركبات فقط، ولا يستطيع بعدُ اكتشاف الدرج والحفر. لا تُرسَل أي صورة أو معلومة من جهازك إلى خدمات الذكاء الاصطناعي.",
+  noVoice: "مع ذكاء نظرة، الأوامر الصوتية لا تعمل بعد، لأن التعرّف على الصوت في المتصفح يرسل صوتك إلى Google. استعمل الأزرار.",
+  stoppedSending: "أوقفنا أي إرسال إضافي من جهازك. أما المعلومات التي وصلت إلى جيميني أو إلى أي خدمة أخرى قبل التبديل، فلا يمكننا استرجاعها.",
+};
+const NADHRA_FR: typeof NADHRA_TN = {
+  selected: "Vous avez choisi Nadhra. C'est encore expérimental et en développement. Pour l'instant, Nadhra ne peut pas comprendre les images, lire les documents, répondre à vos questions ni comprendre les commandes vocales. Aucune image ni information n'est envoyée de votre appareil à des services d'intelligence artificielle. Pour le moment, la caméra peut seulement donner des alertes sur les personnes et les véhicules. Les escaliers et les trous ne sont pas encore détectés. Pour utiliser les autres services, choisissez Gemini dans les réglages.",
+  geminiSelected: "Vous avez choisi Gemini. Vos images, vos questions et votre voix peuvent être envoyées au service Gemini de Google par Internet, selon vos réglages de confidentialité et votre consentement.",
+  unavailable: "Nadhra ne peut pas encore faire cela. Rien n'a été envoyé depuis votre appareil.",
   needsGemini: "Pour cela, choisissez Gemini dans les réglages.",
-  cameraNotice: "Nadhra AI, expérimentale : seules les alertes de l'appareil sur les personnes et les véhicules fonctionnent. Les escaliers et les trous ne sont pas détectés. Rien n'est envoyé depuis cet appareil.",
-  noVoice: "Avec Nadhra AI, les commandes vocales ne fonctionnent pas encore : la reconnaissance vocale du navigateur enverrait votre voix à Google. Utilisez les boutons.",
+  cameraNotice: "Nadhra est encore expérimental. La caméra donne seulement des alertes sur les personnes et les véhicules ; les escaliers et les trous ne sont pas encore détectés. Aucune image ni information n'est envoyée de votre appareil à des services d'intelligence artificielle.",
+  noVoice: "Avec Nadhra, les commandes vocales ne fonctionnent pas encore, car la reconnaissance vocale du navigateur envoie votre voix à Google. Utilisez les boutons.",
+  stoppedSending: "Nous avons arrêté tout envoi supplémentaire depuis votre appareil. Les informations déjà parvenues à Gemini ou à un autre service avant le changement ne peuvent pas être récupérées.",
 };
-const NADHRA_EN: typeof NADHRA_AR = {
-  selected: "Nadhra AI is selected. It is experimental and still under development: its AI isn't connected yet, so for now it can't describe, read, answer questions or understand voice commands. Nothing is sent from this device. With the camera on, only the on-device warnings about people and vehicles work; stairs and holes aren't detected. To use those features, choose Gemini in Settings.",
-  geminiSelected: "Gemini is selected. Pictures, questions and your voice are sent to Google Gemini, as described in Privacy and safety.",
-  unavailable: "Nadhra AI can't do this yet: its AI isn't connected on this device. Nothing was sent.",
-  needsGemini: "For this, choose Gemini in Settings.",
-  cameraNotice: "Nadhra AI, experimental: only the on-device warnings about people and vehicles work. Stairs and holes aren't detected. Nothing is sent from this device.",
-  noVoice: "With Nadhra AI, voice commands don't work yet: the browser's speech recognition would send your voice to Google. Use the buttons.",
+const NADHRA_EN: typeof NADHRA_TN = {
+  selected: "You chose Nadhra. It is still experimental and under development. For now it can't understand pictures, read documents, answer your questions or understand voice commands. No picture or information is sent from your device to AI services. For now, the camera can only give warnings about people and vehicles. Stairs and holes can't be detected yet. To use the other services, choose Gemini in Settings.",
+  geminiSelected: "You chose Gemini. Your pictures, questions and voice may be sent to Google's Gemini service over the internet, according to your privacy and consent settings.",
+  unavailable: "Nadhra can't do this yet. Nothing was sent from your device.",
+  needsGemini: "To do this, choose Gemini in Settings.",
+  cameraNotice: "Nadhra is still experimental. The camera only gives warnings about people and vehicles, and stairs and holes can't be detected yet. No picture or information is sent from your device to AI services.",
+  noVoice: "With Nadhra, voice commands don't work yet, because the browser's speech recognition sends your voice to Google. Use the buttons.",
+  stoppedSending: "We stopped any further sending from your device. Information that reached Gemini or any other service before the switch can't be taken back.",
 };
 
 const TN = {
@@ -91,7 +104,7 @@ const TN = {
   closed: "سكّرت.",
   offline: "ما فمّاش إنترنت. التحليل واقف، والتحذيرات اللي في الجهاز برك اللي تخدم، على العباد والكراهب وبعض الحوايج.",
   offlineMode: "المساعد مضبوط باش يخدم بلاش إنترنت، وهاذا يستحقّ الإنترنت.",
-  nadhra: NADHRA_AR, // Tunisian wording awaiting approval
+  nadhra: NADHRA_TN,
   online: "رجع الإنترنت.",
   emergency: "صفحة النجدة محلولة. تنجم تعيّط للشخص اللي اخترتو، ولا تبعثلو بلاصتك في ميساج، ولا تعيّط للسامو 190، ولا للبوليس 197، ولا للحماية المدنية 198. قول عيّط باش تعيّط للشخص متاعك.",
   noContact: "ما زلت ما زدتش رقم شخص للنجدة. زيدو في الإعدادات.",

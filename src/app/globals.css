@@ -401,6 +401,83 @@ kbd {
   padding: 0 1rem 1rem;
 }
 
+/* --- The AI in use (Gemini / Nadhra), at the top of the main area --- */
+
+.ai-switch {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+}
+.ai-switch-track {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: 0.25rem;
+  width: min(100%, 26rem);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 0.25rem;
+}
+.ai-switch-option {
+  display: flex;
+  min-height: 3rem;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  color: var(--ink-2);
+  padding-inline: 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    box-shadow 200ms ease;
+}
+.ai-switch-option:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+.ai-switch-option[data-active="true"] {
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  cursor: default;
+}
+.ai-switch-option:has(input:focus-visible) {
+  outline: 3px solid var(--glow);
+  outline-offset: 2px;
+}
+.ai-switch-option:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ai-switch-option svg {
+  flex: none;
+}
+.ai-switch-name {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 0.3em;
+  line-height: 1.15;
+}
+.ai-switch-name > span {
+  white-space: nowrap;
+}
+.ai-switch-note {
+  min-height: 1.25rem;
+  color: var(--ink-2);
+  font-size: 0.85rem;
+  line-height: 1.25rem;
+}
+
 /* --- At rest: one button --- */
 
 .home {

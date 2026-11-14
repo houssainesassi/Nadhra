@@ -9,7 +9,7 @@
 //   handle and reconnects into the same conversation (same memory of what was seen and said).
 import { bytesToBase64, base64ToBytes } from "./pcm.ts";
 import { LIVE_INPUT_RATE } from "./config.ts";
-import { apiFetch } from "../assistant/api.ts";
+import { apiFetch, isLocalOnly } from "../assistant/api.ts";
 import type { SpeechLang } from "../assistant/lang.ts";
 import type { CameraFacing } from "../assistant/types.ts";
 
@@ -233,6 +233,12 @@ export class LiveSession {
       return this.scheduleReconnect(err.code, resuming);
     }
     if (gen !== this.gen || !this.active) return;
+    // A token that arrives after the switch to Nadhra opens nothing (the controller has also stopped
+    // the session by then; this holds even if it hadn't).
+    if (isLocalOnly()) {
+      this.stop();
+      throw new TokenError("nadhra-unavailable", false);
+    }
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;

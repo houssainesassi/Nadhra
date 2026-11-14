@@ -1,5 +1,6 @@
 // SERVER-ONLY. Small helpers for calling AI providers.
 import "server-only";
+import { noteCloudReachable } from "../server/deviceCapabilities.ts";
 
 export class HttpError extends Error {
   status: number;
@@ -9,8 +10,23 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * fetch() to a cloud provider. Its outcome also tells the server whether the internet is reachable
+ * (hybrid mode), so no separate request is ever needed for that (deviceCapabilities.ts).
+ */
+async function cloudFetch(url: string, init: RequestInit & { signal: AbortSignal }): Promise<Response> {
+  try {
+    const res = await fetch(url, init);
+    noteCloudReachable(true);
+    return res;
+  } catch (e) {
+    if (!init.signal.aborted) noteCloudReachable(false);
+    throw e;
+  }
+}
+
 export async function postJson(url: string, headers: Record<string, string>, body: unknown, signal: AbortSignal) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal });
+  const res = await cloudFetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal });
   if (!res.ok) {
     const text = (await res.text().catch(() => "")).slice(0, 200);
     throw new HttpError(res.status, `HTTP ${res.status} ${text}`);
@@ -27,7 +43,7 @@ export function isFreeOpenRouterModel(model: string): boolean {
  * as it arrives. Errors before the stream starts throw HttpError, like postJson.
  */
 export async function postSse(url: string, headers: Record<string, string>, body: unknown, signal: AbortSignal, onEvent: (data: unknown) => void) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal });
+  const res = await cloudFetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal });
   if (!res.ok) {
     const text = (await res.text().catch(() => "")).slice(0, 200);
     throw new HttpError(res.status, `HTTP ${res.status} ${text}`);

@@ -33,7 +33,12 @@ export async function POST(req: Request) {
   const limited = await charge(ctx, "transcribe");
   if (limited) return limited;
   const lang = body.value?.lang;
-  const result = await transcribeAudio(audio, isSpeechLang(lang) ? lang : "tn");
+  // The page's abort (closed, or switched to Nadhra) stops the chain: the recording goes to no further provider.
+  const result = await transcribeAudio(audio, isSpeechLang(lang) ? lang : "tn", { signal: req.signal });
+  if (req.signal?.aborted) {
+    record("transcribe.cancelled");
+    return json({ error: "cancelled" }, 499);
+  }
   if (!result.ok) {
     for (const a of result.attempts) console.warn(`[vision/transcribe] ${a.provider} failed: ${(a.error?.match(/^HTTP \d+/)?.[0] ?? a.error?.split(":")[0] ?? "").slice(0, 80)}`);
     record("transcribe.failed", "ai-unavailable", "warn");

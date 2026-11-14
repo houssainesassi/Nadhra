@@ -31,6 +31,14 @@ export const ShieldIcon = (p: Props) => (
 export const CloseIcon = (p: Props) => (
   <Svg {...p}><path d="m6 6 12 12" /><path d="M18 6 6 18" /></Svg>
 );
+/** Gemini: the work is done online. */
+export const CloudIcon = (p: Props) => (
+  <Svg {...p}><path d="M7 18.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.1 9.6 4.5 4.5 0 0 0 7 18.5z" /></Svg>
+);
+/** Nadhra: the work stays on this device. */
+export const DeviceIcon = (p: Props) => (
+  <Svg {...p}><rect x="6.5" y="3" width="11" height="18" rx="2.5" /><path d="M10.5 17.5h3" /><circle cx="12" cy="10" r="2.2" /></Svg>
+);
 export const ChevronIcon = (p: Props) => (
   <Svg {...p}><path d="m6 9 6 6 6-6" /></Svg>
 );

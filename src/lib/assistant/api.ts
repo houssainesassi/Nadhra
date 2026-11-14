@@ -22,15 +22,41 @@ export class LocalOnlyError extends Error {
   }
 }
 
-export function setLocalOnly(on: boolean) {
+// Every request of the page carries the signal of the current "epoch". Switching to Nadhra aborts it
+// first of all, so whatever was still being sent or awaited (a question, a recording, a sentence for
+// the cloud voice, a live token) stops at once, and nothing is retried after it.
+let epoch = new AbortController();
+let inFlight = 0;
+
+/** Returns how many of the page's requests were still open and have just been aborted. */
+export function setLocalOnly(on: boolean): number {
   localOnly = on;
-  if (on) {
-    queue.length = 0; // reports queued before the switch aren't sent either
-    if (timer) clearTimeout(timer);
-    timer = null;
-  }
+  if (!on) return 0;
+  const cancelled = inFlight;
+  epoch.abort(new LocalOnlyError());
+  epoch = new AbortController();
+  queue.length = 0; // reports queued before the switch aren't sent either
+  if (timer) clearTimeout(timer);
+  timer = null;
+  return cancelled;
 }
 export const isLocalOnly = () => localOnly;
+
+/** The request's own signal (if any) and the epoch's, as one. */
+function withEpoch(own: AbortSignal | null | undefined): AbortSignal {
+  const e = epoch.signal;
+  if (!own) return e;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any([own, e]);
+  const ctrl = new AbortController();
+  for (const s of [own, e]) {
+    if (s.aborted) {
+      ctrl.abort(s.reason);
+      break;
+    }
+    s.addEventListener("abort", () => ctrl.abort(s.reason), { once: true });
+  }
+  return ctrl.signal;
+}
 
 /** Opens the session (sets the HttpOnly cookie). Shared by concurrent callers. */
 export function openSession(force = false): Promise<boolean> {
@@ -47,13 +73,22 @@ const isSessionError = async (res: Response) => res.status === 401 && (await res
 /** fetch() for /api routes. A request refused for a missing or expired session is sent again once. */
 export async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
   if (localOnly) throw new LocalOnlyError();
-  if (!opened) await openSession();
-  const send = () => fetch(url, { credentials: "same-origin", ...init });
-  const res = await send();
-  if (!(await isSessionError(res))) return res;
-  opened = false;
-  if (!(await openSession(true))) return res;
-  return send();
+  const signal = withEpoch(init.signal);
+  inFlight++;
+  try {
+    if (!opened) await openSession();
+    const send = () => {
+      if (localOnly) throw new LocalOnlyError(); // switched while waiting: not sent at all
+      return fetch(url, { credentials: "same-origin", ...init, signal });
+    };
+    const res = await send();
+    if (!(await isSessionError(res))) return res;
+    opened = false;
+    if (!(await openSession(true))) return res;
+    return send();
+  } finally {
+    inFlight--;
+  }
 }
 
 // --- failure reports ----------------------------------------------------------------------------

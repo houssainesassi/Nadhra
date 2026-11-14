@@ -6,7 +6,7 @@
 // panels over the screen; the Emergency page opens by voice («نجدة», «عيّط»).
 //
 // The main screen's words follow the language selector. The panels stay in English.
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/useStore";
 import { SmartVisionController, type SheetName, type VisionState } from "@/lib/assistant/controller";
 import { commandExamples, type VoiceCommand } from "@/lib/assistant/commands";
@@ -14,7 +14,8 @@ import { LANGS, SPEECH_LANGS, type SpeechLang } from "@/lib/assistant/lang";
 import { cameraErrorText } from "@/lib/assistant/phrases";
 import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiProvider, type FacingSetting } from "@/lib/assistant/settings";
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
-import { CameraIcon, CameraOffIcon, ChevronIcon, CloseIcon, GlobeIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon } from "./icons";
+import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
+import { CameraIcon, CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, GlobeIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon } from "./icons";
 
 const SHORTCUTS = [
   ["C", "Open the camera, or stop assistance"],
@@ -77,6 +78,22 @@ function liveLabel(s: VisionState): string {
 }
 
 const isLiveOn = (s: VisionState) => s.live.status !== "off" && s.live.status !== "closed" && s.live.status !== "failed";
+
+/**
+ * The live regions for the current announcement. Each new announcement takes the next turn, so it is
+ * written into the region the previous one left empty: always a fresh insertion, even for the same
+ * sentence again, and never in two regions at once.
+ */
+function useAnnouncer(a: Announcement, echo: boolean): Regions {
+  const turn = useRef(0);
+  const [regions, setRegions] = useState<Regions>(EMPTY_REGIONS);
+  useEffect(() => {
+    if (!echo || !a.text) return setRegions(EMPTY_REGIONS);
+    turn.current++;
+    setRegions(announcerRegions({ ...a, id: turn.current }, echo));
+  }, [a.id, echo]); // a new announcement is a new id
+  return regions;
+}
 
 /** The one-line state shown on the camera, and its colour. */
 function assistanceStatus(s: VisionState, ui: UiText, urgent: boolean): { text: string; tone: "urgent" | "active" | "quiet" } {
@@ -236,6 +253,7 @@ export default function Assistant() {
   const ui = UI_TEXT[language];
   const rtl = lang.dir === "rtl";
   const echo = s.settings.screenReaderEcho || s.ttsFailed;
+  const regions = useAnnouncer(s.announce, echo);
   const urgentNow = !!heldWarning;
   const status = assistanceStatus(s, ui, urgentNow);
   const mic = micStatus(s, ui);
@@ -259,8 +277,11 @@ export default function Assistant() {
     <>
       <div className={`app ${rtl ? "arabic" : ""}`} lang={lang.bcp47} dir={lang.dir} data-active={active}>
         {/* Screen-reader channel. Silent unless asked for, or the page's own voice has failed. */}
-        <div aria-live={echo && !s.announce.urgent ? "polite" : "off"} className="sr-only">{echo && !s.announce.urgent ? s.announce.text : ""}</div>
-        <div role={echo && s.announce.urgent ? "alert" : undefined} className="sr-only">{echo && s.announce.urgent ? s.announce.text : ""}</div>
+        {/* Two regions per kind, used in turn, so the same sentence twice is still read twice (announcer.ts). */}
+        <div aria-live="polite" className="sr-only" data-testid="announce-polite-0">{regions.polite[0]}</div>
+        <div aria-live="polite" className="sr-only" data-testid="announce-polite-1">{regions.polite[1]}</div>
+        <div role="alert" className="sr-only" data-testid="announce-alert-0">{regions.alert[0]}</div>
+        <div role="alert" className="sr-only" data-testid="announce-alert-1">{regions.alert[1]}</div>
 
         <header className="topbar">
           <div className="brand">
@@ -289,6 +310,11 @@ export default function Assistant() {
         </header>
 
         <main className="main">
+          {/* The AI in use, on the home screen. Only where the server offers Nadhra, or it is already
+              chosen (so the user can always switch back). */}
+          {(s.status?.nadhra || provider === "nadhra") && (
+            <ProviderSwitch provider={provider} offered={!!s.status?.nadhra} onChange={(p) => controller.updateSettings({ provider: p })} />
+          )}
           {!active && (
             <section className="home" aria-label={ui.openCamera}>
               <button ref={openRef} type="button" onClick={() => void controller.startAssistance()} aria-keyshortcuts="C" aria-describedby="tagline" className="open-camera" data-testid="open-camera">
@@ -375,12 +401,6 @@ export default function Assistant() {
 
       <Sheet dialogRef={settingsRef} title="Settings" onClose={() => controller.closeSheet("settings")}>
         <div className="flex flex-col gap-6 text-lg">
-          {(s.status?.nadhra || provider === "nadhra") && (
-            <Choice label="AI" hint={provider === "nadhra" ? NADHRA_HINT + (s.status?.nadhra ? "" : " This server doesn't offer Nadhra AI.") : GEMINI_HINT} value={provider} onChange={(v) => controller.updateSettings({ provider: v as AiProvider })} testId="ai-provider">
-              <option value="gemini">Gemini AI (Google, online)</option>
-              <option value="nadhra">Nadhra AI (on this device, experimental)</option>
-            </Choice>
-          )}
           <div className="flex flex-col gap-3">
             <h3 className="font-medium">Conversation</h3>
             <Toggle testId="voice-commands" label="Voice commands" hint="On by itself with Open camera. Say a command or ask any question." checked={s.assistantOn} onChange={() => controller.toggleAssistant()} />
@@ -544,16 +564,65 @@ export default function Assistant() {
   );
 }
 
-const GEMINI_HINT = "Gemini AI describes, reads and answers. Pictures, questions and your voice go to Google Gemini when used (see Privacy & safety).";
-const NADHRA_HINT = "Experimental, under development. Its AI isn't connected yet: it can't describe, read, answer questions or understand voice commands. Nothing is sent from this device. With the camera on, only the phone's own warnings for people and vehicles work. Choose Gemini AI to use the other features.";
+const PROVIDER_NAMES: Record<AiProvider, string> = { gemini: "Gemini", nadhra: "Nadhra (experimental)" };
 
-function Choice({ label, hint, value, onChange, children, testId }: { label: string; hint?: string; value: string; onChange: (v: string) => void; children: React.ReactNode; testId?: string }) {
+/**
+ * The AI in use, on the home screen: a two-part switch, the active side filled, one tap to change.
+ * Native radio buttons, so screen readers announce a choice of two and which one is selected. The
+ * choice goes through the controller (privacy and consent rules, spoken confirmation) and is saved
+ * on the device. Nadhra is never offered as a new choice when the server doesn't offer it.
+ */
+function ProviderSwitch({ provider, offered, onChange }: { provider: AiProvider; offered: boolean; onChange: (p: AiProvider) => void }) {
+  const [changed, setChanged] = useState(false);
+  useEffect(() => {
+    if (!changed) return;
+    const t = setTimeout(() => setChanged(false), 4_000);
+    return () => clearTimeout(t);
+  }, [changed, provider]);
+  const pick = (p: AiProvider) => {
+    if (p === provider) return;
+    onChange(p);
+    setChanged(true);
+  };
+  return (
+    <fieldset className="ai-switch" data-testid="ai-provider" data-active={provider} lang="en" dir="ltr">
+      <legend className="sr-only">AI</legend>
+      <div className="ai-switch-track">
+        {(["gemini", "nadhra"] as const).map((p) => {
+          const active = provider === p;
+          const unavailable = p === "nadhra" && !offered;
+          const Icon = p === "gemini" ? CloudIcon : DeviceIcon;
+          return (
+            <label key={p} className="ai-switch-option" data-active={active} data-testid={`ai-provider-${p}`} title={unavailable ? "This server doesn't offer Nadhra" : undefined}>
+              <input type="radio" name="ai-provider" value={p} checked={active} disabled={unavailable && !active} onChange={() => pick(p)} className="sr-only" />
+              <Icon size={20} />
+              {/* The exact name, never cut: on a very narrow screen it breaks before "(experimental)". */}
+              <span className="ai-switch-name">
+                {PROVIDER_NAMES[p].split(" ").map((w, i) => (
+                  <Fragment key={i}>
+                    {i > 0 && " "}
+                    <span>{w}</span>
+                  </Fragment>
+                ))}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p role="status" className="ai-switch-note" data-testid="ai-provider-notice">
+        {changed ? `✓ ${PROVIDER_NAMES[provider]}` : ""}
+      </p>
+    </fieldset>
+  );
+}
+
+function Choice({ label, hint, value, onChange, children }: { label: string; hint?: string; value: string; onChange: (v: string) => void; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-2">
       <span className="font-medium">{label}</span>
       {hint && <span className="text-base text-ink-2">{hint}</span>}
       <span className="select">
-        <select value={value} onChange={(e) => onChange(e.target.value)} className="field pe-12" data-testid={testId}>{children}</select>
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="field pe-12">{children}</select>
         <ChevronIcon size={20} />
       </span>
     </label>

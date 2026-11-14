@@ -2,16 +2,21 @@
 // Server only. Read-only facts (architecture, CPU, memory, temperature) plus one network fact, whether
 // the internet is reachable, for routing in hybrid mode (router.ts).
 //
-// The internet probe runs only in hybrid mode: in cloud mode nothing changes, and in offline mode
-// nothing leaves the device, not even a probe. It is a plain GET to INTERNET_PROBE_URL; any HTTP answer
-// counts as reachable. The default is the Gemini API host without a key, which answers 404 and uses
-// no quota.
+// Whether the internet is reachable matters only in hybrid mode. By default it is learned PASSIVELY,
+// from the cloud requests the user actually makes with Gemini (noteCloudReachable, called by
+// ai/http.ts): a network failure means "down" for a minute, any HTTP answer means "up". Nothing is
+// ever sent just to check, so choosing Nadhra never causes a request to Google or anyone else.
+// An active probe exists only when the operator opts in with INTERNET_PROBE_URL (a plain GET; any HTTP
+// answer counts as reachable): point it at something neutral, such as the local router.
 import { readdirSync, readFileSync } from "node:fs";
 import { arch, cpus, freemem, loadavg, platform, totalmem } from "node:os";
 import { aiMode, type AiMode } from "../ai/router.ts";
 
-const DEFAULT_PROBE_URL = "https://generativelanguage.googleapis.com/";
 const PROBE_TIMEOUT_MS = 3_000;
+/** A reachability learned from a real cloud request is trusted this long, then unknown again. */
+const PASSIVE_TTL_MS = 60_000;
+/** The opt-in probe target, or null: no probe at all. */
+const probeUrl = () => process.env.INTERNET_PROBE_URL?.trim() || null;
 /** A known answer is reused this long; after that the next caller starts a new probe in the background. */
 const PROBE_TTL_MS = 30_000;
 
@@ -96,10 +101,15 @@ export function deviceInfo(deps: ReadDeps = {}): DeviceInfo {
 let known: { ok: boolean; at: number } | null = null;
 let probing: Promise<boolean> | null = null;
 
-/** One probe, shared by concurrent callers. Resolves true on any HTTP answer, false on a network failure or timeout. */
+/**
+ * One probe, shared by concurrent callers. Resolves true on any HTTP answer, false on a network failure
+ * or timeout. Without INTERNET_PROBE_URL nothing is sent: it resolves with what is already known
+ * (true when nothing is), so the cloud is simply tried, as when the state is unknown.
+ */
 export function probeInternet(fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const url = probeUrl();
+  if (!url) return Promise.resolve(known ? known.ok : true);
   probing ??= (async () => {
-    const url = process.env.INTERNET_PROBE_URL?.trim() || DEFAULT_PROBE_URL;
     let ok = false;
     try {
       const res = await fetchImpl(url, { method: "GET", cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
@@ -120,13 +130,24 @@ export function internetKnown(): boolean | null {
 }
 
 /**
- * For routing: in hybrid mode, the last known answer (undefined until the first probe has finished),
- * and a fresh probe in the background when it is stale. Other modes never probe and return undefined.
+ * For routing: in hybrid mode, the last known answer, or undefined (unknown: the cloud may be tried).
+ * Other modes return undefined. Without INTERNET_PROBE_URL the answer is passive only and expires after
+ * a minute. With it (opt-in), a stale answer starts a background probe, unless `probe` is false (the
+ * page's status request never starts one).
  */
-export function internetForRouting(mode: AiMode, now = Date.now()): boolean | undefined {
+export function internetForRouting(mode: AiMode, now = Date.now(), { probe = true }: { probe?: boolean } = {}): boolean | undefined {
   if (mode !== "hybrid") return undefined;
-  if (!known || now - known.at > PROBE_TTL_MS) void probeInternet().catch(() => {});
+  if (!probeUrl()) return known && now - known.at <= PASSIVE_TTL_MS ? known.ok : undefined;
+  if (probe && (!known || now - known.at > PROBE_TTL_MS)) void probeInternet().catch(() => {});
   return known ? known.ok : undefined;
+}
+
+/**
+ * Called after every real cloud request (ai/http.ts): any HTTP answer means reachable, a network
+ * failure means not. Aborted requests (timeouts, the user moving on) say nothing and aren't counted.
+ */
+export function noteCloudReachable(ok: boolean, now = Date.now()) {
+  known = { ok, at: now };
 }
 
 /** For tests. */
