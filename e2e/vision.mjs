@@ -98,8 +98,12 @@ async function open({ camera = "street", audio, grant = true, device = grant, vi
   // The controller's state, reflected on the camera stage (the screen has no status panels).
   const STATE = { "camera-status": "data-camera", "analysis-status": "data-analysis", "mic-status": "data-mic", detector: "data-detector" };
   const statusOf = (id) => page.getByTestId("stage").getAttribute(STATE[id]);
-  /** Open camera on the home screen, or the camera button left on the camera screen when voice commands stayed on. */
-  const start = () => page.locator('[data-testid="open-camera"]:visible, [data-testid="reopen-camera"]:visible').first().click();
+  /** Camera on the home screen. During a session (voice commands still on after «سكّر الكاميرا») only
+      Stop is on screen, so that session is ended first, as a user would. */
+  const start = async () => {
+    if (!(await page.getByTestId("open-camera").isVisible())) await page.getByTestId("stop-assistance").click();
+    await page.getByTestId("open-camera").click();
+  };
   const stop = () => page.getByTestId("stop-assistance").click();
   const openSettings = () => page.getByTestId("open-settings").click();
   const button = (name) => page.getByRole("button", { name, exact: true });
@@ -395,9 +399,10 @@ const scenarios = {
     const answered = await until(() => e.tts.some((t) => /شارع|كراهب|كرهبة|موتور|عباد/.test(t)), 25_000);
     check("the spoken answer follows", !!answered, e.tts.join(" | "));
     check("the loop keeps listening", (await e.page.evaluate(() => window.__rec.started)) >= 2 || !!(await until(() => e.page.evaluate(() => window.__rec.started >= 2), 20_000)));
-    await e.openSettings();
+    // During a session only Stop is on screen: the switch (in the closed Settings panel) is read, and
+    // the V key (or «سكّر الميكرو») turns the voice commands off.
     check("the voice commands switch reports its state", await e.page.getByTestId("voice-commands").isChecked());
-    await e.page.getByTestId("voice-commands").click();
+    await e.page.keyboard.press("KeyV");
     await sleep(500);
     check("the mic can be turned off", (await e.statusOf("mic-status")) === "off" && !(await e.page.getByTestId("voice-commands").isChecked()));
     await e.browser.close();
@@ -639,9 +644,12 @@ const scenarios = {
     check("pause: on-device detection keeps running", (await detectorStatus()) === "ready");
     check("pause: the user hears that warnings stay on", !!(await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("التحذيرات اللي في الجهاز مازالت خدّامة"))), 10_000)));
 
+    // Privacy & safety is in Settings, on the home screen: the session ends first.
+    await e.stop();
+    await e.openSettings();
     await e.page.getByTestId("open-privacy").click();
     await e.page.getByTestId("withdraw-consent").click();
-    check("withdrawing consent stops the camera", !!(await until(async () => (await e.statusOf("camera-status")) === "off", 5000)));
+    check("after withdrawing consent the camera is off", !!(await until(async () => (await e.statusOf("camera-status")) === "off", 5000)));
     check("and forgets the consent", (await e.page.evaluate(() => localStorage.getItem("assistant.consent.v3"))) === null);
     await e.page.keyboard.press("Escape");
     await e.start();
@@ -656,7 +664,7 @@ const scenarios = {
       tokenAsked = true;
       return route.fulfill({ status: 503, json: { error: "not-configured" } });
     });
-    await e.page.getByTestId("live-toggle").click(); // beside Stop on the camera screen
+    await e.page.keyboard.press("KeyL"); // during a camera session only Stop is on screen; L (or «احكي مباشرة») starts live
     check("Talk live: the microphone starts under the CSP, then asks for a token", !!(await until(() => tokenAsked, 10_000)));
     check("Talk live: a refused token is said, not hidden", !!(await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("المحادثة المباشرة ما خدمتش"))), 10_000)));
     const csp = e.errors.filter((m) => /Content Security Policy|Refused to/.test(m));

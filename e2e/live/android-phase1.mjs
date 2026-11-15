@@ -167,7 +167,7 @@ const consoleErrors = [];
 page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text().slice(0, 300)));
 page.on("pageerror", (e) => consoleErrors.push(String(e).slice(0, 300)));
 await page.goto(BASE, { waitUntil: "networkidle" });
-const status = () => page.getByTestId("live-toggle").getAttribute("data-live-status").catch(() => null);
+const status = () => page.getByTestId("stage").getAttribute("data-live-status").catch(() => null);
 const p1 = () => page.evaluate(() => { const L = window.__p1; return { ...L, tracks: L.tracks.map((t) => ({ kind: t.kind, state: t.readyState })) }; });
 
 log(DESKTOP ? `desktop check, mock: ${MOCK}` : "REAL session: Talk live starts now. Supervisor: keep the phone pointed at the room; ask a question about once a minute.");
@@ -190,7 +190,7 @@ while ((Date.now() - t0) / 1000 < LIMIT_S) {
   if (halt) { log(`STOP: ${halt.why}`); break; }
   await new Promise((r) => setTimeout(r, 100));
 }
-await page.getByTestId("live-toggle").click().catch(() => {}); // End (or nothing if already off)
+await page.getByTestId("stop-assistance").click().catch(() => {}); // End (or nothing if already off)
 const endedAt = Date.now();
 await new Promise((r) => setTimeout(r, 2000));
 const L = await p1();

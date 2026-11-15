@@ -107,7 +107,8 @@ async function session() {
 }
 
 const tracks = (page) => page.evaluate(() => window.__tracks.map((t) => ({ kind: t.kind, state: t.readyState })));
-const status = (page) => page.getByTestId("live-toggle").getAttribute("data-live-status");
+// On the stage (always in the page): the Microphone button is only on the home screen.
+const status = (page) => page.getByTestId("stage").getAttribute("data-live-status");
 const camera = (page) => page.getByTestId("stage").getAttribute("data-camera").catch(() => null);
 
 // --- 1. live from the home screen: speaking first, measurements, then End closes everything ---------
@@ -138,8 +139,22 @@ const camera = (page) => page.getByTestId("stage").getAttribute("data-camera").c
   check("speaking first: «SILENT» is never shown", !seen.has("SILENT"));
   check("speaking first: the real sentence is shown", seen.has("answer"));
   check("frames reach the model", fake.frames >= 3, `${fake.frames} frames`);
-  check("silent microphone: no user turn was detected", !fake.texts.some((t) => !t.startsWith("[camera-update]")));
+  check("silent microphone: no user turn was detected", !fake.texts.some((t) => !t.startsWith("[camera-update]")), JSON.stringify(fake.texts.filter((t) => !t.startsWith("[camera-update]"))));
 
+  const before = await tracks(page);
+  check("before End: camera and microphone tracks are live", before.some((t) => t.kind === "video" && t.state === "live") && before.some((t) => t.kind === "audio" && t.state === "live"), JSON.stringify(before));
+  const liveButtons = await page.locator(".app button:visible").evaluateAll((bs) => bs.map((b) => b.dataset.testid ?? b.textContent));
+  check("during live: only the End button is on screen", liveButtons.join(",") === "stop-assistance" && /End live conversation|وقّف المحادثة المباشرة/.test(await page.getByTestId("stop-assistance").innerText()), liveButtons.join(","));
+  await page.getByTestId("stop-assistance").click();
+  await until(async () => (await tracks(page)).every((t) => t.state === "ended"), 3_000);
+  const after = await tracks(page);
+  check("End: every camera and microphone track stopped at once", after.length > 0 && after.every((t) => t.state === "ended"), JSON.stringify(after));
+  check("End: back to the home screen (camera off)", (await camera(page)) !== "on" && (await page.getByTestId("open-camera").isVisible()));
+  const framesAtEnd = fake.frames;
+  await sleep(2_500);
+  check("End: nothing more is sent", fake.frames === framesAtEnd);
+
+  // Settings is on the home screen only: the measurements of the conversation that just ended.
   await page.getByTestId("open-settings").click();
   const stats = page.getByTestId("live-stats");
   await stats.locator("summary").click();
@@ -154,22 +169,12 @@ const camera = (page) => page.getByTestId("stage").getAttribute("data-camera").c
   check("Settings: measured usage and estimated cost are separate sections", /Measured[\s\S]*Tokens[\s\S]*Estimated cost/.test(text));
   await page.screenshot({ path: join(OUT, "settings-stats.png"), fullPage: true });
   await page.keyboard.press("Escape");
-
-  const before = await tracks(page);
-  check("before End: camera and microphone tracks are live", before.some((t) => t.kind === "video" && t.state === "live") && before.some((t) => t.kind === "audio" && t.state === "live"), JSON.stringify(before));
-  await page.getByTestId("live-toggle").click();
-  await until(async () => (await tracks(page)).every((t) => t.state === "ended"), 3_000);
-  const after = await tracks(page);
-  check("End: every camera and microphone track stopped at once", after.length > 0 && after.every((t) => t.state === "ended"), JSON.stringify(after));
-  check("End: back to the home screen (camera off)", (await camera(page)) !== "on");
-  const framesAtEnd = fake.frames;
-  await sleep(2_500);
-  check("End: nothing more is sent", fake.frames === framesAtEnd);
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }
 
-// --- 2. camera already on: End live keeps it, closes only the microphone; speaking first off -------
+// --- 2. camera already on: L starts live, L again ends it and keeps the camera; speaking first off ---
+// (During a camera session only Stop is on screen; the L key and «احكي مباشرة» still start live.)
 {
   const { ctx, page, fake, errors } = await session();
   fake.incompleteUsage = true;
@@ -179,24 +184,24 @@ const camera = (page) => page.getByTestId("stage").getAttribute("data-camera").c
   await page.keyboard.press("Escape");
   await page.getByTestId("open-camera").click();
   await until(async () => (await camera(page)) === "on", 10_000);
-  await page.getByTestId("live-toggle").click();
+  await page.keyboard.press("KeyL");
   check("camera on: live opens", await until(async () => (await status(page)) === "open", 15_000));
   await sleep(18_000);
   check("speaking first off: no cue in 18 s of changing views", fake.cues.length === 0, `${fake.cues.length} cues`);
-  await page.getByTestId("live-toggle").click();
+  await page.keyboard.press("KeyL");
   await until(async () => (await tracks(page)).filter((t) => t.kind === "audio").every((t) => t.state === "ended"), 3_000);
   const after = await tracks(page);
   check("End: microphone stopped", after.filter((t) => t.kind === "audio").every((t) => t.state === "ended"), JSON.stringify(after));
   check("End: the camera that was already on keeps running", (await camera(page)) === "on" && after.some((t) => t.kind === "video" && t.state === "live"), JSON.stringify(after));
+  await page.getByTestId("stop-assistance").click();
+  await until(async () => (await tracks(page)).every((t) => t.state === "ended"), 3_000);
+  check("Stop assistance: everything stopped", (await tracks(page)).every((t) => t.state === "ended"));
   await page.getByTestId("open-settings").click();
   await page.getByTestId("live-stats").locator("summary").click();
   const cost2 = await page.getByTestId("live-cost").innerText();
   check("incomplete usage: «Cost unavailable – incomplete usage data», and no number given as the cost", cost2.startsWith("Cost unavailable – incomplete usage data") && !/USD/.test(cost2), cost2);
   check("incomplete usage: the tokens are still shown as measured", /300 not broken down by type/.test(await page.getByTestId("live-tokens").innerText()));
   await page.keyboard.press("Escape");
-  await page.getByTestId("stop-assistance").click();
-  await until(async () => (await tracks(page)).every((t) => t.state === "ended"), 3_000);
-  check("Stop assistance: everything stopped", (await tracks(page)).every((t) => t.state === "ended"));
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }

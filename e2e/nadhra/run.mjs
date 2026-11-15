@@ -1,5 +1,5 @@
-// Nadhra in real Chromium against the production build (`next build` first): the provider switch on
-// the home screen, persistence, privacy and consent rules, and the three safety fixes (repeated
+// Nadhra in real Chromium against the production build (`next build` first): the provider switch (in
+// Settings), persistence, privacy and consent rules, and the three safety fixes (repeated
 // screen-reader announcements, no connectivity probe, cancelling what is in progress on the switch).
 //
 // Three `next start` servers, each under e2e/nadhra/netlog.mjs (every outgoing connection of the server
@@ -133,21 +133,34 @@ async function settings(page, fn) {
   await until(async () => !(await page.locator("dialog[open] [data-testid=voice-commands]").count()), 3_000);
   return r;
 }
-const sw = (page) => page.locator("main [data-testid=ai-provider]");
+// The AI switch lives in Settings; the home screen has only Camera, Microphone and Settings.
+const sw = (page) => page.locator("[data-testid=ai-provider]");
+const onHome = (page) => page.locator("main [data-testid=ai-provider]").count();
 const active = (page) => sw(page).getAttribute("data-active");
 const notice = (page) => until(async () => (await page.locator("[data-testid=ai-provider-notice]").textContent())?.trim(), 3_000);
-const choose = async (page, p) => { await page.click(`main [data-testid=ai-provider-${p}]`); await sleep(200); };
+const SETTINGS = "dialog[aria-label=Settings]";
+const choose = async (page, p) => {
+  if (await page.locator("[data-testid=open-settings]").isVisible()) await page.click("[data-testid=open-settings]");
+  // During a session only Stop is on screen (no Settings button, no voice command for it). The panel
+  // is opened directly, so the controller's switch-while-running paths stay covered.
+  else await page.evaluate((sel) => document.querySelector(sel).showModal(), SETTINGS);
+  await page.click(`${SETTINGS}[open] [data-testid=ai-provider-${p}]`);
+  await sleep(200);
+  // Closed directly, not with Esc: a consent notice the switch opened may be on top.
+  await page.evaluate((sel) => document.querySelector(sel)?.open && document.querySelector(sel).close(), SETTINGS);
+  await sleep(100);
+};
 
 {
   const { page, ctx } = await open(servers.plain.base);
-  check("plain: no AI switch on the home screen", (await sw(page).count()) === 0);
+  check("plain: no AI switch on the home screen", (await onHome(page)) === 0);
   check("plain: none in Settings either", (await settings(page, () => page.locator("dialog[open] [data-testid=ai-provider]").count())) === 0);
   await ctx.close();
 }
 {
   // Production with the flag: the same switch on the home screen; Nadhra refuses everything.
   const { page, ctx, requests, errors } = await open(servers.public.base);
-  check("public: the AI switch is on the home screen", (await sw(page).count()) === 1 && (await sw(page).isVisible()));
+  check("public: the AI switch is in Settings, not on the home screen", (await onHome(page)) === 0 && (await settings(page, () => sw(page).isVisible())));
   check("public: Gemini is the default, Nadhra selectable", (await active(page)) === "gemini" && (await page.locator("[data-testid=ai-provider-nadhra] input").isEnabled()));
   const tPub = Date.now();
   await choose(page, "nadhra");
@@ -184,12 +197,12 @@ const posts = (t = 0) => requests.filter((r) => r.t >= t && r.method !== "GET");
 const aiPosts = (t = 0) => posts(t).filter((r) => /\/api\/(vision|live)/.test(r.url));
 const offOrigin = () => requests.filter((r) => !r.url.startsWith(servers.hybrid.base) && !r.url.startsWith("data:") && !r.url.startsWith("blob:"));
 
-check("home: the AI switch is on the home screen", (await sw(page).count()) === 1 && (await sw(page).isVisible()));
-check("home: not in Settings any more", (await settings(page, () => page.locator("dialog[open] [data-testid=ai-provider]").count())) === 0);
+check("the AI switch is in Settings", (await settings(page, () => page.locator("dialog[open] [data-testid=ai-provider]").isVisible())));
+check("home: not on the home screen (only Camera, Microphone, Settings)", (await onHome(page)) === 0);
 check("Gemini is the default, selected", (await active(page)) === "gemini" && (await page.locator("[data-testid=ai-provider-gemini] input").isChecked()));
-const names = await page.locator("main [data-testid=ai-provider] .ai-switch-name").allTextContents();
+const names = await page.locator("[data-testid=ai-provider] .ai-switch-name").allTextContents();
 check("names exactly: Gemini / Nadhra (experimental)", JSON.stringify(names.map((n) => n.replace(/\s+/g, " ").trim())) === JSON.stringify(["Gemini", "Nadhra (experimental)"]), JSON.stringify(names));
-check("radio names read correctly by screen readers", (await page.getByRole("radio", { name: "Nadhra (experimental)" }).count()) === 1 && (await page.getByRole("radio", { name: "Gemini" }).count()) === 1);
+check("radio names read correctly by screen readers", await settings(page, async () => (await page.getByRole("radio", { name: "Nadhra (experimental)" }).count()) === 1 && (await page.getByRole("radio", { name: "Gemini" }).count()) === 1));
 check("no 'Gemini AI' or 'Nadhra AI' anywhere", !/Gemini AI|Nadhra AI/.test(await page.evaluate(() => document.body.innerText)));
 check("default: no provider stored", !(await page.evaluate(() => (localStorage.getItem("assistant.settings") ?? "").includes("provider"))));
 
@@ -215,7 +228,7 @@ await page.click("[data-testid=open-camera]");
 await until(async () => (await stage(page, "camera")) === "on", 8_000);
 check("Nadhra: camera starts without the Google consent notice", (await stage(page, "camera")) === "on" && !(await consentOpen(page)));
 check("Nadhra: analysis state is local", (await stage(page, "analysis")) === "local", await stage(page, "analysis"));
-check("Nadhra: the switch stays visible with the camera on", await sw(page).isVisible());
+check("Nadhra: during the session only Stop is on screen", (await page.locator("[data-testid=stop-assistance]").isVisible()) && (await page.locator("[data-testid=open-settings], [data-testid=open-camera], [data-testid=live-toggle]").count()) === 0);
 check("Nadhra: status line says on-device warnings only", await until(async () => (await page.locator("[data-testid=assistant-state]").textContent())?.includes(UI.nadhra), 4_000));
 check("Nadhra: camera notice spoken", await heard(page, T.nadhra.cameraNotice));
 
@@ -236,7 +249,7 @@ for (const [key, what] of [["t", "read"], ["i", "identify"], ["l", "live convers
 }
 await page.keyboard.press("v");
 check("Nadhra: voice commands refused, with the reason", await heard(page, T.nadhra.noVoice));
-check("Nadhra: live conversation never started", (await page.locator("[data-testid=live-toggle]").getAttribute("data-live-status")) === "off");
+check("Nadhra: live conversation never started", (await page.locator("[data-testid=stage]").getAttribute("aria-label")) !== "Live conversation" && (await page.locator("[data-testid=voice-orb]").count()) === 0);
 
 await sleep(4_000);
 check("Nadhra: the page sent nothing (no POST of any kind)", posts(tSwitch).length === 0, JSON.stringify(posts(tSwitch).map((r) => r.url)));
@@ -318,16 +331,17 @@ check("no page errors", errors.length === 0, errors.join(" | "));
 await page.screenshot({ path: join(OUT, "home-412.png") });
 await ctx.close();
 
-// Layout: the home screen with the switch still fits, at phone widths, without cutting the names.
+// Layout: the home screen fits at phone widths, and the switch in Settings doesn't cut the names.
 for (const width of [320, 390]) {
   const { page: p, ctx: c } = await open(servers.hybrid.base, { width, height: 700 });
-  const m = await p.evaluate(() => ({
+  const cut = await settings(p, () => p.evaluate(() => [...document.querySelectorAll(".ai-switch-name > span")].some((s) => s.scrollWidth > s.clientWidth + 1)));
+  const m = await p.evaluate((cut) => ({
+    cut,
     hScroll: document.documentElement.scrollWidth > innerWidth,
     vScroll: document.querySelector(".app").scrollHeight > document.querySelector(".app").clientHeight + 1,
-    cut: [...document.querySelectorAll(".ai-switch-name > span")].some((s) => s.scrollWidth > s.clientWidth + 1),
     openVisible: (() => { const r = document.querySelector("[data-testid=open-camera]").getBoundingClientRect(); return r.bottom <= innerHeight && r.top >= 0; })(),
-  }));
-  check(`${width}px: no sideways scroll, nothing cut, Open camera fully visible`, !m.hScroll && !m.cut && m.openVisible, JSON.stringify(m));
+  }), cut);
+  check(`${width}px: no sideways scroll, AI names whole in Settings, Camera fully visible`, !m.hScroll && !m.cut && m.openVisible, JSON.stringify(m));
   check(`${width}px: the home screen still fits without scrolling`, !m.vScroll, JSON.stringify(m));
   await p.screenshot({ path: join(OUT, `home-${width}.png`) });
   await c.close();

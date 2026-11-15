@@ -26,7 +26,7 @@ import { LiveSession, type LiveStatus } from "../live/session.ts";
 import { LiveAudio, MicError } from "../live/audioIO.ts";
 import { classifyCueAnswer, cueText, NewObjectFilter, PROACTIVE, ProactiveGate } from "../live/proactive.ts";
 import { addToTotals, LiveMetrics, loadTotals, saveTotals, summaryCode, type DeviceTotals, type LiveSummary } from "../live/metrics.ts";
-import { LIVE_ACTIVE_WINDOW_MS, LIVE_CHANGE_THRESHOLD, LIVE_FRAME, LIVE_HEARTBEAT_FRAME_MS, LIVE_IDLE_HEARTBEAT_FRAME_MS, LIVE_MIN_FRAME_GAP_MS, LIVE_SPEECH_FRAME_GAP_MS, LIVE_STALE_FRAME_MS } from "../live/config.ts";
+import { LIVE_ACTIVE_WINDOW_MS, LIVE_CHANGE_THRESHOLD, LIVE_GREETING_CUE, LIVE_FRAME, LIVE_HEARTBEAT_FRAME_MS, LIVE_IDLE_HEARTBEAT_FRAME_MS, LIVE_MIN_FRAME_GAP_MS, LIVE_SPEECH_FRAME_GAP_MS, LIVE_STALE_FRAME_MS } from "../live/config.ts";
 
 const TICK_MS = 500;
 const THUMB = { width: 160, height: 120 };
@@ -284,6 +284,7 @@ export class SmartVisionController {
   private autoNoticeSaid = false;
   /** The notice about what Nadhra AI can do with the camera was said in this visit. */
   private nadhraNoticeSaid = false;
+  private greeted = false;
   private cameraStarts = 0;
   private lastLiveReminderAt = 0;
   private movingSince: number | null = null;
@@ -343,6 +344,8 @@ export class SmartVisionController {
   /** The next recognized words start a new user turn / a new answer on screen. */
   private liveNewUserTurn = true;
   private liveNewAnswer = true;
+  /** A new live conversation: the AI greets once the phone's own "live on" notice has been said. */
+  private liveGreetPending = false;
   /** Consent was asked for on the way to a live conversation: it starts once given. */
   private pendingLive = false;
   /** Open Camera was pressed: hands-free listening starts once the camera is on (after consent, if asked). */
@@ -447,6 +450,7 @@ export class SmartVisionController {
         // A warning cuts the live answer off. The live microphone stays open: echo cancellation
         // keeps this voice out of it, and muting it would lose what the user says meanwhile.
         if (speaking && this.liveAudio && this.queue?.hasAtLeast("warning")) this.cutLiveForWarning();
+        if (!speaking) this.sendLiveGreeting();
       },
       onUtterance: (text, priority) => {
         const urgent = priority === "urgent";
@@ -579,6 +583,18 @@ export class SmartVisionController {
   /** `lang`: speak in that language's voice (an answer in the question's language). */
   private say(text: string, priority: SpeechPriority, lang?: SpeechLang, key?: string) {
     this.queue?.say(text, priority, lang && lang !== this.lang ? lang : undefined, key);
+  }
+
+  /**
+   * The welcome when the app opens («عسلامة!»), once per visit. Browsers keep speech locked until
+   * the first tap or key press, so the page calls this at load only when audio is already allowed,
+   * and otherwise in that first gesture. A status sentence: it waits behind anything more important.
+   */
+  greet(text: string) {
+    if (this.greeted || !text) return;
+    this.greeted = true;
+    this.unlockAudio();
+    this.say(text, "status");
   }
 
   /** Must run inside a click or key press: browsers keep audio locked until then. */
@@ -2271,6 +2287,8 @@ export class SmartVisionController {
         this.feedback("on");
         this.lastLiveReminderAt = Date.now();
         this.say(this.t.liveOn, "status");
+        this.liveGreetPending = true;
+        this.sendLiveGreeting(); // now if nothing is playing, else once the notice ends
       } else if (before === "reconnecting") {
         this.say(this.t.liveBack, "status");
       }
@@ -2298,6 +2316,7 @@ export class SmartVisionController {
    */
   stopLive(quiet = false, opts: { keepCamera?: boolean } = {}) {
     this.liveGen++;
+    this.liveGreetPending = false;
     this.pendingLive = false;
     const had = !!this.liveSession || !!this.liveAudio;
     const closeCamera = this.liveOwnsCamera && !opts.keepCamera && (this.state.camera === "on" || this.state.camera === "starting");
@@ -2366,6 +2385,16 @@ export class SmartVisionController {
     this.liveNewObjectAt = null;
     this.liveNewAnswer = true;
     this.liveCue = { state: "wait", buf: [], text: "", holdTimer: null, sentAt: now, started: false, droppedAt: 0 };
+  }
+
+  /** The AI's greeting at the start of a live conversation, after the phone has stopped talking. */
+  private sendLiveGreeting() {
+    if (!this.liveGreetPending || this.queue?.busy) return;
+    const session = this.liveSession;
+    if (!session?.isOpen) return;
+    this.liveGreetPending = false;
+    if (!session.sendText(LIVE_GREETING_CUE, { measure: false })) return;
+    this.liveNewAnswer = true;
   }
 
   /** The cued answer says something: it is played, from its first sound, and shown. */

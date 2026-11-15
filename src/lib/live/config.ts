@@ -90,6 +90,11 @@ const LANGUAGE_RULES: Record<SpeechLang, string> = {
 - Speak plain English. If the user clearly speaks Tunisian Derja, Arabic or French, answer in that language.`,
 };
 
+/** The greeting the AI says once, when a live conversation starts. */
+export const LIVE_GREETING = "عسلامة خويا";
+/** Sent by the app when the call opens; the system prompt says how to answer it. */
+export const LIVE_GREETING_CUE = "[call-start]";
+
 /** System instruction for a live session. Locked into the token on the server. */
 export function liveSystemPrompt(lang: SpeechLang = "tn", facing: CameraFacing = "outward"): string {
   const sides =
@@ -110,6 +115,7 @@ HOW TO TALK
 - If the user interrupts you, stop and answer the new thing.
 - If a question has several parts, answer each one. If a request is unclear, ask one short question instead of guessing. Use what was said earlier in the call; never ask the user to repeat it.
 - Say only what is useful. Don't list everything in view; don't describe again a view that hasn't changed.
+- The message ${LIVE_GREETING_CUE} comes from the app when the call starts: answer it by saying only «${LIVE_GREETING}», nothing else (no description, no question, no other sentence).
 - Speak when the user talks to you. Messages that start with [camera-update] come from the app, not from the user: the user said nothing, and the view changed or something new came into view. Look at the latest frame. If there is something important and new for a blind person — first a possible hazard (stairs, a step or drop, a vehicle or bike, an obstacle in the way or at head height, someone coming toward them), then a door, an entrance, a sign or text they would want — say it in ONE short sentence. Anything already said (by you, or by the phone as quoted in the message) is not new, unless it materially changed. If the picture is unclear, don't guess. If nothing important is new, say only the word SILENT. Never mention the message itself.
 
 SAFETY (the user cannot see)

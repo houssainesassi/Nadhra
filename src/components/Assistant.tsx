@@ -1,12 +1,15 @@
 "use client";
-// The whole app is one screen with two states. At rest: two large buttons side by side, Open camera
-// and Talk live. While assisting: the camera preview, what the assistant is saying, a microphone
-// indicator and one Stop button, with the essential actions as large buttons above it (Describe,
-// Read, Identify, Ask, Pause) and Talk live beside Stop. Everything can also be done by voice and keyboard, and every state change is spoken, so
-// nothing depends on seeing the screen. Settings, Privacy & safety and the Emergency page are
-// panels over the screen; the Emergency page opens by voice («نجدة», «عيّط»).
+// The whole app is one screen with two states.
+//   Home: «عسلامة!» (said aloud once per visit, and shown), then exactly three buttons: Camera,
+//   Microphone (the live conversation) and Settings.
+//   A session (either one): only the assistant: the camera preview, what it is saying, its state,
+//   and one button to end it. Nothing else is on screen until it ends.
+// Everything can also be done by voice and keyboard (Describe, Read, Identify, Ask, Pause...), and
+// every state change is spoken, so nothing depends on seeing the screen. Settings (with the
+// language, the AI in use and Privacy & safety) and the Emergency page are panels over the screen;
+// the Emergency page opens by voice («نجدة», «عيّط»).
 //
-// The main screen's words follow the language selector. The panels stay in English.
+// The main screen's words follow the language chosen in Settings. The panels stay in English.
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/useStore";
 import { SmartVisionController, type SheetName, type VisionState } from "@/lib/assistant/controller";
@@ -17,7 +20,7 @@ import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiPr
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
 import type { DeviceTotals, LiveSummary } from "@/lib/live/metrics";
-import { AskIcon, CameraIcon, CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, DescribeIcon, GlobeIcon, IdentifyIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PauseIcon, PhoneIcon, PlayIcon, ReadIcon, SettingsIcon, ShieldIcon } from "./icons";
+import { CameraIcon, CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon } from "./icons";
 
 /** Tunisia's emergency numbers. */
 const EMERGENCY_NUMBERS = [
@@ -123,7 +126,6 @@ export default function Assistant() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const openRef = useRef<HTMLButtonElement>(null);
   const stopRef = useRef<HTMLButtonElement>(null);
-  const liveRef = useRef<HTMLButtonElement>(null);
   const consentRef = useRef<HTMLDialogElement>(null);
   const acceptRef = useRef<HTMLButtonElement>(null);
   const settingsRef = useRef<HTMLDialogElement>(null);
@@ -143,6 +145,22 @@ export default function Assistant() {
     if (videoRef.current) controller.attach(videoRef.current);
     openRef.current?.focus({ preventScroll: true });
     return () => controller.detach();
+  }, [controller]);
+
+  // «عسلامة!» when the app opens. Speech is locked until the first tap or key press, so: at once if
+  // the browser already allows it, otherwise in that first gesture (capture phase, before the button
+  // it lands on starts anything). The heading shows the same word meanwhile.
+  useEffect(() => {
+    const greet = () => controller.greet(UI_TEXT[controller.state.settings.language].greeting);
+    if (navigator.userActivation?.hasBeenActive) return greet();
+    const events = ["pointerup", "touchend", "keydown"] as const;
+    const off = () => events.forEach((e) => removeEventListener(e, once, true));
+    const once = () => {
+      off();
+      greet();
+    };
+    events.forEach((e) => addEventListener(e, once, true));
+    return off;
   }, [controller]);
 
   useEffect(() => {
@@ -179,8 +197,7 @@ export default function Assistant() {
     if (wasActive.current === active) return;
     wasActive.current = active;
     if (document.querySelector("dialog[open]")) return;
-    // Talk live pressed at rest: its own button, now beside Stop, keeps the focus.
-    (active ? (isLiveOn(controller.state) ? liveRef : stopRef) : openRef).current?.focus({ preventScroll: true });
+    (active ? stopRef : openRef).current?.focus({ preventScroll: true });
   }, [active, controller]);
 
   useEffect(() => {
@@ -247,26 +264,8 @@ export default function Assistant() {
   // What the assistant is saying: a held warning first, then a live or streaming answer.
   const caption = heldWarning ?? (liveOn && s.live.ai.trim() ? s.live.ai.trim() : s.answer.live && s.answer.text ? s.answer.text : s.lastSpoken);
   const heard = liveOn ? s.live.user.trim() : s.lastHeard;
-  // Ask is recording a question (push-to-talk): pressing it again sends the question.
-  const askRecording = s.mic === "listening" && !s.assistantOn && !liveOn;
-  // Pause only has something to stop when the descriptions are automatic (Gemini, outside a live
-  // conversation). Once paused, Resume stays in reach whatever changed since.
-  const showPause = cameraOn && (s.paused || (s.settings.autoDescribe && provider !== "nadhra" && !liveOn));
-  // The one Talk live button, the same one Settings used to hold: rendered on the home screen at rest
-  // and beside Stop while assisting, never both (the two places are exclusive). Same controller
-  // call as the L key and the voice commands; the first press only gives the live notice.
-  const liveButton = (home: boolean) => (
-    <button ref={home ? undefined : liveRef} type="button" onClick={() => controller.toggleLive()} aria-keyshortcuts="L" aria-describedby="live-hint"
-      data-testid="live-toggle" data-live-status={s.live.status} data-notice={s.liveNotice}
-      className={home ? "home-action home-action-live" : `control live-button ${liveOn ? "control-listening" : "control-quiet"}`}>
-      {home ? (
-        <span className="home-action-icon" aria-hidden="true"><MicIcon size={40} /></span>
-      ) : (
-        <MicIcon />
-      )}
-      <span>{liveOn ? ui.talkLive.end : s.liveNotice ? ui.talkLive.agree : ui.talkLive.start}</span>
-    </button>
-  );
+  // What the voice orb shows in a live conversation. Decoration: the state pill says it in words.
+  const orb = !liveOn ? null : s.live.status !== "open" ? "connecting" : s.live.playing ? "speaking" : s.live.userTalking ? "hearing" : "listening";
   const notices = cameraOn
     ? [
         !s.online && ui.offline,
@@ -277,7 +276,7 @@ export default function Assistant() {
 
   return (
     <>
-      <div className={`app ${rtl ? "arabic" : ""}`} lang={lang.bcp47} dir={lang.dir} data-active={active}>
+      <div className={`app ${rtl ? "arabic" : ""}`} lang={lang.bcp47} dir={lang.dir} data-active={active} data-mode={liveOn ? "live" : "camera"}>
         {/* Screen-reader channel. Silent unless asked for, or the page's own voice has failed. */}
         {/* Two regions per kind, used in turn, so the same sentence twice is still read twice (announcer.ts). */}
         <div aria-live="polite" className="sr-only" data-testid="announce-polite-0">{regions.polite[0]}</div>
@@ -285,80 +284,68 @@ export default function Assistant() {
         <div role="alert" className="sr-only" data-testid="announce-alert-0">{regions.alert[0]}</div>
         <div role="alert" className="sr-only" data-testid="announce-alert-1">{regions.alert[1]}</div>
 
-        <header className="topbar">
-          <div className="brand">
-            <LogoMark />
-            <h1 lang="en" dir="ltr">Nadhra</h1>
-            <span lang="ar" dir="rtl" className="brand-ar arabic">نظرة</span>
-          </div>
-          <nav aria-label={`${ui.language}, ${ui.privacySafety}, ${ui.settings}`} className="tools">
-            <label className="lang-select">
-              <span className="sr-only">{ui.language}</span>
-              <GlobeIcon size={20} />
-              <select value={language} onChange={(e) => controller.updateSettings({ language: e.target.value as SpeechLang })} data-testid="language">
-                {SPEECH_LANGS.map((l) => (
-                  <option key={l} value={l} lang={LANGS[l].bcp47}>{UI_TEXT[l].name}</option>
-                ))}
-              </select>
-              <ChevronIcon size={16} />
-            </label>
-            <button type="button" onClick={() => controller.openSheet("privacy")} className="icon-button" aria-label={ui.privacySafety} title={ui.privacySafety} data-testid="open-privacy">
-              <ShieldIcon size={22} />
-            </button>
-            <button type="button" onClick={() => controller.openSheet("settings")} className="icon-button" aria-label={ui.settings} title={ui.settings} data-testid="open-settings">
-              <SettingsIcon size={22} />
-            </button>
-          </nav>
-        </header>
-
         <main className="main">
-          {/* The AI in use, on the home screen. Only where the server offers Nadhra, or it is already
-              chosen (so the user can always switch back). */}
-          {(s.status?.nadhra || provider === "nadhra") && (
-            <ProviderSwitch provider={provider} offered={!!s.status?.nadhra} onChange={(p) => controller.updateSettings({ provider: p })} />
-          )}
           {!active && (
-            // Read in this order by a screen reader: what Nadhra does, the two ways in, the safety note.
+            // Read in this order by a screen reader: the greeting, what Nadhra does, the three buttons.
             <section className="home">
-              <p id="tagline" className="tagline">{ui.tagline}</p>
-              <div className="home-actions" data-large={s.settings.textScale >= 1.5}>
-                <button ref={openRef} type="button" onClick={() => void controller.startAssistance()} aria-keyshortcuts="C" aria-describedby="tagline" className="home-action open-camera" data-testid="open-camera">
-                  <span className="home-action-icon" aria-hidden="true">
-                    <CameraIcon size={44} />
-                  </span>
-                  <span>{ui.openCamera}</span>
-                </button>
-                {liveButton(true)}
-              </div>
-              {s.cameraError && (
-                <p role="alert" className="home-alert">{cameraErrorText(language, s.cameraError)}</p>
-              )}
-              <p className="footnote">
-                {ui.safetyNote}{" "}
-                <button type="button" onClick={() => controller.openSheet("privacy")} className="link">{ui.privacySafety}</button>
+              <div className="home-ambient" aria-hidden="true" />
+              <p className="home-brand">
+                <LogoMark />
+                <span lang="en" dir="ltr">Nadhra</span>
+                <span lang="ar" dir="rtl" className="brand-ar arabic">نظرة</span>
               </p>
+              <div className="home-center">
+                <h1 className="greeting" data-testid="greeting">{ui.greeting}</h1>
+                <p id="tagline" className="tagline">{ui.tagline}</p>
+                <div className="tiles" data-large={s.settings.textScale >= 1.5}>
+                  <button ref={openRef} type="button" onClick={() => void controller.startAssistance()} aria-keyshortcuts="C" aria-describedby="camera-sub"
+                    className="tile tile-camera" data-testid="open-camera">
+                    <span className="tile-icon" aria-hidden="true"><CameraIcon size={40} /></span>
+                    <span className="tile-text">
+                      <span className="tile-label">{ui.camera}</span>
+                      {/* The description, not the name: read after it, through aria-describedby. */}
+                      <span id="camera-sub" className="tile-sub" aria-hidden="true">{ui.cameraSub}</span>
+                    </span>
+                  </button>
+                  {/* The live conversation. The first press only gives its notice (spoken); the button then says «I agree». */}
+                  <button type="button" onClick={() => controller.toggleLive()} aria-keyshortcuts="L" aria-describedby="mic-sub live-hint"
+                    className="tile tile-mic" data-testid="live-toggle" data-live-status={s.live.status} data-notice={s.liveNotice}>
+                    <span className="tile-icon" aria-hidden="true"><MicIcon size={40} /></span>
+                    <span className="tile-text">
+                      <span className="tile-label">{s.liveNotice ? ui.talkLive.agree : ui.microphone}</span>
+                      <span id="mic-sub" className="tile-sub" aria-hidden="true">{ui.micSub}</span>
+                    </span>
+                  </button>
+                </div>
+                {s.cameraError && (
+                  <p role="alert" className="home-alert">{cameraErrorText(language, s.cameraError)}</p>
+                )}
+              </div>
+              <button type="button" onClick={() => controller.openSheet("settings")} className="settings-button" data-testid="open-settings">
+                <SettingsIcon size={22} />
+                <span>{ui.settings}</span>
+              </button>
             </section>
           )}
 
-          <section className="stage" hidden={!active} aria-label={ui.active} data-on={cameraOn} data-urgent={urgentNow} data-testid="stage"
+          {/* Always in the page (the controller holds its <video>), shown only during a session. */}
+          <section className="stage" hidden={!active} aria-label={liveOn ? ui.live : ui.active} data-on={cameraOn} data-urgent={urgentNow} data-testid="stage"
             // The controller's state, for automated tests: the status panels are gone from the screen.
-            data-camera={s.camera} data-analysis={s.analysis} data-detector={s.detector} data-mic={s.mic} data-voice-commands={s.assistantOn}
+            data-camera={s.camera} data-live-status={s.live.status} data-analysis={s.analysis} data-detector={s.detector} data-mic={s.mic} data-voice-commands={s.assistantOn}
             data-detections={s.detections.length} data-local-hazards={s.localHazards.map((h) => `${h.kind}:${h.motion}`).join(" ")}>
+            {/* The session's heading (the greeting is the home screen's), for screen-reader navigation. */}
+            {active && <h1 className="sr-only">{liveOn ? ui.live : ui.active}</h1>}
             <video ref={videoRef} muted playsInline aria-hidden="true" tabIndex={-1} />
 
-            {!cameraOn && (
+            {!cameraOn && !liveOn && (
               <div className="stage-empty">
-                {s.camera === "starting" ? (
-                  <p className="stage-empty-text">{ui.starting}</p>
-                ) : (
-                  <>
-                    <p className="stage-empty-text">{s.cameraError ? cameraErrorText(language, s.cameraError) : ui.cameraOff}</p>
-                    <button type="button" onClick={() => void controller.startCamera()} className="pill-button" data-testid="reopen-camera">
-                      <CameraIcon size={22} />
-                      <span>{ui.openCamera}</span>
-                    </button>
-                  </>
-                )}
+                <p className="stage-empty-text">{s.camera === "starting" ? ui.starting : s.cameraError ? cameraErrorText(language, s.cameraError) : ui.cameraOff}</p>
+              </div>
+            )}
+
+            {orb && (
+              <div className="voice-orb" data-state={orb} data-testid="voice-orb" aria-hidden="true">
+                <span className="orb"><MicIcon size={44} /></span>
               </div>
             )}
 
@@ -388,49 +375,19 @@ export default function Assistant() {
               {caption ? (
                 <p dir="auto" data-testid="last-spoken" data-urgent={urgentNow} className="caption">{caption}</p>
               ) : (
-                <p data-testid="last-spoken" data-urgent="false" className="caption caption-hint">{ui.prompt(examples.front ?? "")}</p>
+                <p data-testid="last-spoken" data-urgent="false" className="caption caption-hint">{liveOn ? ui.talkLive.hint : ui.prompt(examples.front ?? "")}</p>
               )}
             </div>
           </section>
 
           {active && (
-            // The essential actions, as plain buttons: what a TalkBack or screen-reader user reaches by
-            // swiping, without needing the voice commands or the keys. Each one is the same controller
-            // call as its voice command and key.
-            <div role="group" aria-label={ui.actions.group} className="actions" data-large={s.settings.textScale >= 1.5} data-testid="actions">
-              <button type="button" onClick={() => void controller.runTask("describe")} aria-keyshortcuts="D" className="control control-quiet action" data-testid="action-describe">
-                <DescribeIcon />
-                <span>{ui.actions.describe}</span>
+            // The only button during a session: it ends everything (camera, microphone, live
+            // conversation) and goes back home. The same call as the C key and «وقّف».
+            <div className="end-bar" data-large={s.settings.textScale >= 1.5}>
+              <button ref={stopRef} type="button" onClick={() => controller.stopAssistance()} aria-keyshortcuts="C" aria-describedby="stop-hint" className="end-button" data-testid="stop-assistance">
+                {liveOn ? <MicOffIcon size={26} /> : <CameraOffIcon size={26} />}
+                <span>{liveOn ? ui.talkLive.end : ui.stop}</span>
               </button>
-              <button type="button" onClick={() => void controller.runTask("read")} aria-keyshortcuts="T" className="control control-quiet action" data-testid="action-read">
-                <ReadIcon />
-                <span>{ui.actions.read}</span>
-              </button>
-              <button type="button" onClick={() => void controller.runTask("identify")} aria-keyshortcuts="I" className="control control-quiet action" data-testid="action-identify">
-                <IdentifyIcon />
-                <span>{ui.actions.identify}</span>
-              </button>
-              <button type="button" onClick={() => void controller.askByVoice()} aria-keyshortcuts="Q" className={`control action ${askRecording ? "control-listening" : "control-quiet"}`} data-testid="action-ask">
-                <AskIcon />
-                <span>{askRecording ? ui.actions.askDone : ui.actions.ask}</span>
-              </button>
-              {showPause && (
-                <button type="button" onClick={() => (s.paused ? controller.resume() : controller.pause())} aria-keyshortcuts="P" aria-describedby="pause-hint" className="control control-quiet action" data-testid="action-pause" data-paused={s.paused}>
-                  {s.paused ? <PlayIcon /> : <PauseIcon />}
-                  <span>{s.paused ? ui.actions.resume : ui.actions.pause}</span>
-                </button>
-              )}
-              <p id="pause-hint" className="sr-only">{ui.actions.pauseHint}</p>
-            </div>
-          )}
-          {active && (
-            // Stop and Talk live side by side, as Open camera and Talk live are at rest.
-            <div className="active-bar" data-large={s.settings.textScale >= 1.5}>
-              <button ref={stopRef} type="button" onClick={() => controller.stopAssistance()} aria-keyshortcuts="C" aria-describedby="stop-hint" className="stop-button" data-testid="stop-assistance">
-                <CameraOffIcon size={26} />
-                <span>{ui.stop}</span>
-              </button>
-              {liveButton(false)}
             </div>
           )}
           <p id="stop-hint" className="sr-only">{ui.stopHint}</p>
@@ -440,11 +397,28 @@ export default function Assistant() {
 
       <Sheet dialogRef={settingsRef} title="Settings" onClose={() => controller.closeSheet("settings")}>
         <div className="flex flex-col gap-6 text-lg">
-          <div className="flex flex-col gap-3">
+          {/* What used to sit around the home buttons: the home screen keeps only Camera, Microphone, Settings. */}
+          <Choice label="Language" hint="For speech, for recognition and for the main screen." testId="language" value={language} onChange={(v) => controller.updateSettings({ language: v as SpeechLang })}>
+            {SPEECH_LANGS.map((l) => (
+              <option key={l} value={l} lang={LANGS[l].bcp47}>{UI_TEXT[l].name}</option>
+            ))}
+          </Choice>
+          {/* The AI in use. Only where the server offers Nadhra, or it is already chosen (so the user can always switch back). */}
+          {(s.status?.nadhra || provider === "nadhra") && (
+            <div className="flex flex-col gap-2">
+              <span className="font-medium" aria-hidden="true">AI</span>
+              <ProviderSwitch provider={provider} offered={!!s.status?.nadhra} onChange={(p) => controller.updateSettings({ provider: p })} />
+            </div>
+          )}
+          <button type="button" onClick={() => controller.openSheet("privacy")} className="control control-quiet min-h-16" data-testid="open-privacy">
+            <ShieldIcon />
+            <span>Privacy &amp; safety</span>
+          </button>
+          <div className="flex flex-col gap-3 border-t border-hairline pt-6">
             <h3 className="font-medium">Conversation</h3>
-            <Toggle testId="voice-commands" label="Voice commands" hint="On by itself with Open camera. Say a command or ask any question." checked={s.assistantOn} onChange={() => controller.toggleAssistant()} />
-            <h4 className="mt-2 font-medium">Talk live</h4>
-            <p className="text-base text-ink-2">The Talk live button is on the main screen, next to Open camera, and with the actions while the camera is on. The <kbd>L</kbd> key works too. A spoken conversation, like a phone call: talk any time while showing the camera, and interrupt whenever you like. While it is on, your voice and about one picture a second go to Google Gemini. To stop sending, press “End live conversation” or “Stop assistance”: that stops on this phone, without sending anything. Saying “stop live” or «وقّف المحادثة» works too, but those words are recognised by Gemini Live, so they reach Google. On-device warnings keep running.</p>
+            <Toggle testId="voice-commands" label="Voice commands" hint="On by itself with Camera. Say a command or ask any question." checked={s.assistantOn} onChange={() => controller.toggleAssistant()} />
+            <h4 className="mt-2 font-medium">Live conversation (Microphone)</h4>
+            <p className="text-base text-ink-2">The Microphone button on the main screen starts it; the <kbd>L</kbd> key works too. A spoken conversation, like a phone call: talk any time while showing the camera, and interrupt whenever you like. While it is on, your voice and about one picture a second go to Google Gemini. To stop sending, press “End live conversation”: that stops on this phone, without sending anything. Saying “stop live” or «وقّف المحادثة» works too, but those words are recognised by Gemini Live, so they reach Google. On-device warnings keep running.</p>
             {liveOn && (
               <p role="status" className="text-base text-ink-2" data-testid="live-meta">
                 {liveLabel(s)}
@@ -622,13 +596,13 @@ function ProviderSwitch({ provider, offered, onChange }: { provider: AiProvider;
   );
 }
 
-function Choice({ label, hint, value, onChange, children }: { label: string; hint?: string; value: string; onChange: (v: string) => void; children: React.ReactNode }) {
+function Choice({ label, hint, value, onChange, children, testId }: { label: string; hint?: string; value: string; onChange: (v: string) => void; children: React.ReactNode; testId?: string }) {
   return (
     <label className="flex flex-col gap-2">
       <span className="font-medium">{label}</span>
       {hint && <span className="text-base text-ink-2">{hint}</span>}
       <span className="select">
-        <select value={value} onChange={(e) => onChange(e.target.value)} className="field pe-12">{children}</select>
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="field pe-12" data-testid={testId}>{children}</select>
         <ChevronIcon size={20} />
       </span>
     </label>
@@ -679,7 +653,7 @@ function PrivacyText({ providers }: { providers: string }) {
       {[
         "This is an experimental test version. It doesn't replace a white cane, a guide dog or help from people, and it can be wrong or late.",
         `While the camera is on, a camera image is sent to an external AI service (${providers}) every few seconds when the view changes, and with each question you ask.`,
-        "Open camera also turns on voice commands: the microphone listens for your questions once your browser allows it. Say “stop listening” or press Stop to turn it off.",
+        "The Camera button also turns on voice commands: the microphone listens for your questions once your browser allows it. Say “stop listening” or press Stop to turn it off.",
         "In a live conversation, your microphone and the camera (about one image a second) go straight to Google Gemini for as long as the conversation is on.",
         "On-device warnings (people, vehicles, some objects) are worked out on this phone and send nothing.",
         "This app doesn't record or store video, images or your voice, on this device or on its server.",

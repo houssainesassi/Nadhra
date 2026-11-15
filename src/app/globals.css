@@ -288,126 +288,314 @@ kbd {
     env(safe-area-inset-left, 0px);
 }
 
-.topbar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  width: 100%;
-  max-width: 76rem;
-  margin-inline: auto;
-  padding: 0.75rem 1rem;
-}
-.brand {
-  display: flex;
-  min-width: 0;
-  overflow: hidden;
-  align-items: center;
-  gap: 0.7rem;
-}
-.brand h1 {
-  font-size: 1.35rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1;
-}
-.brand-ar {
-  color: var(--ink-2);
-  font-size: 1.15rem;
-  line-height: 1;
-}
-.logo {
-  border-radius: 11px;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-}
-.tools {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.lang-select {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  height: 3rem;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink);
-  transition: border-color 150ms ease;
-}
-.lang-select:hover {
-  border-color: var(--edge);
-}
-.lang-select:focus-within {
-  outline: 3px solid var(--glow);
-  outline-offset: 3px;
-}
-.lang-select svg {
-  position: absolute;
-  color: var(--ink-2);
-  pointer-events: none;
-}
-.lang-select svg:first-of-type {
-  inset-inline-start: 0.8rem;
-}
-.lang-select svg:last-of-type {
-  inset-inline-end: 0.75rem;
-}
-.lang-select select {
-  appearance: none;
-  height: 100%;
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  padding-inline: 2.4rem 2.1rem;
-  font-size: 0.95rem;
-  font-weight: 500;
-  cursor: pointer;
-}
-.lang-select select:focus-visible {
-  outline: none;
-}
-.lang-select option {
-  background: var(--surface);
-  color: var(--ink);
-}
-
-.icon-button {
-  display: inline-grid;
-  place-items: center;
-  width: 3rem;
-  height: 3rem;
-  border-radius: 999px;
-  color: var(--ink);
-  transition: background-color 150ms ease;
-}
-.icon-button:hover {
-  background: var(--raised);
-}
-
 .main {
   display: flex;
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  gap: 0.875rem;
+  gap: 0.75rem;
   width: 100%;
   max-width: 76rem;
   margin-inline: auto;
   padding: 0 1rem 1rem;
 }
+.app[data-active="true"] .main {
+  padding: 0.75rem 0.75rem 0.75rem;
+}
 
-/* --- The AI in use (Gemini / Nadhra), at the top of the main area --- */
+/* --- Home: the greeting and three buttons --- */
+
+.home {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.75rem, 2.5vh, 1.5rem);
+  padding-block: clamp(0.75rem, 2.5vh, 1.5rem) 0.25rem;
+  text-align: center;
+}
+
+/* A slow, soft light behind the greeting. Decoration only: reduced motion stops it. */
+.home-ambient {
+  position: absolute;
+  z-index: -1;
+  inset-inline: -20%;
+  top: -10%;
+  height: 70%;
+  background:
+    radial-gradient(40% 45% at 35% 40%, color-mix(in srgb, var(--glow) 16%, transparent), transparent 70%),
+    radial-gradient(38% 42% at 68% 55%, color-mix(in srgb, var(--listen) 12%, transparent), transparent 70%);
+  filter: blur(20px);
+  pointer-events: none;
+  animation: drift 18s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  to { transform: translate3d(3%, 4%, 0) scale(1.06); }
+}
+
+.home-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--ink);
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.home-brand .logo {
+  width: 32px;
+  height: 32px;
+}
+.brand-ar {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.logo {
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+
+.home-center {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(0.75rem, 2.4vh, 1.25rem);
+  width: 100%;
+}
+
+.greeting {
+  font-size: clamp(2.6rem, 1.9rem + 3.6vw, 4.75rem);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  background: linear-gradient(180deg, var(--ink) 30%, color-mix(in srgb, var(--ink) 72%, var(--glow)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.arabic .greeting {
+  letter-spacing: normal;
+  line-height: 1.3;
+}
+.tagline {
+  max-width: 30rem;
+  margin-bottom: clamp(0.25rem, 1.5vh, 1rem);
+  color: var(--ink-2);
+  font-size: clamp(1rem, 0.95rem + 0.3vw, 1.15rem);
+  line-height: 1.5;
+  text-wrap: balance;
+}
+
+/* Entrance: the greeting first, then the two tiles, then Settings. Decoration only. */
+.home-brand,
+.greeting,
+.tagline,
+.tile,
+.settings-button {
+  animation: rise 640ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.greeting { animation-delay: 60ms; }
+.tagline { animation-delay: 140ms; }
+.tile-camera { animation-delay: 200ms; }
+.tile-mic { animation-delay: 260ms; }
+.settings-button { animation-delay: 340ms; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); filter: blur(4px); }
+}
+
+/* Phones: two wide rows, Camera first. Wider screens: two large squares side by side. Large text:
+   always rows, so no label is squeezed. */
+.tiles {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.875rem;
+  width: min(100%, 28rem);
+}
+@media (min-width: 640px) {
+  .tiles:not([data-large="true"]) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+    width: min(100%, 44rem);
+  }
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  min-width: 0;
+  min-height: clamp(7.5rem, 21vh, 10.5rem);
+  border-radius: 2rem;
+  padding: 1.1rem 1.4rem;
+  text-align: start;
+  overflow: hidden;
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 260ms ease,
+    border-color 200ms ease,
+    background-color 200ms ease;
+}
+@media (min-width: 640px) {
+  .tiles:not([data-large="true"]) .tile {
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.25rem;
+    min-height: clamp(13rem, 36vh, 18rem);
+    padding: 1.5rem;
+    text-align: center;
+  }
+}
+/* Large text: the icon above the words, so the label gets the tile's whole width. */
+.tiles[data-large="true"] .tile {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+}
+.tiles[data-large="true"] .tile-icon {
+  width: 3.5rem;
+}
+.tile:hover {
+  transform: translateY(-2px);
+}
+.tile:active {
+  transform: scale(0.98);
+  transition-duration: 90ms;
+}
+.tile:focus-visible {
+  outline-width: 4px;
+  outline-offset: 5px;
+}
+.tile-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: clamp(4rem, 10vh, 5.25rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tile:hover .tile-icon {
+  transform: scale(1.06);
+}
+.tile-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.tile-label {
+  font-size: clamp(1.6rem, 1.3rem + 1.1vw, 2.1rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.arabic .tile-label { letter-spacing: normal; }
+.tile-sub {
+  font-size: clamp(0.95rem, 0.9rem + 0.25vw, 1.08rem);
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0.78;
+}
+
+/* Camera: the one filled surface, the main way in. */
+.tile-camera {
+  background: var(--primary);
+  color: var(--primary-ink);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.18),
+    0 18px 40px -16px rgb(0 0 0 / 0.55);
+}
+.tile-camera:hover {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.18),
+    0 24px 48px -16px rgb(0 0 0 / 0.6),
+    0 0 0 5px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.tile-camera .tile-icon {
+  background: color-mix(in srgb, var(--primary-ink) 9%, transparent);
+}
+
+/* Microphone: neutral, not blue. Blue only ever means "listening", and nothing listens until it is pressed. */
+.tile-mic {
+  border: 1.5px solid var(--edge);
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12), 0 14px 32px -18px rgb(0 0 0 / 0.5);
+}
+.tile-mic:hover {
+  border-color: var(--ink);
+}
+.tile-mic .tile-icon {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+/* After the first press it waits for «I agree»: a warm edge says so. */
+.tile-mic[data-notice="true"] {
+  border-color: var(--glow);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--glow) 26%, transparent);
+}
+.tile-mic[data-notice="true"] .tile-label {
+  font-size: clamp(1.2rem, 1.05rem + 0.6vw, 1.5rem);
+}
+
+.settings-button {
+  display: inline-flex;
+  flex: none;
+  min-height: 3.5rem;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--ink);
+  padding-inline: 1.4rem 1.6rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  transition: border-color 200ms ease, background-color 200ms ease, transform 160ms ease;
+}
+.settings-button svg {
+  transition: transform 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.settings-button:hover {
+  border-color: var(--edge);
+  background: var(--raised);
+}
+.settings-button:hover svg {
+  transform: rotate(60deg);
+}
+.settings-button:active {
+  transform: scale(0.97);
+}
+
+.home-alert {
+  max-width: 30rem;
+  border-radius: 1rem;
+  background: var(--alert);
+  color: var(--alert-ink);
+  padding: 0.75rem 1rem;
+  font-weight: 500;
+}
+
+/* Short phones: the home screen still never scrolls. */
+@media (orientation: portrait) and (max-height: 700px) {
+  .home { gap: 0.6rem; }
+  .greeting { font-size: 2.4rem; }
+  .tile { min-height: 6.75rem; padding-block: 0.9rem; }
+  .tile-icon { width: 3.5rem; }
+}
+
+/* --- The AI in use (Gemini / Nadhra), in Settings --- */
 
 .ai-switch {
   display: flex;
-  flex: none;
   flex-direction: column;
-  align-items: center;
   gap: 0.3rem;
   width: 100%;
 }
@@ -415,10 +603,10 @@ kbd {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
   gap: 0.25rem;
-  width: min(100%, 26rem);
+  width: 100%;
   border: 1px solid var(--hairline);
   border-radius: 999px;
-  background: var(--surface);
+  background: var(--canvas);
   padding: 0.25rem;
 }
 .ai-switch-option {
@@ -478,189 +666,21 @@ kbd {
   line-height: 1.25rem;
 }
 
-/* --- At rest: Open camera and Talk live, side by side --- */
-
-.home {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(1rem, 3vh, 1.75rem);
-  padding-block: 0.5rem;
-  text-align: center;
-}
-/* A short entrance. Decoration only: the reduced-motion rule below removes it. */
-.home > * {
-  animation: rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-.home > :nth-child(2) { animation-delay: 50ms; }
-.home > :nth-child(n + 3) { animation-delay: 100ms; }
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
-}
-
-/* Phones: one column, Open camera first and largest, Talk live right under it. Wider screens: two
-   equal tiles in one row. At large text sizes: always one column, so no label is squeezed. */
-.home-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.875rem;
-  width: min(100%, 26rem);
-}
-@media (min-width: 640px) {
-  .home-actions:not([data-large="true"]) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1.25rem;
-    width: min(100%, 46rem);
-  }
-}
-
-.home-action {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(0.75rem, 2.4vh, 1.25rem);
-  min-width: 0;
-  height: clamp(9.5rem, 34vh, 16rem);
-  border-radius: 2rem;
-  padding: 1rem 1.25rem;
-  font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2rem);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-  transition:
-    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 200ms ease,
-    border-color 200ms ease,
-    background-color 200ms ease;
-}
-.home-action:active {
-  transform: scale(0.985);
-}
-.home-action:focus-visible {
-  outline-width: 4px;
-  outline-offset: 5px;
-}
-.home-action-icon {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: clamp(4rem, 11vh, 5.5rem);
-  aspect-ratio: 1;
-  border-radius: 50%;
-}
-
-/* The main way in: the one filled surface on the screen. */
-.open-camera {
-  background: var(--primary);
-  color: var(--primary-ink);
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.18),
-    0 14px 36px -12px rgb(0 0 0 / 0.5);
-}
-.open-camera:hover {
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.18),
-    0 18px 44px -12px rgb(0 0 0 / 0.55),
-    0 0 0 5px color-mix(in srgb, var(--primary) 18%, transparent);
-}
-.open-camera .home-action-icon {
-  background: color-mix(in srgb, var(--primary-ink) 9%, transparent);
-}
-
-/* Neutral, not blue: blue only ever means "listening", and nothing listens until it is pressed. */
-.home-action-live {
-  border: 1.5px solid var(--edge);
-  background: var(--raised);
-  color: var(--ink);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12), 0 10px 28px -16px rgb(0 0 0 / 0.45);
-}
-.home-action-live:hover {
-  border-color: var(--ink);
-}
-.home-action-live .home-action-icon {
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-}
-/* After the first press it waits for «I agree»: a warm edge says so without a new colour meaning. */
-.home-action-live[data-notice="true"] {
-  border-color: var(--glow);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--glow) 28%, transparent);
-}
-
-/* Phones (one column): Talk live is a shorter row, so Open camera stays the largest thing on screen. */
-@media (max-width: 639.98px) {
-  .home-action-live {
-    flex-direction: row;
-    height: auto;
-    min-height: 5rem;
-    gap: 0.875rem;
-    border-radius: 1.5rem;
-    font-size: clamp(1.25rem, 1.1rem + 0.8vw, 1.5rem);
-  }
-  .home-action-live .home-action-icon { width: 3rem; }
-  .home-action-live .home-action-icon svg { width: 26px; height: 26px; }
-}
-.home-actions[data-large="true"] .home-action-live {
-  flex-direction: row;
-  height: auto;
-  min-height: 5rem;
-  gap: 0.875rem;
-  border-radius: 1.5rem;
-}
-.home-actions[data-large="true"] .home-action-live .home-action-icon { width: 3rem; }
-
-/* Short phones: the screen still never scrolls. */
-@media (orientation: portrait) and (max-height: 700px) {
-  .home { gap: 0.875rem; }
-  .home-action.open-camera { height: clamp(9.5rem, 30vh, 12rem); }
-}
-
-.tagline {
-  max-width: 32rem;
-  color: var(--ink-2);
-  font-size: clamp(1.05rem, 0.98rem + 0.35vw, 1.2rem);
-  line-height: 1.5;
-  text-wrap: balance;
-}
-.home-alert {
-  max-width: 30rem;
-  border-radius: 1rem;
-  background: var(--alert);
-  color: var(--alert-ink);
-  padding: 0.75rem 1rem;
-  font-weight: 500;
-}
-.footnote {
-  max-width: 30rem;
-  color: var(--ink-2);
-  font-size: 0.9rem;
-  line-height: 1.5;
-}
-.link {
-  display: inline-flex;
-  min-height: 2.75rem;
-  align-items: center;
-  color: var(--ink);
-  font-weight: 500;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-  text-decoration-thickness: 1px;
-}
-
-/* --- Assisting: the camera fills the screen --- */
+/* --- A session: the assistant fills the screen --- */
 
 .stage {
   position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  border-radius: 1.5rem;
+  border-radius: 1.75rem;
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--hairline);
   transition: box-shadow 250ms ease;
+  animation: stage-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes stage-in {
+  from { opacity: 0; transform: scale(0.97); }
 }
 .stage[hidden] {
   display: none;
@@ -678,10 +698,14 @@ kbd {
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 500ms ease;
+  transition: opacity 600ms ease, filter 600ms ease;
 }
 .stage[data-on="true"] video {
   opacity: 1;
+}
+/* Live conversation: the picture dims behind the voice orb (it is still what Gemini sees). */
+.app[data-mode="live"] .stage[data-on="true"] video {
+  filter: brightness(0.55) saturate(0.8);
 }
 
 .stage-empty {
@@ -700,16 +724,82 @@ kbd {
   color: var(--ink-2);
   font-size: 1.1rem;
 }
-.pill-button {
-  display: inline-flex;
-  min-height: 3.25rem;
-  align-items: center;
-  gap: 0.6rem;
-  border-radius: 999px;
-  background: var(--primary);
-  color: var(--primary-ink);
-  padding-inline: 1.25rem;
-  font-weight: 600;
+
+/* The voice orb: what the live conversation is doing, at a glance. Blue = listening, warm = speaking. */
+.voice-orb {
+  position: absolute;
+  inset: 0 0 30%;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: clamp(7.5rem, 30vmin, 12rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  color: var(--listen-ink);
+  background:
+    radial-gradient(circle at 34% 28%, rgb(255 255 255 / 0.55), transparent 55%),
+    #8cc8ff;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.25) inset,
+    0 0 60px 6px rgb(140 200 255 / 0.45);
+  animation: breathe 3.2s ease-in-out infinite;
+  transition: background-color 400ms ease, box-shadow 400ms ease, transform 300ms ease;
+}
+.orb::before,
+.orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgb(140 200 255 / 0.7);
+  opacity: 0;
+}
+.voice-orb[data-state="hearing"] .orb,
+.voice-orb[data-state="speaking"] .orb {
+  animation-duration: 1.4s;
+}
+.voice-orb[data-state="hearing"] .orb::before,
+.voice-orb[data-state="hearing"] .orb::after,
+.voice-orb[data-state="speaking"] .orb::before,
+.voice-orb[data-state="speaking"] .orb::after {
+  animation: ripple 1.8s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+.voice-orb .orb::after {
+  animation-delay: 0.9s !important;
+}
+.voice-orb[data-state="speaking"] .orb {
+  background:
+    radial-gradient(circle at 34% 28%, rgb(255 255 255 / 0.6), transparent 55%),
+    #ffc66d;
+  color: #1a1206;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.25) inset,
+    0 0 70px 10px rgb(255 198 109 / 0.45);
+}
+.voice-orb[data-state="speaking"] .orb::before,
+.voice-orb[data-state="speaking"] .orb::after {
+  border-color: rgb(255 198 109 / 0.75);
+}
+.voice-orb[data-state="connecting"] .orb {
+  background:
+    radial-gradient(circle at 34% 28%, rgb(255 255 255 / 0.4), transparent 55%),
+    #77766f;
+  color: #fff;
+  box-shadow: 0 0 40px 2px rgb(255 255 255 / 0.12);
+  animation-duration: 1.6s;
+}
+@keyframes breathe {
+  50% { transform: scale(1.06); }
+}
+@keyframes ripple {
+  from { opacity: 0.85; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.75); }
 }
 
 /* Text on the camera sits on solid dark plates, so it stays readable over any picture, in both themes. */
@@ -717,7 +807,7 @@ kbd {
   position: absolute;
   inset-inline: 0.75rem;
   top: 0.75rem;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -766,7 +856,7 @@ kbd {
   position: absolute;
   inset-inline: 0.75rem;
   top: 3.85rem;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -785,7 +875,7 @@ kbd {
   position: absolute;
   inset-inline: 0.75rem;
   bottom: 0.75rem;
-  z-index: 1;
+  z-index: 2;
   max-height: 45%;
   overflow-y: auto;
   border-radius: 1.25rem;
@@ -793,6 +883,7 @@ kbd {
   color: #fff;
   padding: 0.9rem 1.15rem;
   backdrop-filter: blur(8px);
+  transition: background-color 250ms ease;
 }
 .caption-box[data-urgent="true"] {
   background: var(--alert);
@@ -819,140 +910,62 @@ kbd {
   color: #8cc8ff;
 }
 
-/* Neutral, with a red icon: a large red area only ever means a warning. */
-/* The action buttons under the camera: two columns, one at large text sizes. Shorter than the
-   generic .control so the camera keeps most of the screen, still well above the 48 dp touch target. */
-.actions {
-  display: grid;
-  flex: none;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.625rem;
-  align-self: center;
-  width: min(100%, 40rem);
-}
-.actions[data-large="true"] {
-  grid-template-columns: minmax(0, 1fr);
-}
-/* An odd last button (Pause, or Ask when Pause is hidden) takes the whole row. */
-.actions > .action:last-of-type:nth-of-type(odd) {
-  grid-column: 1 / -1;
-}
-.action {
-  min-height: 3.75rem;
-  padding: 0.5rem 0.875rem;
-  gap: 0.5rem;
-  font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.25rem);
-  line-height: 1.25;
-  text-align: center;
-  overflow-wrap: anywhere;
-  hyphens: auto;
-}
-
-/* Short phones: tighter actions, so the camera preview keeps a useful height. */
-@media (orientation: portrait) and (max-height: 700px) {
-  .actions { gap: 0.5rem; }
-  .action { min-height: 3rem; padding-block: 0.375rem; font-size: 1rem; }
-}
-
-/* Stop and Talk live: one row under the actions, Stop the wider. One column at large text sizes. */
-.active-bar {
+/* The one button during a session. Neutral, with a red icon: a large red area only ever means a warning. */
+.end-bar {
   display: flex;
   flex: none;
-  gap: 0.625rem;
   align-self: center;
-  width: min(100%, 40rem);
+  width: min(100%, 36rem);
+  animation: rise 520ms 120ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.active-bar[data-large="true"] {
-  flex-direction: column;
-}
-.live-button {
-  flex: 1 1 0;
-  width: auto;
-  min-width: 0;
-  min-height: 4.5rem;
-  padding: 0.5rem 0.875rem;
-  gap: 0.5rem;
-  font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.25rem);
-  line-height: 1.25;
-  text-align: center;
-  overflow-wrap: anywhere;
-  hyphens: auto;
-}
-
-.stop-button {
+.end-button {
   display: flex;
-  flex: 1.6 1 0;
+  flex: 1;
   min-width: 0;
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
-  align-self: stretch;
-  min-height: 4.5rem;
-  padding-inline: 0.75rem;
+  min-height: 4.75rem;
+  padding: 0.5rem 1rem;
   border: 1.5px solid var(--edge);
-  border-radius: 1.375rem;
+  border-radius: 999px;
   background: var(--raised);
   color: var(--ink);
   font-size: 1.3rem;
   font-weight: 600;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15), 0 8px 24px -14px rgb(0 0 0 / 0.5);
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15), 0 10px 28px -14px rgb(0 0 0 / 0.55);
   transition: border-color 150ms ease, transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.stop-button svg {
+.end-button svg {
   flex: none;
   color: var(--alert-glow);
 }
-.stop-button:hover {
+.end-button:hover {
   border-color: var(--ink);
 }
-.stop-button:active {
+.end-button:active {
   transform: scale(0.985);
 }
 
-/* Phones: the header keeps the name and the three controls on one line. */
-@media (max-width: 520px) {
-  .brand-ar { display: none; }
-  .tools { gap: 0; }
-  .icon-button { width: 2.75rem; height: 2.75rem; }
-  .lang-select { height: 2.75rem; }
-}
-@media (max-width: 440px) {
-  .topbar { padding-inline: 0.75rem; gap: 0.5rem; }
-  .brand { gap: 0.5rem; }
-  .brand h1 { font-size: 1.25rem; }
-  .logo { width: 34px; height: 34px; }
-  .icon-button { width: 2.6rem; }
-  .lang-select svg:first-of-type { display: none; }
-  .lang-select select { padding-inline: 0.9rem 1.9rem; }
-}
-/* Very narrow: the logo stands for the name, which stays in the page for screen readers. */
-@media (max-width: 365px) {
-  .brand h1 {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
-/* A phone on its side: the Stop button moves beside the camera, so the camera keeps its height. */
+/* A phone on its side: the home tiles side by side; during a session the end button moves beside the
+   camera, so the camera keeps its height. */
 @media (orientation: landscape) and (max-height: 540px) {
-  .topbar { padding-block: 0.4rem; }
-  .main { flex-direction: row; gap: 0.75rem; padding-bottom: 0.75rem; }
-  .home { gap: 0.625rem; padding-block: 0.25rem; }
-  .home-actions:not([data-large="true"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; width: min(100%, 40rem); }
-  .home-actions:not([data-large="true"]) .home-action { flex-direction: column; height: clamp(7.5rem, 44vh, 11rem); border-radius: 1.5rem; font-size: 1.35rem; }
-  .home-actions:not([data-large="true"]) .home-action-icon { width: clamp(2.75rem, 12vh, 3.75rem); }
-  .active-bar { flex-direction: column; align-self: stretch; width: 9.5rem; gap: 0.5rem; }
-  .stop-button { width: 100%; flex: 1 1 auto; flex-direction: column; font-size: 1.1rem; text-align: center; padding: 0.5rem; }
-  .live-button { flex: none; width: 100%; min-height: 3.5rem; flex-direction: column; gap: 0.25rem; font-size: 1rem; }
-  /* "safe": if the column is ever taller than the screen, it starts at the top and scrolls, never cut. */
-  .actions { align-self: stretch; align-content: safe center; width: 17rem; grid-template-columns: minmax(0, 1fr); gap: 0.4rem; overflow-y: auto; }
-  .actions > .action:last-of-type:nth-of-type(odd) { grid-column: auto; }
-  .action { min-height: 3rem; padding-block: 0.25rem; font-size: 1rem; justify-content: flex-start; text-align: start; }
+  .home { gap: 0.4rem; padding-top: 0.5rem; }
+  .home-brand { display: none; }
+  .greeting { font-size: 2rem; }
+  .tagline { display: none; }
+  .tiles:not([data-large="true"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(100%, 40rem); }
+  .tiles:not([data-large="true"]) .tile { min-height: clamp(6.5rem, 38vh, 9rem); }
+  .tile-icon { width: 3.25rem; }
+  .settings-button { min-height: 3rem; }
+  .app[data-active="true"] .main { flex-direction: row; }
+  .end-bar { align-self: stretch; width: 9.5rem; }
+  .end-button { flex-direction: column; border-radius: 1.5rem; font-size: 1.05rem; }
   .caption-box { max-height: 52%; }
+  .voice-orb { inset: 0 0 40%; }
 }
 
 .safety-note {
@@ -1009,8 +1022,11 @@ dialog::backdrop {
 
 @media (forced-colors: active) {
   .control,
-  .home-action,
-  .stop-button,
+  .tile,
+  .settings-button,
+  .end-button,
   .pill,
   .caption-box { border: 2px solid ButtonText; }
+  .greeting { color: CanvasText; background: none; }
+  .orb { forced-color-adjust: none; }
 }

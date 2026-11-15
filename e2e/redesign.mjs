@@ -1,5 +1,7 @@
-// The one-screen layout in real Chromium: Open camera → consent → camera screen → warning → Stop,
-// language switching, no scrolling at phone, tablet and desktop sizes, focus, reduced motion.
+// The one-screen layout in real Chromium. Home: «Asslema!» and exactly three buttons (Camera,
+// Microphone, Settings). Camera → consent → camera session (one button only) → warning → Stop;
+// Microphone → live notice → live session (one button only); language in Settings; no scrolling at
+// phone, tablet and desktop sizes; focus; reduced motion.
 // Fully mocked (fake camera, /api/vision and /api/tts answered in the browser): no Gemini quota.
 //
 //   python3 e2e/make_synthetic_camera.py <fixtures>
@@ -58,17 +60,16 @@ async function context(viewport, extra = {}) {
 
 const layout = (page) => page.evaluate(() => {
   const app = document.querySelector(".app");
-  const box = (sel) => { const el = document.querySelector(sel); if (!el || el.hidden) return null; const r = el.getBoundingClientRect(); return r.width ? { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height) } : null; };
-  const brand = document.querySelector(".brand");
+  const box = (sel) => { const el = document.querySelector(sel); if (!el || el.hidden) return null; const r = el.getBoundingClientRect(); return r.width ? { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), h: Math.round(r.height), w: Math.round(r.width) } : null; };
+  const brand = document.querySelector(".home-brand");
   return {
     scrolls: document.documentElement.scrollHeight > innerHeight + 1 || app.scrollHeight > app.clientHeight + 1,
     overflowX: document.documentElement.scrollWidth > innerWidth,
-    nameClipped: brand.scrollWidth > brand.clientWidth + 1,
-    vh: innerHeight, open: box(".open-camera"), live: box(".home-action-live"), liveActive: box(".live-button"), stop: box(".stop-button"), stage: box(".stage"),
-    // The action buttons: each one's size and position, and whether all of them are on screen.
-    // The group's content fits it (no button cut off at its top or bottom).
-    actionsFit: (() => { const g = document.querySelector("[data-testid=actions]"); return !g || g.scrollHeight <= g.clientHeight + 1; })(),
-    actions: [...document.querySelectorAll("[data-testid=actions] button")].map((b) => { const r = b.getBoundingClientRect(); return { id: b.dataset.testid, w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), right: Math.round(r.right) }; }),
+    nameClipped: !!brand && brand.scrollWidth > brand.clientWidth + 1,
+    vh: innerHeight, open: box(".tile-camera"), live: box(".tile-mic"), settings: box(".settings-button"), stop: box(".end-button"), stage: box(".stage"),
+    // Every button a sighted or screen-reader user can reach on the main screen (panels excluded).
+    buttons: [...document.querySelectorAll(".app button, .app a, .app select, .app input")].filter((b) => b.checkVisibility() && b.getBoundingClientRect().width > 0).map((b) => b.dataset.testid ?? b.textContent.trim()),
+    labelsCut: [...document.querySelectorAll(".tile-label, .end-button span")].filter((e) => e.scrollWidth > e.clientWidth + 1).length,
   };
 });
 // Automatic descriptions are off by default; these layout flows turn them on, as a user would, to see
@@ -80,10 +81,14 @@ const withLang = (ctx, language, extra = {}, settings = { autoDescribe: true }) 
 const focused = (page) => page.evaluate(() => document.activeElement?.dataset.testid);
 /** <html lang> and <html dir>, as screen readers and the browser see them. */
 const htmlLang = (page) => page.evaluate(() => `${document.documentElement.lang} ${document.documentElement.dir}`);
-/** Every action button is at least 48 px each way (Android's touch target) and fully on screen. */
-const actionsOk = (l, vw) => l.actions.length >= 4 && l.actionsFit && l.actions.every((a) => a.w >= 48 && a.h >= 48 && a.top >= 0 && a.bottom <= l.vh && a.right <= vw);
+const HOME = "open-camera,live-toggle,open-settings";
+const tapOk = (b) => b && b.h >= 48 && b.w >= 48;
 // axe-core, when supplied (AXE=/path/to/axe.min.js), checks the camera screen for automated violations.
 const AXE_SRC = process.env.AXE ? readFileSync(process.env.AXE, "utf8") : null;
+const axe = async (page) => {
+  if (!(await page.evaluate(() => !!window.axe))) await page.addScriptTag({ content: AXE_SRC });
+  return page.evaluate(async () => (await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "best-practice"] })).violations.map((x) => `${x.id}: ${x.nodes.length}`));
+};
 
 // --- 0. By default, no picture leaves the phone by itself -------------------------------------------
 {
@@ -94,31 +99,37 @@ const AXE_SRC = process.env.AXE ? readFileSync(process.env.AXE, "utf8") : null;
   await page.getByRole("button", { name: "I agree", exact: true }).click();
   await until(() => page.locator('.stage[data-on="true"]').count());
   await sleep(5000);
-  check("default: no picture is sent automatically after Open camera", state.posts === 0, `${state.posts} sent`);
+  check("default: no picture is sent automatically after Camera", state.posts === 0, `${state.posts} sent`);
   check("default: the screen says it describes when asked", (await page.getByTestId("stage").getAttribute("data-analysis")) === "manual");
   check("default: the user hears that automatic descriptions are off, and what that means", state.tts.some((t) => /Automatic descriptions are off/.test(t.text ?? "")), state.tts.map((t) => t.text).join(" | "));
   check("default: no page errors", errors.length === 0, errors.join(" | "));
   await page.context().close();
 }
 
-// --- 0b. The live conversation asks first: nothing is requested before the second press ------------
+// --- 0b. Microphone: the live conversation asks first, then only the assistant is on screen ---------
 {
   const { page, errors } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
   await withLang(page.context(), "en", { "assistant.consent.v3": "1" });
   let tokens = 0;
-  await page.context().route("**/api/live/token", (route) => (tokens++, route.fulfill({ status: 503, json: { error: "test" } })));
+  // Answered late (then refused), so the "connecting" session can be looked at meanwhile.
+  await page.context().route("**/api/live/token", async (route) => { tokens++; await sleep(4000); await route.fulfill({ status: 503, json: { error: "test" } }).catch(() => {}); });
   await page.goto(BASE, { waitUntil: "networkidle" });
-  await page.getByTestId("open-camera").click();
-  await until(() => page.locator('.stage[data-on="true"]').count());
-  // Talk live sits with the actions while the camera is on (no trip to Settings).
-  check("live: the Talk live button is beside Stop, outside Settings", (await page.locator(".active-bar [data-testid=live-toggle]").count()) === 1 && (await page.locator("dialog [data-testid=live-toggle]").count()) === 0);
-  await page.getByTestId("live-toggle").click();
+  await page.getByTestId("live-toggle").tap();
   await sleep(1500);
   check("live: the first press only asks (the button now says «I agree»)", (await page.getByTestId("live-toggle").innerText()).includes("I agree: start the live conversation"));
   check("live: nothing requested before the answer", tokens === 0, `${tokens} token requests`);
-  await page.getByTestId("live-toggle").click();
-  await until(() => tokens > 0, 5000);
-  check("live: the second press starts it", tokens > 0);
+  check("live: still home while it asks (no popup)", (await page.locator("dialog[open]").count()) === 0 && (await layout(page)).buttons.join(",") === HOME);
+  await page.getByTestId("live-toggle").tap();
+  check("live: the second press starts it", !!(await until(() => tokens > 0, 5000)));
+  check("live: the session screen shows at once, with the voice orb", !!(await until(() => page.locator("[data-testid=voice-orb]").isVisible(), 3000)) && (await page.getByTestId("stage").isVisible()));
+  const l = await layout(page);
+  check("live: only one button on screen, End live conversation", l.buttons.join(",") === "stop-assistance" && (await page.getByTestId("stop-assistance").innerText()).includes("End live conversation"), l.buttons.join(","));
+  check("live: Camera, Microphone and Settings are gone", (await page.getByTestId("open-camera").count()) + (await page.getByTestId("live-toggle").count()) + (await page.getByTestId("open-settings").count()) === 0);
+  check("live: focus on End", (await focused(page)) === "stop-assistance");
+  await page.screenshot({ path: join(OUT, "phone-live.png") });
+  await page.getByTestId("stop-assistance").tap();
+  check("live: End goes back home, three buttons", !!(await until(async () => (await layout(page)).buttons.join(",") === HOME, 3000)));
+  check("live: End releases every camera track", await page.evaluate(() => window.__tracks.every((t) => t.readyState === "ended")));
   check("live: no page errors", errors.length === 0, errors.join(" | "));
   await page.context().close();
 }
@@ -130,20 +141,26 @@ const AXE_SRC = process.env.AXE ? readFileSync(process.env.AXE, "utf8") : null;
   await page.goto(BASE, { waitUntil: "networkidle" });
   let l = await layout(page);
   check("phone home: no scrolling, the name isn't cut off", !l.scrolls && !l.overflowX && !l.nameClipped, JSON.stringify(l));
-  check("phone home: Open camera is large and on screen", l.open && l.open.h >= 150 && l.open.bottom <= l.vh, JSON.stringify(l.open));
-  check("phone home: Open camera has focus", (await focused(page)) === "open-camera");
-  check("phone home: Talk live is right under Open camera, on screen, and the only one", l.live && l.live.top >= l.open.bottom && l.live.top - l.open.bottom <= 24 && l.live.bottom <= l.vh && l.live.h >= 48 && (await page.getByTestId("live-toggle").count()) === 1, JSON.stringify({ open: l.open, live: l.live }));
+  check("phone home: exactly three buttons, Camera, Microphone, Settings, in that order", l.buttons.join(",") === HOME, l.buttons.join(","));
+  check("phone home: the greeting is the page's heading", (await page.getByRole("heading", { level: 1 }).innerText()) === "Asslema!");
+  check("phone home: Camera is large and on screen", l.open && l.open.h >= 110 && l.open.bottom <= l.vh, JSON.stringify(l.open));
+  check("phone home: Microphone right under Camera, as large", l.live && l.live.top >= l.open.bottom && l.live.top - l.open.bottom <= 24 && l.live.h === l.open.h, JSON.stringify({ open: l.open, live: l.live }));
+  check("phone home: Settings on screen, at least 48 px", tapOk(l.settings) && l.settings.bottom <= l.vh, JSON.stringify(l.settings));
+  check("phone home: Camera has focus", (await focused(page)) === "open-camera");
+  check("phone home: nothing spoken before the first gesture (audio is locked then)", state.tts.length === 0, state.tts.map((t) => t.text).join(" | "));
   await page.keyboard.press("Tab");
-  check("phone home: Tab goes from Open camera to Talk live", (await focused(page)) === "live-toggle");
-  check("phone home: Talk live is named by its words and described", await page.getByTestId("live-toggle").evaluate((b) => b.innerText.trim() === "Talk live" && document.getElementById(b.getAttribute("aria-describedby"))?.textContent.includes("Google Gemini")));
-  await page.getByTestId("open-camera").focus();
-  const text = await page.locator(".app").innerText();
-  const removed = ["Ask by voice", "Stop talking", "Repeat last sentence", "Help", "Emergency assistance", "Type your question", "Send", "What's in front of me?", "Where is the door?", "What it sees now", "On-device detection", "Internet"];
-  check("phone home: the removed controls and panels are gone", removed.every((w) => !text.split("\n").includes(w)));
+  // A key press is a gesture: the welcome may be said now.
+  const t1 = await focused(page);
+  await page.keyboard.press("Tab");
+  check("phone home: Tab goes Camera → Microphone → Settings", t1 === "live-toggle" && (await focused(page)) === "open-settings");
+  check("phone home: Camera named by its word, described", await page.getByTestId("open-camera").evaluate((b) => b.innerText.split("\n")[0].trim() === "Camera" && document.getElementById(b.getAttribute("aria-describedby"))?.textContent === "Describes what’s around you"));
+  check("phone home: Microphone named by its word, described with what goes to Gemini", (await page.getByRole("button", { name: "Microphone", exact: true }).count()) === 1 && await page.getByTestId("live-toggle").evaluate((b) => b.getAttribute("aria-describedby").split(" ").map((id) => document.getElementById(id)?.textContent).join(" ").includes("Google Gemini")));
+  if (AXE_SRC) { const v = await axe(page); check("home: no automated accessibility violations (axe)", v.length === 0, v.join(" | ")); }
   await page.screenshot({ path: join(OUT, "phone-home.png") });
 
-  await page.getByTestId("open-camera").click();
-  check("Open camera without consent shows the notice first", await page.getByRole("dialog", { name: "Before the camera starts" }).isVisible());
+  await page.getByTestId("open-camera").tap();
+  check("«Asslema!» is said after the first gesture", !!(await until(() => state.tts.some((t) => /Asslema/.test(t.text ?? "")), 5000)), state.tts.map((t) => t.text).join(" | "));
+  check("Camera without consent shows the notice first", await page.getByRole("dialog", { name: "Before the camera starts" }).isVisible());
   check("no camera before consent", (await page.evaluate(() => window.__tracks.length)) === 0);
   await page.screenshot({ path: join(OUT, "phone-consent.png") });
   state.hazardAfter = 3;
@@ -154,86 +171,70 @@ const AXE_SRC = process.env.AXE ? readFileSync(process.env.AXE, "utf8") : null;
   check("the on-device detector starts", !!(await until(async () => (await page.getByTestId("stage").getAttribute("data-detector")) !== "off", 6000)));
   check("the cloud analysis's description is shown", !!(await until(async () => (await page.getByTestId("last-spoken").innerText()).includes("quiet room"), 20_000)));
   l = await layout(page);
-  // The action buttons take about a quarter of a phone screen: the preview keeps the rest.
-  check("phone camera screen: no scrolling, Stop on screen, preview keeps most of it", !l.scrolls && l.stop?.bottom <= l.vh && l.stage?.h / l.vh > 0.45, JSON.stringify({ ...l, actions: undefined }));
-  check("phone camera screen: the five actions are on screen and large enough to tap", l.actions.length === 5 && actionsOk(l, 390) && l.actions.every((a) => a.bottom <= l.stop.top), JSON.stringify(l.actions));
-  const group = page.getByRole("group", { name: "Actions" });
-  const names = ["Describe surroundings", "Read text", "Identify object", "Ask a question", "Pause descriptions"];
-  const found = [];
-  for (const n of names) found.push(await group.getByRole("button", { name: n, exact: true }).count());
-  check("actions: a named group, each button named by its visible words", found.every((c) => c === 1), JSON.stringify(found));
-  const order = await page.evaluate(() => [...document.querySelectorAll("[data-testid=stage], [data-testid=actions] button, [data-testid=stop-assistance], [data-testid=live-toggle]")].map((e) => e.dataset.testid));
-  check("actions: read in order between the camera and Stop", order.join(",") === "stage,action-describe,action-read,action-identify,action-ask,action-pause,stop-assistance,live-toggle", order.join(","));
-  check("actions: Pause is told that warnings keep running", (await page.getByTestId("action-pause").evaluate((b) => document.getElementById(b.getAttribute("aria-describedby"))?.textContent)) === "Warnings keep running.");
-  if (AXE_SRC) {
-    await page.addScriptTag({ content: AXE_SRC });
-    const v = await page.evaluate(async () => (await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "best-practice"] })).violations.map((x) => `${x.id}: ${x.nodes.length}`));
-    check("camera screen: no automated accessibility violations (axe)", v.length === 0, v.join(" | "));
-  } else console.log("SKIP  axe (set AXE=/path/to/axe.min.js)");
+  check("phone camera screen: only one button, Stop assistance", l.buttons.join(",") === "stop-assistance", l.buttons.join(","));
+  check("phone camera screen: no scrolling, Stop on screen, the preview takes most of it", !l.scrolls && l.stop?.bottom <= l.vh && tapOk(l.stop) && l.stage?.h / l.vh > 0.7, JSON.stringify(l));
+  check("phone camera screen: no voice orb (that's the live conversation)", (await page.getByTestId("voice-orb").count()) === 0);
+  if (AXE_SRC) { const v = await axe(page); check("camera screen: no automated accessibility violations (axe)", v.length === 0, v.join(" | ")); }
+  else console.log("SKIP  axe (set AXE=/path/to/axe.min.js)");
   await page.screenshot({ path: join(OUT, "phone-active.png") });
 
-  // Each button is the same controller call as its voice command: a tap sends a picture and is answered.
+  // The actions left the screen but not the app: the same controller calls by key (and by voice).
   const before = state.posts;
-  await page.getByTestId("action-describe").tap();
-  check("Describe: a tap sends one picture", !!(await until(() => state.posts > before, 8000)), `${state.posts - before} sent`);
-  await page.getByTestId("action-pause").tap();
-  check("Pause: a tap pauses the descriptions", !!(await until(async () => (await page.getByTestId("stage").getAttribute("data-analysis")) === "paused", 3000)));
-  check("Pause: the button now says Resume", !!(await until(async () => (await page.getByTestId("action-pause").innerText()).includes("Resume descriptions"), 3000)));
-  check("Pause: the on-device warnings are still running", (await page.getByTestId("stage").getAttribute("data-detector")) !== "off");
+  await page.keyboard.press("KeyD");
+  check("D (Describe): sends one picture", !!(await until(() => state.posts > before, 8000)), `${state.posts - before} sent`);
+  await page.keyboard.press("KeyP");
+  check("P (Pause): pauses the descriptions, warnings keep running", !!(await until(async () => (await page.getByTestId("stage").getAttribute("data-analysis")) === "paused", 3000)) && (await page.getByTestId("stage").getAttribute("data-detector")) !== "off");
   const paused = state.posts;
   await sleep(3000);
   check("Pause: no automatic picture is sent while paused", state.posts === paused, `${state.posts - paused} sent`);
-  await page.getByTestId("action-identify").tap();
-  check("Identify: works during the pause, and the pause stays", !!(await until(() => state.posts > paused, 8000)) && !!(await until(async () => (await page.getByTestId("action-pause").innerText()).includes("Resume"), 8000)));
-  await page.getByTestId("action-pause").tap();
-  check("Resume: a tap resumes the descriptions", !!(await until(async () => (await page.getByTestId("action-pause").innerText()).includes("Pause descriptions"), 3000)));
-  await page.getByTestId("action-ask").tap();
-  await sleep(500);
-  check("Ask with voice commands on: the microphone stays on", (await page.getByTestId("stage").getAttribute("data-voice-commands")) === "true");
+  await page.keyboard.press("KeyI");
+  check("I (Identify): works during the pause", !!(await until(() => state.posts > paused, 8000)));
+  await page.keyboard.press("KeyP");
+  check("P again: resumes", !!(await until(async () => (await page.getByTestId("stage").getAttribute("data-analysis")) !== "paused", 3000)));
   const urgent = await until(async () => { const p = page.locator('[data-testid="last-spoken"][data-urgent="true"]'); return (await p.count()) ? p.first().innerText() : null; }, 25_000, 50);
   check("a stairs warning is shown as urgent", !!urgent);
   check("and spoken", state.tts.some((t) => /stair/i.test(t.text ?? "")));
+  check("still only one button during the warning", (await layout(page)).buttons.join(",") === "stop-assistance");
   await page.screenshot({ path: join(OUT, "phone-warning.png") });
 
   await page.getByTestId("stop-assistance").click();
-  check("Stop returns to the home screen", await page.getByTestId("open-camera").isVisible());
+  check("Stop returns to the home screen, three buttons", !!(await until(async () => (await layout(page)).buttons.join(",") === HOME, 3000)));
   check("Stop releases every camera track", await page.evaluate(() => window.__tracks.length > 0 && window.__tracks.every((t) => t.readyState === "ended")));
-  check("focus is back on Open camera", (await focused(page)) === "open-camera");
+  check("focus is back on Camera", (await focused(page)) === "open-camera");
+  check("«Asslema!» was said once only", state.tts.filter((t) => /Asslema/.test(t.text ?? "")).length === 1);
 
+  await page.getByTestId("open-settings").tap();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  check("Settings holds the language, Privacy & safety, voice commands and the emergency contact", (await settings.isVisible()) && (await settings.getByTestId("language").count()) === 1 && (await settings.getByTestId("open-privacy").count()) === 1 && (await settings.getByTestId("voice-commands").count()) === 1 && /Emergency contact/.test(await settings.innerText()));
   check("language: <html> is English, left to right, while English is chosen", (await htmlLang(page)) === "en ltr", await htmlLang(page));
-  await page.getByTestId("language").selectOption("tn");
+  await settings.getByTestId("language").selectOption("tn");
   await sleep(300);
   check("language: <html> turns Tunisian and right to left at once, without a reload", (await htmlLang(page)) === "ar-TN rtl", await htmlLang(page));
-  const ui = await page.evaluate(() => ({ dir: document.querySelector(".app").dir, lang: document.querySelector(".app").lang, label: document.querySelector(".open-camera").innerText, saved: JSON.parse(localStorage.getItem("assistant.settings")).language }));
-  check("language: the screen turns Tunisian and right to left", ui.dir === "rtl" && ui.lang === "ar-TN" && /الكاميرا/.test(ui.label), JSON.stringify(ui));
+  await page.keyboard.press("Escape");
+  await sleep(300);
+  const ui = await page.evaluate(() => ({ dir: document.querySelector(".app").dir, lang: document.querySelector(".app").lang, label: document.querySelector(".tile-camera").innerText, hello: document.querySelector("h1").innerText, saved: JSON.parse(localStorage.getItem("assistant.settings")).language }));
+  check("language: the screen turns Tunisian and right to left", ui.dir === "rtl" && ui.lang === "ar-TN" && /الكاميرا/.test(ui.label) && ui.hello === "عسلامة!", JSON.stringify(ui));
   check("language: saved for speech and recognition", ui.saved === "tn");
   check("language: the assistant says it in the new language", !!(await until(() => state.tts.some((t) => /[؀-ۿ]/.test(t.text ?? "")), 5000)));
   l = await layout(page);
-  check("Tunisian home: no scrolling", !l.scrolls && !l.overflowX && !l.nameClipped);
+  check("Tunisian home: no scrolling, three buttons", !l.scrolls && !l.overflowX && !l.nameClipped && l.buttons.join(",") === HOME && l.labelsCut === 0, JSON.stringify(l));
   await page.screenshot({ path: join(OUT, "phone-home-tn.png") });
-  await page.getByTestId("open-camera").click();
+  await page.getByTestId("open-camera").tap();
   await until(() => page.locator('.stage[data-on="true"]').count());
   await sleep(2500);
-  const tnLabels = await page.getByTestId("actions").innerText();
-  check("Tunisian: the actions are in Derja", ["وصفلي البلاصة", "اقرالي الكتابة", "شنوة هاذي؟", "اسأل سؤال"].every((w) => tnLabels.includes(w)), tnLabels);
   l = await layout(page);
-  check("Tunisian camera screen: no scrolling, actions on screen", !l.scrolls && !l.overflowX && actionsOk(l, 390), JSON.stringify(l.actions));
-  if (AXE_SRC) {
-    if (!(await page.evaluate(() => !!window.axe))) await page.addScriptTag({ content: AXE_SRC });
-    const v = await page.evaluate(async () => (await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "best-practice"] })).violations.map((x) => `${x.id}: ${x.nodes.length}`));
-    check("Tunisian camera screen: no automated accessibility violations (axe, including html-has-lang and valid-lang)", v.length === 0, v.join(" | "));
-  }
+  check("Tunisian camera screen: no scrolling, one button in Derja", !l.scrolls && !l.overflowX && l.buttons.join(",") === "stop-assistance" && (await page.getByTestId("stop-assistance").innerText()).includes("وقّف"), JSON.stringify(l));
+  if (AXE_SRC) { const v = await axe(page); check("Tunisian camera screen: no automated accessibility violations (axe, including html-has-lang and valid-lang)", v.length === 0, v.join(" | ")); }
   await page.screenshot({ path: join(OUT, "phone-active-tn.png") });
+  await page.getByTestId("stop-assistance").tap();
+  await until(() => page.getByTestId("open-settings").isVisible(), 3000);
 
-  await page.getByTestId("open-settings").click();
-  check("Settings holds voice commands and the emergency contact; Talk live stays on the main screen", (await page.getByRole("dialog", { name: "Settings" }).isVisible()) && (await page.getByTestId("voice-commands").count()) === 1 && (await page.locator("dialog [data-testid=live-toggle]").count()) === 0 && (await page.getByTestId("live-toggle").count()) === 1);
-  await page.keyboard.press("Escape");
+  await page.getByTestId("open-settings").tap();
   await page.getByTestId("open-privacy").click();
   const privacy = page.getByRole("dialog", { name: "Privacy & safety" });
-  check("Privacy & safety holds the experimental-version disclaimer", (await privacy.isVisible()) && /Silence doesn.t mean the way is safe/.test(await privacy.innerText()));
+  check("Privacy & safety (from Settings) holds the experimental-version disclaimer", (await privacy.isVisible()) && /Silence doesn.t mean the way is safe/.test(await privacy.innerText()));
   await page.screenshot({ path: join(OUT, "phone-privacy.png") });
   await page.keyboard.press("Escape");
-  await page.getByTestId("stop-assistance").click();
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }
@@ -251,19 +252,17 @@ for (const [name, viewport, mobile] of [
   await withLang(ctx, "fr", { "assistant.consent.v3": "1" });
   await page.goto(BASE, { waitUntil: "networkidle" });
   let l = await layout(page);
-  check(`${name} home: no scrolling, button on screen`, !l.scrolls && !l.overflowX && !l.nameClipped && l.open?.bottom <= l.vh, JSON.stringify(l));
-  // Next to each other: side by side from 640 px wide (same row), else Talk live right under it.
+  check(`${name} home: no scrolling, all three buttons on screen, at least 48 px`, !l.scrolls && !l.overflowX && !l.nameClipped && l.buttons.join(",") === HOME && [l.open, l.live, l.settings].every((b) => tapOk(b) && b.bottom <= l.vh) && l.labelsCut === 0, JSON.stringify(l));
+  // Side by side from 640 px wide (same row, same size), else Microphone right under Camera.
   const side = viewport.width >= 640;
-  check(`${name} home: Talk live next to Open camera, on screen`, l.live && l.live.bottom <= l.vh && (side ? Math.abs(l.live.top - l.open.top) <= 2 && l.live.h === l.open.h : l.live.top >= l.open.bottom), JSON.stringify({ open: l.open, live: l.live }));
+  check(`${name} home: Microphone next to Camera, as large`, side ? Math.abs(l.live.top - l.open.top) <= 2 && l.live.h === l.open.h : l.live.top >= l.open.bottom, JSON.stringify({ open: l.open, live: l.live }));
   await page.screenshot({ path: join(OUT, `${name}-home.png`) });
   if (mobile) await page.getByTestId("open-camera").tap();
-  else await page.keyboard.press("Enter"); // focus starts on Open camera
+  else await page.keyboard.press("Enter"); // focus starts on Camera
   await until(() => page.locator('.stage[data-on="true"]').count());
   await sleep(2500);
   l = await layout(page);
-  check(`${name} camera screen: no scrolling, Stop on screen`, !l.scrolls && !l.overflowX && l.stop?.bottom <= l.vh, JSON.stringify({ ...l, actions: undefined }));
-  check(`${name} camera screen: Talk live beside Stop, on screen, at least 48 px`, l.liveActive && l.liveActive.bottom <= l.vh && l.liveActive.h >= 48, JSON.stringify({ stop: l.stop, live: l.liveActive }));
-  check(`${name} camera screen: every action on screen, at least 48 px`, l.actions.length === 5 && actionsOk(l, viewport.width), JSON.stringify(l.actions));
+  check(`${name} camera screen: no scrolling, only Stop, on screen, at least 48 px`, !l.scrolls && !l.overflowX && l.buttons.join(",") === "stop-assistance" && tapOk(l.stop) && l.stop.bottom <= l.vh && l.labelsCut === 0, JSON.stringify(l));
   await page.screenshot({ path: join(OUT, `${name}-active.png`) });
   if (!mobile) {
     await page.keyboard.press("KeyC");
@@ -273,18 +272,19 @@ for (const [name, viewport, mobile] of [
   await ctx.close();
 }
 
-// --- 2b. Largest text size: the actions go to one column, each with its whole label ------------------
+// --- 2b. Largest text size: the tiles go to rows, every label whole ---------------------------------
 {
   const { ctx, page, errors } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
   await withLang(ctx, "fr", { "assistant.consent.v3": "1" }, { autoDescribe: true, textScale: 2 });
   await page.goto(BASE, { waitUntil: "networkidle" });
+  let l = await layout(page);
+  check("text size 200% home: one column, no label cut off, no sideways scroll", l.open.left === l.live.left && l.live.top >= l.open.bottom && l.labelsCut === 0 && !l.overflowX, JSON.stringify(l));
+  await page.screenshot({ path: join(OUT, "phone-home-large-text.png"), fullPage: true });
   await page.getByTestId("open-camera").tap();
   await until(() => page.locator('.stage[data-on="true"]').count());
   await sleep(1500);
-  const l = await layout(page);
-  const lefts = await page.evaluate(() => [...document.querySelectorAll("[data-testid=actions] button")].map((b) => Math.round(b.getBoundingClientRect().left)));
-  const cut = await page.evaluate(() => [...document.querySelectorAll("[data-testid=actions] button span")].filter((s) => s.scrollWidth > s.clientWidth + 1).length);
-  check("text size 200%: one column of actions, no label cut off", new Set(lefts).size === 1 && cut === 0 && !l.overflowX, JSON.stringify({ lefts, cut }));
+  l = await layout(page);
+  check("text size 200% session: Stop whole and on screen", l.labelsCut === 0 && !l.overflowX && l.stop.bottom <= l.vh, JSON.stringify(l));
   await page.screenshot({ path: join(OUT, "phone-active-large-text.png"), fullPage: true });
   check("text size 200%: no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
@@ -322,7 +322,7 @@ for (const [name, viewport, mobile] of [
   const { ctx, page } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true, deviceScaleFactor: 2, reducedMotion: "reduce" });
   await withLang(ctx, "ar", { theme: "light" });
   await page.goto(BASE, { waitUntil: "networkidle" });
-  const t = await page.evaluate(() => getComputedStyle(document.querySelector(".open-camera")).transitionDuration);
+  const t = await page.evaluate(() => getComputedStyle(document.querySelector(".tile-camera")).transitionDuration);
   check("reduced motion: no transitions", /^0s/.test(t), t);
   await page.screenshot({ path: join(OUT, "phone-home-light-ar.png") });
   await ctx.close();

@@ -272,13 +272,13 @@ async function guard() {
   const c = s.closes.find((x) => x.code !== 1000 && x.code !== 1005);
   if (c && (QUOTA.test(c.reason) || c.code === 1011 || c.code === 1008)) return `socket closed ${c.code}: ${c.reason}`;
   if (s.errors.length) return `server error message: ${s.errors[0].d}`;
-  const st = await page.getByTestId("live-toggle").getAttribute("data-live-status").catch(() => null);
+  const st = await page.getByTestId("stage").getAttribute("data-live-status").catch(() => null);
   if (st === "failed") return "live status failed";
   return null;
 }
 
 const wallStart = Date.now();
-const killer = setTimeout(async () => { abortReason ??= "hard 5-minute limit"; await page.getByTestId("live-toggle").click().catch(() => {}); }, HARD_LIMIT_MS);
+const killer = setTimeout(async () => { abortReason ??= "hard 5-minute limit"; await page.getByTestId("stop-assistance").click().catch(() => {}); }, HARD_LIMIT_MS);
 await page.goto(BASE, { waitUntil: "networkidle" });
 await page.getByTestId("live-toggle").click();
 const t0 = Date.now();
@@ -286,12 +286,12 @@ let lastStatus = "";
 while ((Date.now() - t0) / 1000 < END_AT_S) {
   abortReason ??= await guard();
   if (abortReason) break;
-  const st = await page.getByTestId("live-toggle").getAttribute("data-live-status").catch(() => null);
+  const st = await page.getByTestId("stage").getAttribute("data-live-status").catch(() => null);
   if (st !== lastStatus) { console.log(`${((Date.now() - t0) / 1000).toFixed(1)} s  live: ${st}`); lastStatus = st; }
   await new Promise((r) => setTimeout(r, 500));
 }
 // End: the user's button. Then the measurements from Settings.
-await page.getByTestId("live-toggle").click().catch(() => {});
+await page.getByTestId("stop-assistance").click().catch(() => {});
 const endedAt = Date.now();
 clearTimeout(killer);
 await new Promise((r) => setTimeout(r, 1500));

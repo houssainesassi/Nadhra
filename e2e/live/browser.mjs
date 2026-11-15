@@ -131,10 +131,9 @@ page.on("pageerror", (e) => consoleErrors.push(String(e)));
 await page.goto(BASE, { waitUntil: "networkidle" });
 
 const latencies = [];
-// Talk live is on the main screen, next to Open camera. Settings then shows the live meta (latency)
-// and stays open over the camera.
+// Microphone on the home screen starts it. During the session only End is on screen; the live meta
+// (latency) is read from the Settings panel's markup, which stays in the page while it is closed.
 await page.getByTestId("live-toggle").click();
-await page.getByTestId("open-settings").click();
 const started = Date.now();
 let lastLatency = null;
 while (Date.now() - started < (TOTAL_S + 4) * 1000) {
@@ -147,7 +146,7 @@ while (Date.now() - started < (TOTAL_S + 4) * 1000) {
   }
 }
 const ui = {
-  status: await page.getByTestId("live-toggle").getAttribute("data-live-status"),
+  status: await page.getByTestId("stage").getAttribute("data-live-status"),
   state: await page.getByTestId("assistant-state").textContent(),
   mic: await page.getByTestId("mic-status").textContent(),
   user: await page.getByTestId("live-user").textContent().catch(() => ""),
@@ -158,10 +157,9 @@ const live = await page.evaluate(() => window.__live);
 await page.screenshot({ path: join(OUT, "desktop.png") });
 
 // End the conversation from the UI: the microphone must be released.
-await page.keyboard.press("Escape"); // close Settings: the button is on the main screen
-await page.getByTestId("live-toggle").click();
+await page.getByTestId("stop-assistance").click(); // End live conversation
 await page.waitForTimeout(500);
-const afterStop = await page.getByTestId("live-toggle").getAttribute("data-live-status");
+const afterStop = await page.getByTestId("stage").getAttribute("data-live-status");
 
 // --- analysis ----------------------------------------------------------------------------------
 const t0 = live.micOpenAt;
