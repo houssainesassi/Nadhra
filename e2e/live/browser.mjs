@@ -131,9 +131,10 @@ page.on("pageerror", (e) => consoleErrors.push(String(e)));
 await page.goto(BASE, { waitUntil: "networkidle" });
 
 const latencies = [];
-// Talk live is in Settings; the panel stays open over the camera.
-await page.getByTestId("open-settings").click();
+// Talk live is on the main screen, next to Open camera. Settings then shows the live meta (latency)
+// and stays open over the camera.
 await page.getByTestId("live-toggle").click();
+await page.getByTestId("open-settings").click();
 const started = Date.now();
 let lastLatency = null;
 while (Date.now() - started < (TOTAL_S + 4) * 1000) {
@@ -157,6 +158,7 @@ const live = await page.evaluate(() => window.__live);
 await page.screenshot({ path: join(OUT, "desktop.png") });
 
 // End the conversation from the UI: the microphone must be released.
+await page.keyboard.press("Escape"); // close Settings: the button is on the main screen
 await page.getByTestId("live-toggle").click();
 await page.waitForTimeout(500);
 const afterStop = await page.getByTestId("live-toggle").getAttribute("data-live-status");

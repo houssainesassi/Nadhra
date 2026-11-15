@@ -1317,3 +1317,173 @@ test("offline mode never picks the browser's speech recognition (a cloud service
   h.c.store.set({ ...h.c.state, status: { mode: "offline", available: true, providers: [], canTranscribe: true } });
   assert.notEqual(pick()?.kind, "recognition");
 });
+
+// --- main-screen action buttons -------------------------------------------------------------------
+// The buttons call the same controller methods as the voice commands and keys. These cover what a
+// button press must do that a voice command never needed: Ask with voice commands on, and Pause's state.
+
+class CountingVoice extends FakeVoice {
+  finished = 0;
+  finish() { this.finished++; }
+}
+
+test("Ask with voice commands on doesn't cut the open microphone; it plays the listening tone", async () => {
+  const voice = new CountingVoice(() => new Promise<VoiceResult>(() => {})); // listens until told otherwise
+  const h = setup({ voice });
+  h.c.toggleAssistant();
+  h.drain();
+  await new Promise((r) => setTimeout(r, 400)); // the loop polls every 200 ms
+  assert.equal(h.any.listening, true, "the hands-free loop is listening");
+  const said = h.engine.said.length;
+  h.feedback.length = 0;
+  await h.c.askByVoice();
+  assert.equal(voice.finished, 0, "the question being spoken isn't cut off");
+  assert.deepEqual(h.feedback, ["listen"], "the press is answered by the listening tone");
+  assert.equal(h.engine.said.length, said, "nothing is spoken into the open microphone");
+  assert.equal(h.c.state.assistantOn, true);
+});
+
+test("Ask with voice commands on, while the assistant is talking: it stops and says it is listening", async () => {
+  const voice = new CountingVoice(() => new Promise<VoiceResult>(() => {}));
+  const h = setup({ voice });
+  h.c.toggleAssistant();
+  h.say("جملة طويلة برشا باش تاخو وقت.", "answer");
+  assert.equal(h.c.state.speaking, true);
+  assert.equal(h.any.listening, false, "the loop waits while the assistant talks");
+  await h.c.askByVoice();
+  assert.equal(h.engine.last, T.listening);
+  assert.ok(h.feedback.includes("listen"));
+  assert.equal(voice.finished, 0);
+});
+
+test("Ask with voice commands off records one question; pressing it again sends it", async () => {
+  const voice = new CountingVoice(() => new Promise<VoiceResult>(() => {}));
+  const h = setup({ voice });
+  void h.c.askByVoice();
+  await flush();
+  assert.equal(h.c.state.mic, "listening");
+  await h.c.askByVoice();
+  assert.equal(voice.finished, 1, "the second press ends the recording");
+});
+
+test("Pause's state stays 'paused' while a question asked during the pause is answered", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  assert.equal(h.c.state.paused, false);
+  h.c.pause();
+  assert.equal(h.c.state.paused, true);
+  assert.equal(h.c.state.analysis, "paused");
+  replies.push(scene({ spoken: "بيت فيها طاولة.", changed: true }));
+  const asked = h.c.runTask("describe");
+  await flush(2);
+  assert.equal(h.c.state.paused, true, "the Resume button doesn't flip back to Pause during the answer");
+  await asked;
+  await flush();
+  assert.equal(h.c.state.analysis, "paused", "the answer leaves the pause in place");
+  h.c.resume();
+  assert.equal(h.c.state.paused, false);
+  h.c.stopCamera();
+  await h.start();
+  assert.equal(h.c.state.paused, false, "a new camera session starts unpaused");
+});
+
+// --- Emergency page: the location ------------------------------------------------------------------
+// The location is looked up when the page opens. When there is none, the page's voice says so (after
+// the opening sentence, never over it), so a user who relies on the voice knows the message won't
+// carry it. Nothing is ever sent or opened by the app itself.
+
+type Geo = { ok: true } | { ok: false; code: number } | "unsupported";
+function setGeolocation(geo: Geo) {
+  if (geo === "unsupported") {
+    delete (navigator as unknown as Record<string, unknown>).geolocation;
+    return;
+  }
+  Object.defineProperty(navigator, "geolocation", {
+    configurable: true,
+    value: {
+      getCurrentPosition(ok: (p: unknown) => void, fail: (e: unknown) => void) {
+        // Answers later, as a real lookup does.
+        setImmediate(() => (geo.ok ? ok({ coords: { latitude: 36.80649, longitude: 10.18153, accuracy: 12 } }) : fail({ code: geo.code, message: "" })));
+      },
+    },
+  });
+}
+afterEach(() => setGeolocation("unsupported"));
+
+function emergencySetup(geo: Geo, contact = true) {
+  setGeolocation(geo);
+  const h = setup();
+  if (contact) h.c.updateSettings({ emergencyName: "Amina", emergencyPhone: "+216 98 123 456" });
+  h.drain();
+  h.engine.said.length = 0;
+  h.engine.stops = 0;
+  return h;
+}
+
+const geoFailures: [string, Geo][] = [
+  ["the lookup fails (position unavailable)", { ok: false, code: 2 }],
+  ["permission is denied", { ok: false, code: 1 }],
+  ["location isn't supported", "unsupported"],
+];
+for (const [what, geo] of geoFailures) {
+  test(`Emergency: when ${what}, "no location" is said after the opening sentence, and nothing is sent`, async () => {
+    const h = emergencySetup(geo);
+    h.c.openSheet("emergency");
+    const opening = h.engine.said[0];
+    assert.ok(T.emergency.startsWith(opening), "the opening sentence plays first");
+    const stops = h.engine.stops;
+    await flush();
+    assert.equal(h.c.state.location.status, "failed");
+    assert.equal(h.engine.stops, stops, "the opening sentence isn't cut");
+    assert.ok(!h.engine.said.includes(T.noLocation), "it waits for the opening sentence to finish");
+    h.drain();
+    const at = h.engine.said.indexOf(T.noLocation);
+    assert.ok(at > 0, "then it is said");
+    assert.equal(h.engine.said.filter((s) => s === T.noLocation).length, 1, "once");
+    assert.equal(h.c.emergencyMessage(), T.smsNoLocation, "the message asks them to call");
+    assert.equal(posts.length, 0, "nothing was sent");
+  });
+}
+
+test("Emergency: location found: nothing extra is said, and the message carries the map link", async () => {
+  const h = emergencySetup({ ok: true });
+  h.c.openSheet("emergency");
+  await flush();
+  h.drain();
+  assert.equal(h.c.state.location.status, "ready");
+  assert.ok(!h.engine.said.includes(T.noLocation));
+  assert.equal(h.c.emergencyMessage(), `${T.sms} https://maps.google.com/?q=36.80649,10.18153`);
+  assert.equal(posts.length, 0);
+});
+
+test("Emergency: no contact saved: no message to warn about, so 'no location' isn't said", async () => {
+  const h = emergencySetup({ ok: false, code: 1 }, false);
+  h.c.openSheet("emergency");
+  await flush();
+  h.drain();
+  assert.equal(h.c.state.location.status, "failed");
+  assert.ok(h.engine.said.includes(T.noContact));
+  assert.ok(!h.engine.said.includes(T.noLocation));
+});
+
+test("Emergency: a page closed before the lookup ends says nothing about the location", async () => {
+  const h = emergencySetup({ ok: false, code: 3 });
+  h.c.openSheet("emergency");
+  h.c.closeSheet("emergency");
+  await flush();
+  h.drain();
+  assert.equal(h.c.state.location.status, "idle");
+  assert.ok(!h.engine.said.includes(T.noLocation));
+});
+
+test("Emergency: the 'no location' sentence tells the truth in every language (the message asks them to call)", () => {
+  for (const l of ["tn", "ar", "fr", "en"] as const) {
+    const t = speech(l);
+    assert.doesNotMatch(t.noLocation, /open the message|J'ouvre|سأفتح|نحلّك/, `${l}: the app never opens the message itself`);
+  }
+  assert.match(speech("en").noLocation, /ask them to call you/);
+  assert.match(speech("fr").noLocation, /demandera de vous appeler/);
+  assert.match(speech("tn").noLocation, /يعيّطلك/);
+  assert.match(speech("ar").noLocation, /يتصل بك/);
+});

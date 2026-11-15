@@ -6,9 +6,9 @@ import { commandExamples, parseCommand } from "../src/lib/assistant/commands.ts"
 import { guardSpoken, isPathQuestion, sanitizeAnalysis, swapSides } from "../src/lib/assistant/schema.ts";
 import { cameraErrorText, PHRASES, speech, SPEECH, warningPhrase } from "../src/lib/assistant/phrases.ts";
 import { buildUserText, transcribePrompt, visionSystemPrompt, VISION_SYSTEM_PROMPT } from "../src/lib/assistant/prompts.ts";
-import { cleanPhone, sanitizeVisionSettings } from "../src/lib/assistant/settings.ts";
+import { cleanPhone, documentLangScript, sanitizeVisionSettings, SETTINGS_KEY } from "../src/lib/assistant/settings.ts";
 import { HazardTracker, type RawDetection } from "../src/lib/assistant/hazardTracker.ts";
-import { isSpeechLang, SPEECH_LANGS } from "../src/lib/assistant/lang.ts";
+import { documentLang, isSpeechLang, SPEECH_LANGS } from "../src/lib/assistant/lang.ts";
 import type { Hazard } from "../src/lib/assistant/types.ts";
 
 const q = { mode: "question", cameraFacing: "outward", hasMotionEvidence: false } as const;
@@ -157,9 +157,17 @@ test("prompts: one per language; Tunisian unchanged in substance", () => {
   assert.match(transcribePrompt("tn"), /Tunisian Arabic/);
 });
 
+test("settings: a saved language is kept, whatever the default; only a missing or invalid one takes the default", () => {
+  for (const language of ["tn", "ar", "fr", "en"] as const) assert.equal(sanitizeVisionSettings({ language }).language, language);
+  // A user who changed any setting has every field saved, the language included: it is kept too.
+  assert.equal(sanitizeVisionSettings({ rate: 1.15, volume: 0.6, language: "en" }).language, "en");
+  assert.equal(sanitizeVisionSettings({}).language, "tn");
+  assert.equal(sanitizeVisionSettings({ rate: 1.15 }).language, "tn");
+});
+
 test("settings: language, volume, text size and the emergency number are validated", () => {
   const s = sanitizeVisionSettings({ language: "de", volume: 7, textScale: 0.2, emergencyPhone: "+216 98 <script> 123 456", emergencyName: "  Maman\u0007 " });
-  assert.equal(s.language, "en", "English is the default language");
+  assert.equal(s.language, "tn", "Tunisian Arabic is the default language");
   assert.equal(s.volume, 1);
   assert.equal(s.textScale, 1);
   assert.equal(s.emergencyPhone, "+216 98 123 456");
@@ -231,4 +239,53 @@ test("a sentence that says nothing is ahead always comes with: that doesn't mean
   assert.equal(sanitizeAnalysis({ spoken: "I can't see a door in the image." }, { mode: "question", cameraFacing: "outward", hasMotionEvidence: false, question: "Where is the door?", lang: "en" }).spoken, "I can't see a door in the image.");
   const path = sanitizeAnalysis({ spoken: "There's nothing in front of you." }, { mode: "question", cameraFacing: "outward", hasMotionEvidence: false, question: "Is the road clear?", lang: "en" }).spoken;
   assert.equal(path, `There's nothing in front of you. ${PHRASES.en.pathCaveat}`);
+});
+
+// --- the page's language and direction (<html lang> and <html dir>) ---------------------------------
+
+test("document language: each speech language has the right lang and direction", () => {
+  assert.deepEqual(documentLang("tn"), { lang: "ar-TN", dir: "rtl" });
+  assert.deepEqual(documentLang("ar"), { lang: "ar", dir: "rtl" });
+  assert.deepEqual(documentLang("fr"), { lang: "fr", dir: "ltr" });
+  assert.deepEqual(documentLang("en"), { lang: "en", dir: "ltr" });
+});
+
+/** Runs the before-paint script against a stored value (undefined: nothing saved) or broken storage. */
+function runLangScript(stored: string | undefined | "throws") {
+  const root = { lang: "unset", dir: "unset" };
+  const writes: string[] = [];
+  const storage = {
+    getItem: (k: string) => {
+      if (stored === "throws") throw new Error("SecurityError");
+      return k === SETTINGS_KEY && stored !== undefined ? stored : null;
+    },
+    setItem: (k: string) => void writes.push(k),
+  };
+  new Function("localStorage", "document", documentLangScript())(storage, { documentElement: root });
+  return { ...root, writes };
+}
+
+test("document language script: a saved language sets <html lang/dir> before paint; it never writes storage", () => {
+  for (const l of SPEECH_LANGS) {
+    const r = runLangScript(JSON.stringify({ volume: 0.6, language: l }));
+    assert.deepEqual({ lang: r.lang, dir: r.dir }, documentLang(l), l);
+    assert.deepEqual(r.writes, []);
+  }
+});
+
+test("document language script: nothing saved, or nothing valid, gives the default (Tunisian, right to left)", () => {
+  const def = documentLang(sanitizeVisionSettings({}).language);
+  assert.deepEqual(def, { lang: "ar-TN", dir: "rtl" });
+  for (const stored of [undefined, "{}", JSON.stringify({ rate: 1.15 }), JSON.stringify({ language: "de" }), JSON.stringify({ language: 3 }),
+    JSON.stringify({ language: "constructor" }), JSON.stringify({ language: "__proto__" }), "null", "not json", "throws"] as const) {
+    const r = runLangScript(stored);
+    assert.deepEqual({ lang: r.lang, dir: r.dir }, def, String(stored));
+  }
+});
+
+test("document language script: the same rule as the settings (whatever settings keep, the script shows)", () => {
+  for (const raw of [{ language: "fr" }, { language: "xx" }, {}, { language: "ar", rate: 9 }]) {
+    const r = runLangScript(JSON.stringify(raw));
+    assert.deepEqual({ lang: r.lang, dir: r.dir }, documentLang(sanitizeVisionSettings(raw).language), JSON.stringify(raw));
+  }
 });

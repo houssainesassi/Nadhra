@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans_Arabic, Inter } from "next/font/google";
 import "./globals.css";
+import { documentLang } from "@/lib/assistant/lang";
+import { DEFAULT_VISION_SETTINGS, documentLangScript } from "@/lib/assistant/settings";
 
 // Inter for the English interface, IBM Plex Sans Arabic for everything the assistant says.
 const latin = Inter({ subsets: ["latin"], variable: "--font-latin", display: "swap" });
@@ -28,10 +30,16 @@ export const viewport: Viewport = {
 // The text size too, so large text doesn't jump in after the page has drawn.
 const themeScript = `(function(){var d=document.documentElement,t='dark';try{t=localStorage.getItem('theme')==='light'?'light':'dark';var s=JSON.parse(localStorage.getItem('assistant.settings')||'{}').textScale;if(typeof s==='number'&&s>=1&&s<=2)d.style.setProperty('--text-scale',String(s))}catch(e){}d.dataset.theme=t})()`;
 
+// The page's language and direction: the default language's on the server, then the saved one's,
+// set before paint by langScript. suppressHydrationWarning (on <html> only) covers that difference.
+const defaultDoc = documentLang(DEFAULT_VISION_SETTINGS.language);
+const langScript = documentLangScript();
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" dir="ltr" suppressHydrationWarning className={`${latin.variable} ${arabic.variable}`}>
+    <html lang={defaultDoc.lang} dir={defaultDoc.dir} suppressHydrationWarning className={`${latin.variable} ${arabic.variable}`}>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: langScript }} />
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-dvh font-sans antialiased">{children}</body>

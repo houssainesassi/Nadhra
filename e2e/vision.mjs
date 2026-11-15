@@ -656,8 +656,7 @@ const scenarios = {
       tokenAsked = true;
       return route.fulfill({ status: 503, json: { error: "not-configured" } });
     });
-    await e.openSettings();
-    await e.page.getByTestId("live-toggle").click();
+    await e.page.getByTestId("live-toggle").click(); // beside Stop on the camera screen
     check("Talk live: the microphone starts under the CSP, then asks for a token", !!(await until(() => tokenAsked, 10_000)));
     check("Talk live: a refused token is said, not hidden", !!(await until(() => e.page.evaluate(() => window.__captions.some((c) => c.includes("المحادثة المباشرة ما خدمتش"))), 10_000)));
     const csp = e.errors.filter((m) => /Content Security Policy|Refused to/.test(m));

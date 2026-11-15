@@ -1,6 +1,6 @@
 // Follows objects from the on-device detector across frames. A single detection is never reported:
 // an object must persist, and "approaching" comes from its apparent size growing over at least a
-// second while the camera is still. Pure logic (tests/hazardTracker.test.ts).
+// second while the camera is still. Pure logic (tests in tests/visionClient.test.ts).
 import type { CameraFacing, Confidence, Hazard, HazardKind, Motion, Proximity, Side } from "./types.ts";
 import type { SpeechLang } from "./lang.ts";
 import { LOCAL_LABELS } from "./phrases.ts";

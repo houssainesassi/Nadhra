@@ -1,985 +1,456 @@
 # Nadhra (نظرة): complete feature audit
 
-- **Scope:** the working tree of `/home/hello/Downloads/blind` on branch `mai`, on 2026-11-09. This includes 29 modified and 4 untracked files that are not committed yet (most of the multi-language work is in them).
-- **Method:** I read every source file under `src/` (about 6,500 lines), the tests, the e2e script, the README, `docs/ARCHITECTURE.md` and `docs/ANDROID_TESTING.md`. I ran `npm test` once: **106 of 106 unit tests pass** (8 files, about 2 s, no network). I did not run the e2e suite. It needs photos that aren't in the repo and it uses real Gemini quota.
-- **Read-only:** no code was changed. This file is the only addition.
-- **References:** `path:line` refers to the current working tree.
+- **Date:** 2026-11-15. This replaces the audit of 2026-11-09 (with its 2026-11-10 update), which no longer matched the app after the redesign of 12 Nov, the medicine reader, the live conversation privacy work and the Nadhra AI track.
+- **Scope:** the working tree of `/home/hello/Downloads/blind` on branch `mai`: commit `fe8f244` plus the uncommitted changes that restore the main-screen action buttons (§4.1, A03).
+- **Method:** I read the source under `src/` (about 12,200 lines), the tests, the browser test scripts, the README and the docs. Each claim below was checked against the code, not taken from earlier reports. Test results are from runs on 2026-11-15 unless a section says otherwise. Earlier results are quoted from the report that recorded them, and say so.
+- **References** name files and functions, not line numbers, because line numbers go stale.
 
-> **Update, 2026-11-10 (Phase 1 safety fixes).** Seven defects in this audit are now fixed in code and covered by tests. See §0 below and `docs/NAHDRA_PRODUCTION_READINESS.md`. The rest of the audit still describes the code as it was on 2026-11-09. `controller.ts` line numbers have since moved by up to about 60 lines.
-
-> **How to read the status labels.** "Fully implemented" means the code is complete and its behaviour doesn't depend on a device, a browser service or an AI model. It does **not** mean it was validated with blind users. Nothing in the repo records a session on a real Android phone or with a blind tester. `docs/ANDROID_TESTING.md` is a checklist with no results filled in.
+> **No feature has been tested on a real phone, with TalkBack, or by a blind or low-vision user.** Every "tested" below means automated tests on a computer: unit tests in Node, and Chromium with a fake camera and microphone. `docs/ANDROID_TESTING.md` and `docs/BETA_TEST_CHECKLIST.md` have never been filled in. The Derja, Standard Arabic and French wording has never been reviewed by native speakers.
 
 ---
 
-## 0. Changes since the audit (2026-11-10)
+## 1. Summary
 
-| # | Audit finding | What changed | Verified by |
-|---|---|---|---|
-| 1 | Scans held back while any speech plays (F18, F25, §9.1) | `decideScan` no longer has a `speaking` input. During a reading, scans continue at the normal change-driven rate. Their warnings are spoken, and their description is dropped instead of being queued behind the reading. | unit (`controller.test.ts`, `visionClient.test.ts`) + Chromium e2e `readingInterruptedByWarning` (mocked API) |
-| 2 | Caution warnings waited behind a whole reading (new finding) | New `warning` priority between `answer` and `urgent`. It cuts into a reading, never into an urgent warning, and expires after 8 s. | unit |
-| 3 | An interrupted multi-part reading resumed out of order (new finding) | The interrupted part is re-queued before the rest of its reading, not after it. This affected urgent warnings too. | unit + e2e |
-| 4 | Detector failure not spoken (F23, §7.4) | Load failure, a load that takes more than 20 s, and a crash while running are all spoken, with an error tone. Offline, the user hears "analysis down" instead of the offline notice that promises on-device warnings. The broken instance is dropped, so restarting the camera retries. | unit + e2e `detectorFailureSpoken` |
-| 5 | "Stop listening" through Ask turned hands-free mode **on** (F36) | New `stopAssistant()`: `assistant-off` only ever turns the mode off. | unit (fails on the old code) |
-| 6 | Camera not released when the page is only hidden (F62) | On `visibilitychange` → hidden: camera released, microphone aborted, speech stopped. On return: the user hears "the camera was off while you were away" and the camera restarts. A camera the user stopped stays off. | unit + e2e `hiddenReleasesCamera` (hidden state simulated) |
-| 7 | (found while testing) "I didn't hear a question" spoken in the background after leaving the app | Not said while the page is hidden. | unit |
+Nadhra is a single-page web app (Next.js 16, React 19) that turns a phone or laptop camera into a spoken assistant for blind and visually impaired people in Tunisia. It speaks and listens in four languages: Tunisian Derja (the default), Modern Standard Arabic, French and English.
 
-Supporting change: the React hook `useStore` moved to `src/lib/useStore.ts`, so `controller.ts` loads without React and can be unit-tested.
+It has three layers:
 
-**Status changes:** F62 moves from PI to RD. Real Android behaviour is still unverified. The F36 defect is fixed.
+1. **On-device** (always on while the camera runs): MediaPipe EfficientDet-Lite0 finds people, vehicles and some furniture in under a second, sends nothing anywhere, and keeps working offline.
+2. **Cloud, on request** (Google Gemini, with OpenRouter as a fallback for some tasks): descriptions, reading text and medicine boxes, identifying objects, questions, and the only detection of stairs and drops. Automatic descriptions are **off by default**, so no picture leaves the phone unless the user asks.
+3. **Live conversation** (Gemini Live): a spoken, interruptible conversation, with the microphone and about one picture a second streamed straight from the browser to Google.
 
-**Still not verified:** none of this has run on a real Android phone or with a blind tester.
+**Nadhra AI**, the project's own offline engines, is a selectable provider. **No engine is connected yet.** Choosing it leaves only the on-device warnings running, and every other request is refused out loud (§4.13).
+
+**Verdict:** not ready for unsupervised use. The safety rules are strong and enforced in code, and the automated tests are broad. But nothing has run on a real phone or with the people it is for.
+
+**Count:** 105 features. 48 are implemented and tested in software, 35 are implemented but not tested on real devices, 9 are experimental, and 13 are unavailable or not implemented (§5).
 
 ---
 
-## 1. Executive summary
+## 2. Status legend
 
-Nadhra is a **single-page web app** (Next.js 16, React 19). It turns a phone or laptop camera into a spoken assistant for blind and visually impaired people in Tunisia. It has two layers:
+| Code | Meaning |
+|---|---|
+| **TS** | **Implemented and tested in software.** Automated unit or browser tests cover it, and its behaviour is decided by the code, not by a device, a browser service or an AI model. |
+| **ND** | **Implemented, not tested on real devices.** Automated tests pass, but how well it works depends on the phone, the browser's services, the network or the AI model, and none of that has been tried for real. |
+| **EX** | **Experimental.** It works in tests, but it rests on a heuristic with known weaknesses, an unofficial service, an unmeasured model ability, or test data that is rendered rather than real. |
+| **NA** | **Unavailable or not implemented.** Either not built, removed, switched off, or present only as benchmarks or plumbing. |
 
-1. **A cloud layer (Google Gemini, with OpenRouter as a fallback).** It describes scenes, reads text, identifies products, answers free questions, and reports hazards a small model can't see, such as stairs and drops.
-2. **An on-device layer (MediaPipe EfficientDet-Lite0).** It finds people, vehicles and a few furniture-type obstacles in under a second, sends nothing off the device, and keeps working offline.
-
-Everything the app says goes through a priority speech queue. The voice is the browser's own, with Microsoft Edge's online neural voice as a fallback. The app speaks and listens in **Tunisian Arabic (Derja, the default), Modern Standard Arabic, French or English**. The **visible interface is English only.**
-
-The safety design is the strongest part of the codebase:
-- Code, not the prompt, enforces "no safety promises", "no distances", "no motion claims without a second frame" and "uncertain is never urgent".
-- Warnings come from fixed templates whose wording states the confidence level.
-- The user is told out loud when analysis is down.
-- The Emergency page never dials or sends anything by itself.
-
-**The main weaknesses:**
-- **Latency.** Cloud hazards such as stairs arrive several seconds late. *(Fixed 2026-11-10: cloud scans used to be held back while the assistant was speaking.)*
-- **No offline shell.** There is no service worker or manifest.
-- **The UI is English only**, for an Arabic-speaking audience that uses screen readers.
-- **Nothing has been tested on real devices or with real users.** That covers TalkBack, real speech, battery, real hazards and real Derja.
-- **Unofficial services.** The Edge voice uses an unofficial endpoint, and the vision provider runs on a free tier that may keep images.
-
-**Count:** 70 features found. Fully implemented 34, needs real-device testing 25, partially implemented 3, experimental 6, planned 1, broken or deprecated 1 (see §6).
+"Languages" means the spoken output unless stated. "4" means English, Derja, Standard Arabic and French.
 
 ---
 
-## 2. Technical architecture
-
-### 2.1 Components and how they talk
+## 3. Architecture
 
 ```
-                   ┌──────────────────────── Browser (one page: src/app/page.tsx) ────────────────────────┐
- User ─ tap/keys ─▶│ Assistant.tsx (React UI) ──calls──▶ SmartVisionController (controller.ts, no React)     │
- User ─ voice ────▶│        ▲ useStore(store)                    │                                          │
-                   │        └────────── state patches ───────────┤                                          │
-                   │  CameraSource (cameraSource.ts) ─ video ─▶ LocalDetector (MediaPipe WASM, CPU)          │
-                   │        │ thumbnail 160×120 every 0.5 s       └▶ HazardTracker ─▶ hazardUrgency/WarningGate │
-                   │        │ frameAnalysis + scheduler ── decide ─▶ client.ts POST /api/vision ────────┐       │
-                   │  VoiceInput: SpeechRecognition (Google, in Chrome) │ or RecorderInput ─▶ /api/vision/transcribe
-                   │  SpeechQueue ─▶ HybridTts: speechSynthesis │ or CloudTts ─▶ POST /api/tts ──────────┐ │       │
-                   │  Earcons (WebAudio) · navigator.vibrate · Wake Lock · Geolocation (Emergency only)  │ │       │
-                   └────────────────────────────────────────────────────────────────────────────────────┼─┼───────┘
-                   ┌──────────────────────── Next.js server (Node runtime, Vercel-ready) ───────────────┼─┼───────┐
-                   │ /api/vision  → validate → ai/vision.ts provider chain → schema.ts sanitize ◀───────┘ │       │
-                   │ /api/vision/transcribe → Gemini audio → parseTranscript                               │       │
-                   │ /api/tts → edgeTts.ts WebSocket → speech.platform.bing.com (unofficial) ◀─────────────┘       │
-                   └───────────────────────────────────────────────────────────────────────────────────────────────┘
-                     Gemini (generativelanguage.googleapis.com), OpenRouter (free models only), Microsoft Edge TTS
+Browser (one page: src/app/page.tsx → src/components/Assistant.tsx)
+ ├─ Assistant.tsx (React)  ──calls──▶  SmartVisionController (src/lib/assistant/controller.ts, no React)
+ │        ▲ useStore (src/lib/useStore.ts, src/lib/store.ts)        │
+ │        └──────────── state patches ──────────────────────────────┤
+ ├─ Camera (cameraSource.ts, camera/camera.ts)
+ │    ├─ video ─▶ LocalDetector (MediaPipe WASM, CPU) ─▶ HazardTracker ─▶ hazardUrgency / WarningGate
+ │    └─ 160×120 thumbnail every 0.5 s ─▶ frameAnalysis + scheduler ─▶ apiFetch POST /api/vision
+ ├─ VoiceInput (voiceInput.ts): SpeechRecognition (Google, in Chrome) or recorder ─▶ /api/vision/transcribe
+ ├─ SpeechQueue ─▶ HybridTts (src/lib/speech/tts.ts): browser voice, or /api/tts (Edge voice)
+ ├─ Live (src/lib/live/): token from /api/live/token, then one WebSocket straight to Gemini Live
+ └─ Earcons (WebAudio), vibration, Wake Lock, Geolocation (Emergency page only)
+
+Next.js server (Node runtime)
+ ├─ guard.ts: Origin → session cookie → per-minute limits → daily budgets (usageStore.ts; Upstash optional)
+ ├─ /api/vision         ai/vision.ts provider chain, ai/router.ts (AI_MODE), schema.ts / document.ts safety rules
+ ├─ /api/vision/transcribe   Gemini audio → text
+ ├─ /api/tts            speech/edgeTts.ts → Microsoft Edge "Read aloud" WebSocket (unofficial)
+ ├─ /api/live/token     server/liveToken.ts: one-use token with model, voice and instructions locked
+ ├─ /api/session        HMAC-signed session cookie
+ ├─ /api/report, /api/health   monitor.ts counters (no content)
+ └─ server/engines/     Nadhra engine manifests and launcher (not used by any route yet)
 ```
 
-- **UI ↔ controller.** `Assistant.tsx` creates one `SmartVisionController` (`src/components/Assistant.tsx:162`) and re-renders from its store (`src/lib/store.ts:29`). The controller owns every piece of state, including which panel is open (`controller.ts:42-43`), so voice commands can open and close panels.
-- **Controller ↔ server.** JSON over `fetch`, in `src/lib/assistant/client.ts`. Client timeouts are 27 s for vision and 19 s for transcription (`client.ts:39-41`).
-- **Server ↔ providers.** `src/lib/ai/vision.ts:48-110` (Gemini REST with `x-goog-api-key`, OpenRouter chat completions) and `src/lib/speech/edgeTts.ts:130` (WebSocket).
-- **Shared code.** `types.ts`, `lang.ts`, `schema.ts`, `phrases.ts` and `prompts.ts` are pure modules used on both sides. The safety rules run on the server, inside `sanitizeAnalysis`.
+- **One controller owns all state,** including which panel is open, so voice commands and buttons go through the same methods: `runTask`, `askByVoice`, `pause`/`resume`, `toggleLive`, `openSheet`, and so on.
+- **Shared pure modules** (`types.ts`, `lang.ts`, `schema.ts`, `phrases.ts`, `prompts.ts`, `document.ts`, `lineCheck.ts`) run on both sides. The safety rules run on the server.
+- **More detail** is in `docs/ARCHITECTURE.md`.
 
-### 2.2 Frontend
+---
 
-- One route only: `src/app/page.tsx` renders `<Assistant/>`. `layout.tsx` loads the Inter and IBM Plex Sans Arabic fonts. It also runs an inline script that applies the saved theme and text size before first paint (`src/app/layout.tsx:22`).
-- Styling is Tailwind 4 plus `src/app/globals.css`, which holds design tokens, a reduced-motion rule (`globals.css:589`) and a forced-colors rule (`globals.css:598`).
-- State is a minimal external store with `useSyncExternalStore`. The whole `Assistant` subscribes to the whole state, so **every patch re-renders the full page** (see §8).
+## 4. Feature inventory
 
-### 2.3 Camera pipeline (`controller.ts`, `cameraSource.ts`, `camera.ts`)
+### 4.1 Main screen and navigation
 
-1. `getUserMedia` asks for the back camera, 1280×720 at 15 fps, video only (`cameraSource.ts:44,61`, `camera.ts:25-28`). Errors map to `denied`, `not-found`, `busy`, `insecure`, `unsupported` or `unknown` (`camera.ts:17-37`).
-2. **Every 500 ms** (`controller.ts:23,359`) it draws a 160×120 thumbnail and converts it to grey. It computes brightness, contrast and Laplacian sharpness (`frameAnalysis.ts:24-58`), and measures motion as the fraction of changed pixels.
-3. **Every 1 s while online**, it encodes a 384 px JPEG "motion frame" and keeps the last 3 (`controller.ts:510-515`). One of them, 0.7–4 s old, is sent with a request as the only allowed evidence for motion (`controller.ts:560-563`).
-4. `decideScan` decides whether to send a 768 px JPEG (`scheduler.ts:45-61`):
-   - never more often than every 4 s
-   - send when more than 8 % of pixels changed, when the detector found a new object, or on a heartbeat of 20 s that doubles up to 80 s while nothing changes
-   - never send dark, overexposed or flat frames
-   - wait up to 6 s for a sharp frame
-   - ~~hold back while speech is playing~~ (removed 2026-11-10: speech never holds a scan back)
-   - back off exponentially after failures, up to 60 s
-5. Questions, Read, Identify and Describe capture a 1280 px JPEG at quality 0.82 (`controller.ts:26,706`).
-6. A result whose frame is older than 12 s is dropped (`controller.ts:30,591`). Results from a stopped camera session are ignored through a `session` counter (`controller.ts:144,392`).
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| A01 | **Open camera**: one press runs the consent check, then the camera, the on-device detector and hands-free voice commands | `Assistant.tsx`, `controller.startAssistance` | ND | Focus starts here. Chromium: focus, consent-first and layout checks pass. |
+| A02 | **Camera screen**: preview, state pill, microphone pill, notices (offline, detector failed, service down), caption with "Heard «…»" | `Assistant.tsx` | TS | Text over the video sits on solid plates. |
+| A03 | **Five action buttons (restored 2026-11-15)**: Describe surroundings, Read text, Identify object, Ask a question, Pause/Resume descriptions | `Assistant.tsx` (`.actions`), `uiText.ts` (`actions`), `icons.tsx`, `globals.css`; same controller calls as the voice commands and keys | ND | See below. |
+| A04 | **Stop assistance** (camera, voice commands and live conversation off; focus returns to Open camera) | `controller.stopAssistance` | TS | Chromium: every camera track ends. |
+| A05 | **Header**: language selector, Privacy & safety, Settings | `Assistant.tsx` | TS | Icon buttons have names; 48 px or more. |
+| A06 | **AI switch** "Gemini" / "Nadhra (experimental)" | `Assistant.tsx` (`ProviderSwitch`), `ai/router.ts` (`nadhraOffered`) | TS | Shown only when the server sets `NADHRA_AI_ENABLED`, or when Nadhra is already chosen. Native radio buttons. |
+| A07 | **Main-screen text in four languages**, right to left for Arabic | `uiText.ts`, `lang` and `dir` on `.app` | TS | Settings, Privacy & safety, Emergency and the consent dialog stay English (§4.8). |
+| A08 | **Keyboard shortcuts** C, D, T, I, Q, P, V, L, R, H, Esc (physical key positions, so any layout works) | `Assistant.tsx` keydown handler | TS | They clash with screen readers' browse mode. The buttons are the alternative for C, D, T, I, Q and P. |
+| A09 | **Consent dialog** (English on screen, spoken in the speech language); decline; withdraw | `Assistant.tsx`, `controller.acceptConsent`, `declineConsent`, `withdrawConsent`, `settings.ts` (`CONSENT_KEY` v3) | TS | Withdraw is in Privacy & safety only. It stops the camera and the live conversation, and forgets the reading and live notices, the conversation history and the remembered document. |
+| A10 | **Privacy & safety panel** (experimental notice, who receives images) | `Assistant.tsx` (`PrivacyText`) | TS | English only. |
+| A11 | **Theme, text size, motion**: dark/light, text 100–175 % on top of the browser's size, reduced motion, forced colours | `globals.css`, `layout.tsx` (theme script) | TS | Chromium: no transitions under reduced motion. The theme doesn't follow the OS setting. |
+| A12 | **Install to home screen** (web app manifest, SVG + PNG icons) | `src/app/manifest.ts`, `src/app/icon.svg`, `src/app/apple-icon.png`, `public/icons/` | ND | No service worker, so the app can't open offline (K02). |
 
-### 2.4 AI and Gemini integration (`src/lib/ai/vision.ts`, `prompts.ts`, `schema.ts`)
+**A03 in detail.**
+- **Placement:** between the camera and Stop assistance, so a TalkBack swipe goes caption, actions, then Stop. They are visible whenever assistance is active.
+- **Accessibility:** native `<button>` elements, named by their visible words, in a group named "Actions". Pause is described as "Warnings keep running".
+- **Size:** at least 48 px each way; one column at 150 % text and above; a side column on a phone held sideways.
+- **Behaviour:**
+  - Describe, Read and Identify start the camera if it is off.
+  - Read goes to the medicine and document reader (C01).
+  - Ask records one question and becomes "Done, send question". With voice commands on, it plays the listening tone, and says "I'm listening" if the microphone isn't open yet. It no longer cuts off what the user is saying.
+  - Pause only appears when descriptions are automatic (not with Nadhra, not during a live conversation). Once paused, Resume stays visible.
+  - With Nadhra selected, Describe, Read and Identify stay visible, and a tap speaks why they aren't available.
+- **Tested:** 4 unit tests, plus Chromium checks of names, order, size, taps, Pause/Resume, Derja labels, six screen sizes, 200 % text and an axe scan with no violations.
+- **Not tested** with TalkBack or on a phone.
+- **Cost:** on a 390×844 phone the camera keeps about half the screen, down from about two thirds.
 
-- **Provider chain.** It tries each model in `GEMINI_VISION_MODELS` (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.5-flash`), then OpenRouter (`vision.ts:52,83-109`).
-  - Each attempt has a 9 s timeout, with a 22 s total budget (`vision.ts:192-193`).
-  - A 429 or 402 response puts that model on a 60 s cooldown (`vision.ts:160`).
-  - Unusable JSON counts as a failure, so the next provider gets a chance (`vision.ts:196-197`).
-- **Free tiers only, by design.** Gemini models matching `/pro/i` are refused (`vision.ts:64`). OpenRouter must be `openrouter/free` or end in `:free` (`ai/http.ts:21-23`, `vision.ts:91`).
-- **Request settings.** Temperature 0.2. JSON response MIME type. 1,200 output tokens for scans and 2,500 for questions (`vision.ts:69,195`).
-- **Prompts.** There is one system prompt per language (`prompts.ts:16-135`), covering truthfulness, position, people (no identification), confidence, motion and hazards, plus a strict JSON schema. There are separate rules for scan mode and question mode (`prompts.ts:140-153`). A user-text builder adds the camera direction, the age of the second frame, the last 4 spoken sentences and the last 3 Q&A pairs (`prompts.ts:154-175`).
-- **Sanitizing** (`schema.ts:179-247`):
-  - It clamps enums, lengths and list sizes.
-  - It drops motion when there was no second frame.
-  - It swaps sides for a webcam that faces the user.
-  - It drops a "person, near" hazard when mirrored.
-  - It removes sentences that promise safety or give distances.
-  - It adds caveats.
-  - For questions, it never returns an empty answer.
-- I could not confirm that the configured model names exist. That depends on Google's catalogue, and I made no network calls.
+### 4.2 Vision and questions (Gemini)
 
-### 2.5 Speech recognition (`voiceInput.ts`)
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| B01 | **Describe surroundings** (button, D, «وصفلي البلاصة») | `controller.runTask("describe")`, `prompts.ts` | ND | Ends with a "can't guarantee obstacles" caveat at most every 5 min. |
+| B02 | **Identify object or product** (button, I, «شنوة هاذي؟») | `runTask("identify")` | ND | Doses are dropped from the answer (C04). |
+| B03 | **What's in front of me** (voice only, «شنوة قدّامي؟») | `runTask("front")` | ND | No button. Path questions always get a caveat. |
+| B04 | **Questions with the camera on** (push-to-talk or hands-free) | `controller.ask`, `/api/vision` `mode: "question"` | ND | A fresh 1280 px frame, plus an older small frame for motion. |
+| B05 | **Questions with the camera off** ("chat", no image); a question about the surroundings comes back as `[CAMERA]` and the camera is asked for | `/api/vision` `mode: "chat"`, `prompts.ts` | ND | |
+| B06 | **Follow-up memory**: last 3 question/answer pairs, last 4 spoken sentences | `controller.ts`, `prompts.ts` | TS | Kept in memory only. |
+| B07 | **Answer in the question's language** (Derja words or Arabizi give Derja; Standard Arabic, French, English) | `lang.ts` (`questionLang`) | TS | The voice changes for that answer only. |
+| B08 | **Streamed answers** (server-sent events; a sentence is sent early only if the final checks keep it unchanged) | `/api/vision` (`streamAnswer`), `schema.ts` (`SentenceStreamer`) | TS | Path questions are never streamed. |
+| B09 | **Web search grounding** for live facts | `ai/vision.ts` (`canSearch`, `GEMINI_SEARCH_API_KEY`), `guard.ts` (`allowSearch`) | EX | Needs a billed Gemini key, since it isn't in the free tier, and has its own daily budget. Without it, questions are answered without search. No real search run is recorded. |
+| B10 | **Automatic descriptions** (off by default; Settings toggle or «شعّل الوصف التلقائي») | `settings.ts` (`autoDescribe`), `controller.tick` | ND | When off, stairs and drops are not detected (E03), and the camera-start notice says so. |
+| B11 | **Change-driven frame scheduler**: at most every 4 s, on >8 % change or a new detection, heartbeat 20→80 s, back-off after failures | `scheduler.ts` | TS | Speech never holds a scan back. |
+| B12 | **Image-quality gate** (dark, overexposed, flat, blurred) with spoken notices | `frameAnalysis.ts`, `controller.ts` | ND | Thresholds have not been checked on real phone frames. |
+| B13 | **Left/right correction**: camera direction setting, sides swapped on the server for a webcam facing the user | `settings.ts` (`facing`), `schema.ts`, `prompts.ts` | ND | In one live test the model still answered about the wrong side (README). |
+| B14 | **Switch camera** (Settings, only with more than one camera and the camera on) | `controller.switchCamera` | ND | |
+| B15 | **Camera lost** (track ended) is spoken as urgent | `controller.ts` (`cameraLost`) | ND | |
+| B16 | **Provider chain**: Gemini models in order, then OpenRouter (free models only); cooldowns; total time budget | `ai/vision.ts`, `ai/http.ts` | TS | Paid models are refused by design. OpenRouter never reads documents or transcribes. |
+| B17 | **Motion from a second frame** (no motion claim without one) | `controller.ts`, `schema.ts` | EX | Model ability unmeasured. |
 
-- **`RecognitionInput`** uses the browser's `SpeechRecognition` with the chosen language's tag: `ar-TN`, `ar-SA`, `fr-FR` or `en-US` (`lang.ts:25-30`). It runs one utterance per session, with no interim results (`voiceInput.ts:84-88`). In Chrome this audio goes to Google's online service.
-- **`RecorderInput`** records with `MediaRecorder` and a simple voice-activity detector that follows the noise floor (`voiceInput.ts:188-221`):
-  - gives up after 8 s with no speech
-  - ends after 1.2 s of silence
-  - stops at 12 s at most
-  - ignores speech shorter than 350 ms
-  - converts to a 16 kHz mono WAV and posts it to `/api/vision/transcribe`
-  - Gemini first decides whether anyone is speaking, so silence doesn't become an invented "question" (`prompts.ts:177-197`, `schema.ts:27-30`).
-- **Automatic fallback.** If recognition reports a service error, or ends instantly twice in a row, the app switches to recording for the rest of the session (`voiceInput.ts:64-65,107-109`, `controller.ts:1003-1020`).
+### 4.3 Medicine and document reader
 
-### 2.6 Text-to-speech (`src/lib/speech/tts.ts`, `edgeTts.ts`, `speechQueue.ts`)
+The rule above all others: an unverified dose or date is never stated as fact.
 
-- **`HybridTts`** (`tts.ts:427-499`) uses the best installed browser voice for the language (`pickVoice`, `tts.ts:147-158`). When there is none, or it fails, it uses `CloudTts`, which posts each sentence to `/api/tts` and plays the MP3 through WebAudio.
-- **The server** (`edgeTts.ts:236`) speaks Microsoft Edge's "Read aloud" WebSocket protocol, with a built-in client token and a computed `Sec-MS-GEC` token (`edgeDrm.ts:8,176`). Voices are fixed per language: `ar-TN-ReemNeural` (or `EDGE_TTS_VOICE`, female voices only), `ar-SA-ZariyahNeural`, `fr-FR-DeniseNeural` and `en-US-JennyNeural` (`lang.ts:33-37`). The client picks a language, never a voice name.
-- **`SpeechQueue`** (`speechQueue.ts`) has four priorities: urgent, answer, status and narration. It handles pre-emption, resuming, a time-to-live per priority, de-duplication, a "hold" while the user talks, and a watchdog for engines that never report the end of a sentence (`speechQueue.ts:167`). Long text is split into chunks of 400 characters or less (`speechQueue.ts:34-50`).
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| C01 | **Read a document or medicine box**: two frames 0.4 s apart, two readings by two different models at temperature 0, and a pixel check (no AI) that each line is whole in both frames | `controller.readDocument`, `ai/vision.ts` (reading, `withLocatedBoxes`), `document.ts` (`sanitizeDocument`), `lineCheck.ts` | EX | Tested only with **rendered** documents. Real boxes, bottles, blister packs, crumpled paper and handwriting are untested. The full-resolution still photo path is untested on a phone. |
+| C02 | **Medical safety rules**: a line is read only if both readings agree word for word and the pixel check passes; strengths need their unit; numbered lines held back when the model reports glare, blur or handwriting; "check it with the pharmacist" after every name, dose and date; expiry judged in code and said conditionally | `document.ts` | TS | 52 unit tests in `tests/document.test.ts`. |
+| C03 | **No medical advice anywhere**: advice is removed; "can I take…?" gets "only your doctor or pharmacist"; a sentence with a dose is dropped from scans, questions, chat, streamed sentences and live answers (`mentionsDose`) | `document.ts`, `schema.ts`, `controller.ts` | TS | |
+| C04 | **Read all** («اقرا الكل», "read all") from the 5-minute page memory, with the same checks | `controller.readAll` | TS | |
+| C05 | **Questions about the document** (quote from the checked text, then the check) | `document.ts`, `controller.ts` | ND | |
+| C06 | **On-device check before sending** (too dark, no sharp tile) with how to retake | `frameAnalysis.ts`, `controller.ts` | ND | The blur limit (`READ_BLUR_LIMIT = 20`) is calibrated on rendered pages only. |
+| C07 | **Spoken notice before the first reading** (two pictures to Google, no real prescriptions); «موافق» accepts | `settings.ts` (`READ_CONSENT_KEY`), `controller.ts` | TS | |
+| C08 | **Paper's text in its own language's voice** (a French box in the French voice) | `controller.ts`, `speechQueue.ts` | ND | |
+| C09 | **Derja rendering of instructions** (fixed glossary) | `document.ts` (`derjaInstruction`) | NA | Switched off (`DERJA_GLOSSARY_APPROVED = false`) until a pharmacist approves it. |
+| C10 | **Test capture for real-camera sessions** (`READ_CAPTURE_DIR`) | server, `e2e/read/realcam.ts` | NA | Developer tool only: off unless set, refused on Vercel, synthetic documents only. The real-camera session it was built for has not been run. |
 
-### 2.7 Local processing
+**Known reader weaknesses:**
+- One model's line boxes caused most withheld lines in earlier runs (`docs/PHASE1_ROUND4_REPORT.md`). The end-to-end effect of the prompt fix is not measured.
+- The model's wording of explanations for bills and letters is not checked.
+- Month names in expiry dates are read but not judged.
+- If the second reading fails, nothing medical is read.
 
-These run entirely on the device:
-- MediaPipe detection on the main thread with the CPU delegate (`localDetector.ts:13-19`), throttled to at most 20 % duty cycle and one run per 250 ms (`controller.ts:138,689`)
-- the hazard tracker
-- urgency and the warning gate
-- frame quality and change detection
-- command parsing
-- earcons and vibration
-- settings storage
+### 4.4 Live conversation (Gemini Live)
 
-The WASM runtime and the `.tflite` model are copied into `public/mediapipe` on `npm install` (`scripts/copy-mediapipe.mjs`) and served by the app with a 7-day cache (`next.config.ts:18`).
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| D01 | **Talk live**: microphone and up to 1 frame/s to Gemini Live; interruptible; female voice | `src/lib/live/session.ts`, `audioIO.ts`, `config.ts`, `controller.toggleLive` | ND | The button is on the **main screen**: next to Open camera at rest, beside Stop assistance while assisting (or the L key). Its words follow the language selector. Median 1.07 s from end of speech to answer, measured on the developer's connection (README). |
+| D02 | **Own spoken consent**; "sending to Google now" at the start, every 5 min, and "nothing more is sent" at the end | `controller.ts`, `settings.ts` (`LIVE_CONSENT_KEY`) | TS | |
+| D03 | **Stop by voice** on partial transcripts («وقّف المحادثة», "stop live", "stop sending") | `controller.ts` | ND | The words themselves reach Google: the transcript comes from Gemini Live. |
+| D04 | **Female voices only** (`Sulafat` by default; a male voice in the environment is ignored) | `live/config.ts` | TS | The Derja accent was checked by another AI model and a pitch measurement, not by Tunisian listeners. |
+| D05 | **Answers checked after the fact**: a safety promise or a dose cuts the answer and the caveat is said | `controller.ts` (`isSafetyClaim`, `mentionsDose`) | EX | The first words may already have been heard. |
+| D06 | **Hazard scans continue during live**, every 8 s or more, for their warnings only; on-device warnings cut the answer | `controller.ts` (`LIVE_HAZARD_SCAN_MS`) | ND | Stairs and drops arrive later than outside live. |
+| D07 | **«نجدة» during live** opens the Emergency page instead of being answered | `controller.ts` | TS | |
+| D08 | **Reconnect and model fallback** (resumption handle, up to 3 s of audio buffered) | `live/session.ts` | ND | |
+| D09 | **One-use locked token** (model, voice and instructions locked; the API key never reaches the browser) | `server/liveToken.ts`, `/api/live/token` | TS | |
 
-### 2.8 Backend and API routes
+### 4.5 Safety layer
 
-| Route | Method | Purpose | Guards |
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| E01 | **On-device detection**: 14 classes (person, car, motorcycle, bicycle, bus, truck, train, chair, bench, couch, dining table, potted plant, suitcase, fire hydrant) | `localDetector.ts`, `hazardTracker.ts`, model in `public/mediapipe/` | ND | Runs offline and sends nothing. It doesn't know stairs, kerbs, holes or poles. |
+| E02 | **Tracker**: 3 sightings before anything is reported; "approaching" from size growth over at least 1 s with a still camera | `hazardTracker.ts` | EX | A heuristic, never measured against real approaches. |
+| E03 | **Cloud hazards**: stairs, drops, vehicles, obstacles, people | `prompts.ts`, `schema.ts` | EX | The only source for stairs and drops. Only runs with automatic descriptions on, or during live every 8 s or more. About 2–3 s when the service is healthy. No accuracy benchmark exists. |
+| E04 | **Urgency computed in code**; uncertain is never urgent | `hazards.ts` (`hazardUrgency`) | TS | A person is never "urgent", even near, approaching and straight ahead. That rule needs review by mobility trainers. |
+| E05 | **Templated warnings** worded by confidence | `phrases.ts` (`warningPhrase`) | TS | |
+| E06 | **Warning gate**: repeats at most every 15 s (urgent), 45 s (caution) or 60 s (info), and lets an escalation through at once | `hazards.ts` (`WarningGate`) | TS | |
+| E07 | **Safety-language filter**: no safety promises, no distances, no motion without a second frame | `schema.ts` (`guardSpoken`, `sanitizeAnalysis`) | TS | The patterns cover 4 languages, without native-speaker review. |
+| E08 | **Caveats**: path questions; "no guarantee about stairs, holes or obstacles" at camera start; walking reminder at most every 3 min when nothing is scanning | `schema.ts`, `controller.ts` | TS | |
+| E09 | **Urgent alert feedback**: urgent tones, strong vibration, red edge and caption, `role="alert"` | `controller.ts`, `earcons.ts`, `Assistant.tsx` | ND | Chromium shows the urgent display. Vibration and audio on phones are untested. |
+| E10 | **Failure announcements**: service down, not configured, quota exhausted, rate limited, detector failed (load, 20 s timeout, crash), offline | `controller.ts`, `phrases.ts` | TS | |
+| E11 | **Pause never turns the safety layer off**: the on-device detector keeps warning, and the pause notice says whether it is running | `controller.pause` | TS | Chromium checks this through the new Pause button. |
+| E12 | **Stale results and stopped sessions are discarded** (results older than 12 s, session counter) | `controller.ts` | TS | |
+
+### 4.6 Voice input
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| F01 | **Hands-free voice commands** (on by itself with Open camera; toggle in Settings or V) | `controller.ts` (`assistantLoop`), `voiceInput.ts` | ND | Any nearby speech becomes a question, which uses quota. Speech recognition has only been tried with synthetic speech. |
+| F02 | **Command parser**: 24 commands plus 4 language switches, each in 4 languages; accents and vowel marks ignored | `commands.ts` | TS | All 80 spoken examples parse to their command (checked 2026-11-15). |
+| F03 | **Ask (push-to-talk)**: button, Q, or with voice commands on, simply speak | `controller.askByVoice` | ND | Phase 1 fixed Ask cutting off speech in hands-free mode. |
+| F04 | **Recording fallback**: on-device voice detector, 16 kHz WAV, Gemini transcription that first checks someone is speaking | `voiceInput.ts` (`RecorderInput`), `/api/vision/transcribe` | EX | |
+| F05 | **Dead speech service detection** (switches to recording) | `voiceInput.ts`, `controller.ts` | EX | |
+| F06 | **Turn-taking**: the assistant holds speech while the user talks or after Ask; only urgent warnings play | `speechQueue.ts` (`setHold`) | ND | |
+
+### 4.7 Speech output and feedback
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| G01 | **Priority speech queue**: urgent > warning > answer > status > narration; resume after interruption; stale items dropped | `speechQueue.ts` | TS | |
+| G02 | **Browser voice first** (best installed voice for the language) | `speech/tts.ts` (`HybridTts`, `pickVoice`) | ND | On most phones Derja is read by a non-Tunisian Arabic voice. |
+| G03 | **Cloud voice fallback** (Edge neural voices, all female: `ar-TN-ReemNeural`, `ar-SA-ZariyahNeural`, `fr-FR-DeniseNeural`, `en-US-JennyNeural`) | `/api/tts`, `speech/edgeTts.ts`, `edgeDrm.ts` | EX | An unofficial Microsoft endpoint with a built-in token, which may stop working at any time. |
+| G04 | **Repeat, Stop talking, Help, Go back/cancel** | `controller.repeat`, `stopSpeech`, `help`, `goBack` | TS | Voice and keys only (R, Esc, H). The redesign removed their buttons. |
+| G05 | **Speed and volume** (Settings, and "louder", "quieter", "faster", "slower") | `settings.ts`, `commands.ts` | TS | |
+| G06 | **Earcons** (6: on, off, listen, urgent, error, alive) and **haptics** (5 patterns), with a vibration toggle | `earcons.ts`, `controller.ts` (`HAPTICS`) | ND | Audio needs a first tap to unlock. |
+| G07 | **"Still running" tone** after 45 s of silence | `controller.ts` (`ALIVE_AFTER_SILENCE_MS`) | TS | |
+| G08 | **Screen-reader echo** (two alternating live regions per kind, so the same sentence is read twice when repeated) and automatic echo when the page's voice fails | `announcer.ts`, `Assistant.tsx` (`useAnnouncer`) | ND | Off by default. Overlap between the page voice and TalkBack is untested. |
+| G09 | **"/" spoken correctly** in dates, fractions and units («03/2027», «1/2 comprimé») | `speech/tts.ts` (`speechText`) | TS | |
+
+### 4.8 Languages
+
+| Area | English | Derja | Standard Arabic | French |
+|---|---|---|---|---|
+| Spoken phrases (140 keys) | ✓ | ✓ | ✓ | ✓ |
+| Main-screen text (39 keys, including the 5 actions) | ✓ | ✓ | ✓ | ✓ |
+| Settings, Privacy & safety, Emergency, consent dialog | ✓ | English | English | English |
+| Model prompts (scan, question, read, live) | ✓ | ✓ | ✓ | ✓ |
+| Voice commands (examples parse) | 20/20 | 20/20 | 20/20 | 20/20 |
+| Speech recognition tag | `en-US` | `ar-TN` | `ar-SA` | `fr-FR` |
+| Safety and distance patterns | ✓ | ✓ | ✓ | ✓ |
+| Nadhra refusal sentences | ✓ | ✓ (approved wording) | ✓ | ✓ |
+| Native-speaker review | n/a | **never** | **never** | **never** |
+
+- **Default:** Tunisian Derja (`DEFAULT_VISION_SETTINGS.language = "tn"`). It was English from commit `375db18` (2026-11-14) until 2026-11-15. The default applies only when no valid language is saved: a saved choice is always kept, and any user who changed any setting has their language saved. A first visit is first drawn in the default language and switches to a saved one when the page loads its settings.
+- **Switching:** the selector, Settings, or a voice command ("Speak French", «احكي بالتونسي»). Commands are understood in all four languages whatever the setting.
+- **Phrase parity:** the 140 phrase keys and 39 screen-text keys match in all four languages. This was checked by script on 2026-11-15, and the TypeScript types enforce it.
+
+### 4.9 Emergency
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| I01 | **Emergency page** (voice «نجدة», "emergency"; or Settings, "Open the Emergency page") | `controller.openSheet("emergency")`, `Assistant.tsx` | ND | **No button on the main screen** since the redesign. A screen-reader user without voice must go through Settings. |
+| I02 | **Call the contact** (`tel:`); saying "call" focuses the call button, ready for one double-tap | `controller.requestCall` | ND | Programmatic focus may not move TalkBack's focus. Untested. |
+| I03 | **Text my location** (`sms:` with a map link; one location fix, kept on the device) | `controller.emergencyMessage` | ND | Nothing is sent without the user's tap in their own app. |
+| I04 | **Tunisian numbers** SAMU 190, police 197, civil protection 198 | `Assistant.tsx` (`EMERGENCY_NUMBERS`) | ND | English labels. |
+| I05 | **Location status spoken** | `phrases.ts` (`locating`, `noLocation`) | NA | The phrases exist in all four languages but are never used. The status is shown as text in a `role="status"` paragraph only. |
+
+### 4.10 Settings and storage
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| J01 | **Settings panel**: voice commands, live-conversation details (status, latency), speed, volume, text size, camera direction, colours, automatic descriptions, vibration, screen-reader echo, switch camera, emergency contact | `Assistant.tsx` | TS | English only. There is no list of voice commands in it: the spoken Help gives that list. |
+| J02 | **Persistence and validation** (localStorage; every field clamped on load; phone number limited to digits, spaces and a leading +) | `settings.ts` (`sanitizeVisionSettings`, `cleanPhone`) | TS | The emergency contact is stored in plain text on the device. |
+
+### 4.11 Connectivity, power, platform
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| K01 | **Offline while open**: spoken; frames stop; only on-device warnings; recognition loop sleeps | `controller.ts` | TS | The voice then works only with an installed device voice. |
+| K02 | **Open offline** (service worker, cached detector) | — | NA | Not built. |
+| K03 | **Hidden page**: camera and microphone released, speech stopped; on return "the camera was off while you were away" and the camera restarts | `controller.ts` (`visibilitychange`) | ND | Unit and mocked Chromium tests only. |
+| K04 | **Screen wake lock** | `controller.ts` (`requestWakeLock`) | ND | |
+| K05 | **Detector CPU budget** (duty cycle and minimum interval) | `camera/frameBudget.ts` | TS | No battery or heat measurement exists. |
+
+### 4.12 Backend, protection and cost control
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| L01 | **Vision API** with validation (JPEG magic bytes, sizes, question length) | `src/app/api/vision/route.ts` | TS | |
+| L02 | **Transcription API** (WAV only) | `src/app/api/vision/transcribe/route.ts` | TS | |
+| L03 | **Request guard**: Origin required on POST, signed session cookie, per-minute limits per session and address, daily budgets per session and global | `server/guard.ts`, `session.ts`, `http.ts`, `/api/session` | TS | Not authentication: a script can still get a cookie. The global daily budget caps the cost. |
+| L04 | **Shared counters across instances** (Upstash Redis) | `server/usageStore.ts` | ND | Optional. Without it, limits are per instance. Tested against a mocked Upstash endpoint (`tests/apiProtection.test.ts`), never a real store. |
+| L05 | **Monitoring**: fixed event names and short codes only; `/api/report` from the page; `/api/health` (counters only with `HEALTH_TOKEN`) | `server/monitor.ts`, `src/app/api/report/route.ts`, `src/app/api/health/route.ts` | TS | |
+| L06 | **Security headers**: CSP, HSTS, nosniff, Referrer-Policy, X-Frame-Options, Permissions-Policy | `next.config.ts` | TS | |
+| L07 | **AI mode routing**: `AI_MODE` is `cloud` (default), `hybrid` or `offline`; a refusal is spoken, never hidden | `ai/router.ts`, `server/deviceCapabilities.ts` | TS | Hybrid and offline are only meaningful once a local engine exists. |
+
+### 4.13 Nadhra AI (own engines)
+
+| ID | Feature | Where | Status | Notes |
+|---|---|---|---|---|
+| M01 | **Provider choice and server refusal**: `provider: "nadhra"` is refused with 503 `nadhra-unavailable` on vision, transcription and live token, before any budget or network call | `ai/router.ts` (`requestedFamily`, `NADHRA_TASKS`), the three routes | TS | `NADHRA_TASKS` is empty: Nadhra declares no task. |
+| M02 | **Local-only page with Nadhra chosen**: `apiFetch` refuses to send (`LocalOnlyError`), in-flight requests are aborted on the switch, only on-device voices are used, browser speech recognition is never chosen | `assistant/api.ts`, `controller.ts`, `speech/tts.ts` (`setLocalOnly`) | TS | Chromium: 75/75 with all outgoing server connections blocked and logged. |
+| M03 | **Engine manifests and launcher** (permissive licences only, SHA-256-checked model files, RAM check, idle shutdown) | `src/lib/server/engines/manifest.ts`, `launcher.ts`, `engines/manifests/` | NA | Plumbing only: the manifests folder is empty and no route uses the launcher. Tested with a fake engine (`tests/engines.test.ts`). |
+| M04 | **Offline OCR** | `bench/ocr/`, `bench/engines-step0/` | NA | **Benchmarks only, not an engine in the app.** PaddleOCR v5 and Tesseract were measured on 31 rendered mock documents (`bench/out/ocr-summary.md`) and as local servers (`docs/NADHRA_STEP0_REPORT.md`). Nothing reads text offline today. |
+| M05 | **Offline speech recognition, voice and language model** | — | NA | Not built. A female Standard Arabic voice (Nabra-82M) was benchmarked and rejected for now (`docs/NABRA_BENCH_REPORT.md`). No free female Tunisian offline voice was found. |
+| M06 | **Switching provider by voice** | — | NA | Not built by decision until local speech recognition exists. |
+
+What works with Nadhra chosen today: the camera, on-device warnings, the speech queue with installed device voices, earcons, settings and the Emergency page. Everything else is refused out loud.
+
+### 4.14 Not built, removed or planned
+
+| ID | Feature | Status | Notes |
 |---|---|---|---|
-| `/api/vision` | GET | Status: available, provider labels, `canTranscribe` (`route.ts:34-36`) | none |
-| `/api/vision` | POST | One frame (+ optional older frame) → sanitized `SceneAnalysis` | same-origin, 3 MB body, base64 JPEG magic bytes, 300-char question, 40 req/min/IP, 503 `not-configured` (`src/app/api/vision/route.ts:13-83`) |
-| `/api/vision/transcribe` | POST | WAV → text | same-origin, 700 KB, `RIFF` header, 20 req/min/IP (`transcribe/route.ts:11-30`) |
-| `/api/tts` | GET/POST | Voice status / one sentence → MP3 | same-origin, 4 KB body, 500 chars, 30 req/min/IP, upstream cooldown after 3 failures, one retry on refused handshake (`edgeTts.ts:236-293`) |
-
-The logs hold provider ids and HTTP status only, never content (`route.ts:86-90`, `edgeTts.ts` "never logs the sentence").
-
-### 2.9 Permissions and security
-
-- **Headers** (`next.config.ts:3-11`): `nosniff`, `Referrer-Policy`, `X-Frame-Options: DENY`, and `Permissions-Policy: camera=(self), microphone=(self), geolocation=(self)`.
-- **Keys** are only read on the server (`vision.ts:49,53`). The `server-only` import guards keep server modules out of the browser bundle.
-- **The same-origin check allows requests with no `Origin` header** (`server/http.ts:41-50`), so scripts such as curl can use the API, limited only by an in-memory, per-instance rate limit. There is no authentication.
-
-### 2.10 Performance and battery
-
-- Measures in place: the frame budget, change-driven sending, a heartbeat that slows to 80 s, no sending offline, while paused or while hidden, and a recognition loop that sleeps when offline (`controller.ts:922-925`).
-- Running costs that remain: a thumbnail `getImageData` every 500 ms, a 384 px JPEG encode every 1 s even when nothing is sent (`controller.ts:511-515`), MediaPipe up to 4 times a second, the screen wake lock, and a recognition session restarting every few seconds in hands-free mode.
-- No battery measurement exists in the repo. Only a checklist line asks for one (`ANDROID_TESTING.md` §9).
-
-### 2.11 Android compatibility
-
-- It targets Chrome on Android over HTTPS, or `localhost` through `adb reverse` (README "Supervised Android test build").
-- Covered for Android: `playsInline`, the back camera through `facingMode: environment`, `navigator.vibrate`, the Wake Lock API, `tel:` and `sms:` links, and voices that load asynchronously (`tts.ts:76-80`).
-- iOS-specific handling also exists: the WebAudio unlock with a silent buffer (`tts.ts:289-300`).
-- It is not a PWA and not a native app: there is no manifest, no service worker and no install prompt.
-
-### 2.12 Deployment
-
-- It is designed for Vercel, either through `npx vercel deploy` previews behind Vercel Authentication or a normal project. It needs the Node runtime, because the Edge TTS route uses Node ≥ 22's global WebSocket with custom headers (`edgeTts.ts:106-112`).
-- `maxDuration` is 30 s for vision and TTS, and 20 s for transcription.
-- Rate limits and cooldowns are in memory, so each serverless instance has its own.
+| N01 | Typed questions | NA | Removed in the redesign (`92d5e16`, 2026-11-12). |
+| N02 | Quick-question buttons | NA | Removed in the redesign. |
+| N03 | "What it sees now" findings panel and status list | NA | Removed in the redesign. The state is still exposed as `data-*` attributes for tests. |
+| N04 | Smart-glasses camera source | NA | §7.5 |
+| N05 | Currency, barcode and colour recognition, find-object mode | NA | Ideas only. |
 
 ---
 
-## 3. Complete feature inventory
+## 5. Classification
 
-Status legend: **FI** fully implemented · **RD** implemented, needs real-device testing · **PI** partially implemented · **EX** experimental · **PL** planned, not implemented · **BR** broken or deprecated.
-The languages column refers to the spoken output. "4" means Derja, MSA, French and English. Every visible label is English.
-
-| ID | Feature | Runs | Internet | Lang | Status |
-|---|---|---|---|---|---|
-| **Main screen** |||||
-| F01 | Start / stop assistance (camera) | Local | No (yes for descriptions) | 4 | RD |
-| F02 | Consent gate (dialog + spoken + "I agree" by voice) | Local | No | 4 | FI |
-| F03 | Privacy panel | Local | Status fetch | EN | FI |
-| F04 | "Last said" caption and "I heard" transcript | Local | No | 4 | FI |
-| F05 | State emblem (Iris) and status list | Local | No | EN | FI |
-| F06 | Experimental-version disclaimer (screen + spoken once) | Local | No | 4 | FI |
-| F07 | "What it sees now" findings panel | Local | No | 4 + EN | FI |
-| **Vision and AI** |||||
-| F08 | Automatic surroundings narration | Cloud AI | Yes | 4 | RD |
-| F09 | Describe surroundings | Cloud AI | Yes | 4 | RD |
-| F10 | Read text (OCR) | Cloud AI | Yes | 4 + any script read | RD |
-| F11 | Identify object / product | Cloud AI | Yes | 4 | RD |
-| F12 | "What's in front of me" | Cloud AI | Yes | 4 | RD |
-| F13 | Typed questions | Cloud AI | Yes | Any in, 4 out | FI |
-| F14 | Quick-question buttons (6) | Cloud AI | Yes | 4 | FI |
-| F15 | Follow-up memory (last 3 Q&A) | Cloud AI | Yes | 4 | FI |
-| F16 | Actions start the camera first | Local | No | 4 | FI |
-| F17 | Image-quality gate and spoken notices | Local | No | 4 | RD |
-| F18 | Change-driven frame scheduler | Local | n/a | n/a | FI |
-| F19 | Motion evidence from a second frame (cloud) | Cloud AI | Yes | n/a | EX |
-| F20 | Left/right correction and camera-direction setting | Local + server | No | 4 | RD |
-| F21 | Switch camera | Local | No | n/a | RD |
-| F22 | Camera-lost detection | Local | No | 4 | RD |
-| **Safety** |||||
-| F23 | On-device detection (14 object classes) | Local AI | No | 4 | RD |
-| F24 | On-device tracker: persistence and "approaching" | Local | No | 4 | EX |
-| F25 | Cloud hazards: stairs, drops, vehicles, obstacles, people | Cloud AI | Yes | 4 | EX |
-| F26 | Urgency computed in code | Local | No | n/a | FI |
-| F27 | Templated warnings worded by confidence | Local | No | 4 | FI |
-| F28 | Warning de-duplication and escalation gate | Local | No | n/a | FI |
-| F29 | Safety-language filter (no promises, no distances) | Server | n/a | 4 | FI |
-| F30 | "Doesn't mean it's safe" and path-question caveats | Server | n/a | 4 | FI |
-| F31 | Urgent alert feedback (tone, vibration, red display, `role=alert`) | Local | No | 4 | RD |
-| F32 | Service-down / not-configured / rate-limit announcements | Local | n/a | 4 | FI |
-| F33 | Stale-result discard and session guard | Local | n/a | n/a | FI |
-| **Voice input** |||||
-| F34 | Hands-free voice commands mode | Browser service | Yes | 4 | RD |
-| F35 | Ask by voice (push-to-talk) | Browser service | Yes | 4 | RD |
-| F36 | Voice-command parser (21 commands × 4 languages) | Local | No | 4 | FI |
-| F37 | Recording fallback + Gemini transcription | Cloud AI | Yes | 4 | EX |
-| F38 | Dead-speech-service detection and auto-switch | Local | n/a | n/a | EX |
-| F39 | Turn-taking (hold speech while the user talks) | Local | n/a | n/a | RD |
-| **Speech output and feedback** |||||
-| F40 | Priority speech queue | Local | No | 4 | FI |
-| F41 | Hybrid TTS (browser voice → cloud voice) | Local / cloud | Partly | 4 | RD |
-| F42 | Edge neural voice proxy (`/api/tts`) | Cloud (unofficial) | Yes | 4 | EX |
-| F43 | Repeat, Stop talking, Help, Go back / cancel | Local | No | 4 | FI |
-| F44 | Earcons (6 tones) | Local | No | n/a | RD |
-| F45 | Haptics (5 vibration patterns) | Local | No | n/a | RD |
-| F46 | "Still running" tone after 45 s of silence | Local | No | n/a | FI |
-| F47 | Screen-reader echo and automatic fallback when the voice fails | Local | No | 4 | RD |
-| **Languages** |||||
-| F48 | Four speech languages | Mixed | n/a | 4 | RD |
-| F49 | Switch language by voice or in Settings | Local | No | 4 | FI |
-| **Emergency** |||||
-| F50 | Emergency page (button or voice, spoken summary, focus on the action) | Local | No | 4 | RD |
-| F51 | Call the emergency contact (`tel:`; voice selects the button) | Phone app | Phone network | 4 | RD |
-| F52 | Text my location (`sms:` + Google Maps link, one GPS fix) | Local + GPS | No (SMS) | 4 | RD |
-| F53 | Tunisian emergency numbers 190 / 197 / 198 | Phone app | Phone network | EN labels | RD |
-| **Settings** |||||
-| F54 | Speech speed and volume (menus + "louder/faster" by voice) | Local | No | 4 | FI |
-| F55 | Text size and light/dark theme | Local | No | EN | FI |
-| F56 | Narration and vibration toggles | Local | No | EN | FI |
-| F57 | Emergency contact storage | Local | No | EN | FI |
-| F58 | Settings persistence and validation | Local | No | n/a | FI |
-| F59 | Keyboard shortcuts (physical keys) | Local | No | n/a | FI |
-| **Connectivity, power, platform** |||||
-| F60 | Offline detection and degraded mode | Local | n/a | 4 | PI |
-| F61 | Screen wake lock | Local | No | n/a | RD |
-| F62 | Hidden-page handling and resource release | Local | No | n/a | PI |
-| F63 | Detector CPU duty-cycle budget | Local | No | n/a | FI |
-| **Backend** |||||
-| F64 | Vision API with input validation | Server | Yes | 4 | FI |
-| F65 | Provider fallback chain, cooldowns, free-only guard | Server | Yes | n/a | FI |
-| F66 | Rate limiting and same-origin check | Server | n/a | n/a | PI |
-| F67 | Security headers and Permissions-Policy | Server | n/a | n/a | FI |
-| F68 | Status endpoint and disclosure of who receives images | Server | Yes | EN | FI |
-| **Not yet built / leftovers** |||||
-| F69 | Smart-glasses camera source | — | — | — | PL |
-| F70 | Spoken location status on the Emergency page (phrases exist, never wired) | — | — | — | BR |
-
-**Features that don't appear on the main screen:** the consent dialog (F02), the voice-command parser (F36) and every voice-only command (louder, quieter, faster, slower, speak X, call, back, yes), the recording fallback (F37/F38), the on-device tracker (F24), the code safety filter (F29/F30), the "still running" tone (F46), the wake lock (F61), hidden-page pausing (F62), the frame scheduler (F18), the provider chain (F65), and the switch-camera button. That last one only appears in Settings while the camera is on and the device has more than one camera (`Assistant.tsx:508-510`).
-
----
-
-## 4. Feature-by-feature details
-
-Each entry gives: what it does · how it's activated · how it works · AI or local / internet · languages · status · known limits. "4 langs" = Derja, MSA, French, English.
-
-### Main screen
-
-#### F01 · Start / stop assistance
-- **What:** turns the camera on and starts watching. Turning it off releases the camera.
-- **Activate:** the "Start assistance" / "Stop camera" button, which has focus when the page opens (`Assistant.tsx:178,314-324`), the `C` key, or voice («شعّل الكاميرا», "Open camera", «سكّر الكاميرا»).
-- **How:** `startCamera` checks consent, opens the camera, then starts the 500 ms tick, the detector and the wake lock, and speaks "camera on" with a tone and a vibration (`controller.ts:317-365`). `releaseCamera` stops the tracks, timers and requests (`controller.ts:391-409`).
-- **AI/Internet:** local. Descriptions need the internet.
-- **Langs:** 4 spoken; on-screen error text in English (`Assistant.tsx:69-77`).
-- **Status:** RD. Android camera release and the system's green indicator are untested.
-- **Limits:** the camera isn't released when the page is only hidden (see F62). Starting by voice relies on hands-free mode already running, which works without the camera.
-
-#### F02 · Consent gate
-- **What:** before the first camera start, a modal says images go to an external AI service and names it. The same notice is spoken.
-- **Activate:** automatic on the first start. Answer with "I agree" / "I don't agree", Esc (= decline, `Assistant.tsx:592`), or by saying «موافق», "I agree" (`commands.ts:80-85`, `controller.ts:1071-1075`).
-- **How:** a flag in `localStorage` (`assistant.consent.v1`, `settings.ts:66,82-95`). The provider names come from `GET /api/vision`.
-- **AI/Internet:** local.
-- **Langs:** dialog in English, spoken in 4 langs.
-- **Status:** FI (covered by the `consentAndPrivacy` e2e scenario).
-- **Limits:** **consent can't be withdrawn in the UI.** `setConsent(false)` is never called (`grep` finds only `setConsent(true)` at `controller.ts:369`). Consent is stored for good. It is also not tied to a provider: if the provider list changes, nobody is asked again.
-
-#### F03 · Privacy panel
-- **What:** the same seven privacy statements, available at any time (`Assistant.tsx:549-551,689-705`).
-- **Activate:** the "Privacy" button in the header.
-- **Status:** FI.
-- **Limits:** English only. On mobile the button's visible label is hidden; it is still in the accessible name through `sr-only` (`Assistant.tsx:274`).
-
-#### F04 · "Last said" caption and "I heard"
-- **What:** shows the last spoken sentence in large type, with the right `lang` and `dir`. An urgent warning stays on screen for 5 s (`Assistant.tsx:119,143-156,298-307`). "I heard «…»" shows what recognition produced.
-- **Status:** FI.
-- **Limits:** none significant. Testers rely on it for the reports the checklist asks for.
-
-#### F05 · State emblem and status list
-- **What:** an animated iris (idle, watching, thinking, listening, speaking, urgent), hidden from screen readers. A status list shows camera, microphone, analysis, on-device detection, language, internet, voice, and "Service" when the key is missing (`Assistant.tsx:121-128,416-425`).
-- **Status:** FI.
-- **Limits:** status changes aren't announced through a live region. That's acceptable, because the controller speaks state changes.
-
-#### F06 · Experimental disclaimer
-- **What:** an on-screen paragraph (`Assistant.tsx:382-384`). The same notice is spoken once per page load, right after the first description or 20 s after the camera starts (`controller.ts:36,227-230,354,448-452,493`).
-- **Status:** FI.
-- **Limits:** `spokeDisclaimer` is never reset, so it isn't repeated after restarting the camera. That is probably intended.
-
-#### F07 · "What it sees now"
-- **What:** lists the place (with confidence), the on-device detections, the cloud detections and readable text (`Assistant.tsx:455-478`).
-- **Status:** FI.
-- **Limits:** a mix of languages, with labels in the speech language and side and confidence words in English. Not announced; the user has to navigate to it.
-
-### Vision and AI
-
-#### F08 · Automatic surroundings narration
-- **What:** speaks a short description (2 sentences or fewer, about 20 words) when the scene changes.
-- **Activate:** automatic while the camera is on. It can be turned off in Settings ("Describe my surroundings automatically", `Assistant.tsx:505`).
-- **How:**
-  - The scheduler sends a scan, and the model returns `spoken` and `changed` (`prompts.ts:140-144`).
-  - The text is spoken at `narration` priority only if `changed` is true, narration is on, and it's less than 60 % similar to the last 4 sentences (`controller.ts:637-639`, `speechQueue.ts:188-198`).
-  - Turning narration off still sends scans, so cloud hazards keep working.
-- **AI/Internet:** Gemini, internet required.
-- **Langs:** 4.
-- **Status:** RD.
-- **Limits:**
-  - Roughly 2–3 s of latency, plus a minimum interval of 4 s.
-  - Narration is dropped after 15 s in the queue (`speechQueue.ts:68`).
-  - No scan is sent while any speech plays (`scheduler.ts:57`).
-  - The descriptions' quality in real places is unmeasured.
-
-#### F09 / F10 / F11 / F12 · Describe, Read text, Identify, What's in front of me
-- **What:** each sends a fixed question with a 1280 px frame (`phrases.ts` `ask.*`, e.g. `phrases.ts:56-61`).
-  - **Read** asks for the text word for word, in its original language, and to say when part is unreadable (`prompts.ts:148`).
-  - **Identify** asks for the product, the brand, and label text such as expiry date, dosage and warnings, and to suggest turning the object if the label can't be read (`prompts.ts:150`).
-- **Activate:**
-  - buttons (Describe / Read / Identify), keys `D` / `T` / `I`
-  - voice: «وصفلي البلاصة», «اقرالي الكتابة», «شنوة هاذي؟», «شنوة قدّامي؟» and the equivalents in the other languages (`commands.ts:98-122`)
-  - "What's in front of me?" is a quick-question button and a voice command. It has no key.
-- **How:** `runTask` → `ask` (`controller.ts:764-776,696-748`). Speaks "One moment" first, cancels any running scan, and speaks the answer at `answer` priority. Only urgent hazards are spoken during a question (`controller.ts:632,646`).
-- **AI/Internet:** Gemini, internet required. **There is no on-device OCR**, so reading doesn't work offline.
-- **Langs:** the answer is in the speech language. Text read from the scene stays in its original language and script.
-- **Status:** RD.
-- **Limits:**
-  - Long readings are capped at 1,800 characters (`schema.ts:11`) and split into chunks of 400 or fewer.
-  - Large documents get truncated.
-  - There is no guidance to help frame the page (no "move left" or "too close").
-  - Medicine and expiry details come straight from a free-tier model with no independent check, which is a real risk for dosages.
-
-#### F13 · Typed questions
-- **What:** a text field (300 characters) with Send (`Assistant.tsx:430-444`).
-- **Status:** FI. The logic is a thin layer over `ask`.
-- **Limits:** needs the camera on, otherwise it says "camera needed" (`controller.ts:701-705`). Unlike the main actions, it doesn't start the camera itself.
-
-#### F14 · Quick-question buttons
-- **What:** six preset questions (`Assistant.tsx:42-49`). In Derja or MSA mode they send the Derja text; in French or English mode, the English label (`Assistant.tsx:447`).
-- **Status:** FI.
-- **Limits:** the labels are English only.
-
-#### F15 · Follow-up memory
-- **What:** the last 3 question-and-answer pairs go with each question (`controller.ts:733,738`, `route.ts:64-69`), so «إيه، اقراها» ("yes, read it") works.
-- **Status:** FI.
-- **Limits:** cleared on language change. Sent to the provider on every question.
-
-#### F16 · Actions start the camera first
-- **What:** Describe, Read, Identify and "front", used while the camera is off, start it (with consent if needed), wait up to 4 s for a frame, then ask (`controller.ts:764-776,362-364`).
-- **Status:** FI (exercised in the e2e `fullPipeline` scenario).
-- **Limits:** if consent is declined, the pending task is dropped (`controller.ts:376`). That's correct.
-
-#### F17 · Image-quality gate
-- **What:** no frame is sent while the image is dark (mean < 30), overexposed (> 245) or flat (contrast < 7). Blurred frames wait up to 6 s (`frameAnalysis.ts:51-59`, `scheduler.ts:50-54`). After 2 s of a poor image it says "too dark" or "camera may be covered". It says "image clear again" when that recovers (`controller.ts:542-558`).
-- **Status:** RD. The thresholds were tuned on synthetic frames.
-- **Limits:** the "bright" state is spoken with the "obstructed" sentence (`controller.ts:556`), which may confuse someone facing a window.
-
-#### F18 · Change-driven frame scheduler
-- **What:** see §2.3. It balances latency, the free-tier quota (about 15 requests a minute) and battery.
-- **Status:** FI (`tests/visionClient.test.ts`, scheduler tests).
-- **Limits:** ~~scans are skipped while speech plays~~ Fixed 2026-11-10. Scans still don't run while a question is waiting for its answer (up to 27 s). The question's own frame does return urgent hazards.
-
-#### F19 · Motion evidence from a second frame
-- **What:** a smaller frame from 0.7–4 s earlier is sent. The model may only report "approaching" or "moving away" when that frame was present; otherwise the server forces "unknown" (`schema.ts:187`, `vision.ts:175`).
-- **Status:** EX. It depends on the model comparing two images reliably, which isn't measured.
-- **Limits:** costs one extra JPEG encode a second, plus upload bandwidth.
-
-#### F20 · Left/right correction
-- **What:** the setting "Where does the camera point?" offers Automatic, Ahead of me or At me (`Assistant.tsx:496-500`).
-  - Automatic treats a camera that reports `environment` as outward, and anything else as a mirror (`controller.ts:424-429`).
-  - In mirror mode, the server swaps sides in the data, in the question going in and in the answer coming out, and leaves quoted scene text alone (`vision.ts:178`, `schema.ts:127-152,181-186`).
-  - The on-device tracker mirrors too (`hazardTracker.ts:75-80`).
-- **Status:** RD. Android phones may not report `facingMode`, and "unknown" falls back to mirror mode, which is **wrong for a phone's back camera**.
-- **Limits:** swapping side words in Arabic uses plain substring replacement of يمين/يسار/شمال (`schema.ts:142`), which could hit compound words. In mirror mode, all on-device obstacles and near people are dropped (`hazardTracker.ts:151-154`).
-
-#### F21 · Switch camera
-- **What:** switches between the front and back camera (`cameraSource.ts:121-128`, `controller.ts:411-422`).
-- **Activate:** a Settings button, shown only with more than one camera while the camera is on.
-- **Status:** RD.
-- **Limits:** no voice command. It doesn't say which camera is now active.
-
-#### F22 · Camera-lost detection
-- **What:** if the track ends on its own (unplugged, permission revoked), the app says so at urgent priority with an error tone (`controller.ts:340-345`).
-- **Status:** RD.
-
-### Safety
-
-#### F23 · On-device detection
-- **What:** MediaPipe EfficientDet-Lite0 (COCO). Of its classes, 14 are used: person, car, motorcycle, bicycle, bus, truck, train, chair, bench, couch, dining table, potted plant, suitcase and fire hydrant (`hazardTracker.ts:25-40`).
-- **Activate:** loads automatically with the camera (`controller.ts:659-692`).
-- **How:**
-  - Runs on the CPU in VIDEO mode, with a score threshold of 0.4 and at most 12 results (`localDetector.ts:13-19`).
-  - Results go into the tracker, then into urgency and the gate, and are spoken.
-  - New objects also trigger a cloud scan (`controller.ts:680`, `scheduler.ts:56`).
-- **AI/Internet:** local ML, **no internet** once the files are loaded.
-- **Langs:** 4 (`phrases.ts:389-404`).
-- **Status:** RD.
-- **Limits:**
-  - **It doesn't detect stairs, kerbs, holes, poles, walls, doors or glass.**
-  - ~~The page doesn't speak a load failure.~~ Fixed 2026-11-10: load failure, a 20 s load timeout and a crash while running are spoken.
-  - Runs on the main thread.
-
-#### F24 · Tracker: persistence and "approaching"
-- **What:**
-  - An object must be seen 3 times before it is reported, and counts as "confirmed" after 5 sightings with a mean score of 0.7 or more.
-  - A track expires after 1.5 s without a sighting.
-  - It is "approaching" when its size grows 15 % or more over at least 1 s and 4 samples, while the camera is steady (less than 35 % of pixels changed) (`hazardTracker.ts:42-49,95-105`, `controller.ts:31,679`).
-  - Proximity is guessed from the box size; obstacles count as "near" only when they reach the bottom 15 % of the frame (`hazardTracker.ts:82-93`).
-- **Status:** EX. The heuristics haven't been calibrated in real streets.
-- **Limits:**
-  - Someone walking with the phone moves the camera all the time, so "approaching" will mostly be "unknown".
-  - Box-size proximity varies with each object's real size.
-
-#### F25 · Cloud hazards
-- **What:** the model lists stairs, drops (a change of floor level), vehicles, obstacles and approaching people (`prompts.ts:121`). These are the only source of **stairs and drop** warnings.
-- **Status:** EX. Recall, false-alarm rate and latency on real stairs are unknown.
-- **Limits:**
-  - Latency is the 4 s minimum interval plus about 2–3 s for the model.
-  - ~~Paused while speech plays~~ (fixed 2026-11-10).
-  - No warnings at all offline or while the service is down. The user is told in that case (F32).
-
-#### F26 · Urgency computed in code
-- **What:** `hazardUrgency` (`hazards.ts:10-27`):
-  - Uncertain is never urgent.
-  - Far and not approaching is only "info", and "info" is never spoken.
-  - Stairs or a drop is urgent when near or straight ahead.
-  - A vehicle is urgent when near or approaching.
-  - An obstacle is urgent only when near and straight ahead.
-  - **A person is at most "caution"**.
-- **Status:** FI (`tests/visionSchema.test.ts` "urgency needs evidence").
-- **Limits:** a person rushing straight at the user is never urgent, by design. Worth reviewing with mobility trainers.
-
-#### F27 · Templated warnings worded by confidence
-- **What:** `warningPhrase` writes every warning from validated fields: "There may be … but I'm not sure" for uncertain, "there seems to be" for likely, and firm wording for confirmed. It has Derja gender agreement for "coming" (`phrases.ts:327-387`).
-- **Status:** FI (`tests/languages.test.ts`).
-- **Limits:** the model's `label` is put into the template as is, so a long or odd label reads badly. The wording hasn't been reviewed by native speakers (README "Known limits").
-
-#### F28 · Warning gate
-- **What:** the same `kind:side` isn't repeated within 15 s (urgent) or 45 s (caution). It passes at once when urgency rises, or when "approaching" is added (`hazards.ts:32-53`).
-- **Status:** FI.
-- **Limits:** two different obstacles on the same side share a key (`hazards.ts:42`), so a second one can be held back for up to 45 s.
-
-#### F29 · Safety-language filter
-- **What:** `guardSpoken` removes any sentence that promises safety ("safe", "clear path", «آمن», «sans danger»…) or gives a distance ("3 m", «مترين», "two meters"…) in all 4 languages. It keeps honest doubt and sentences that quote text read from the scene (`schema.ts:47-125`).
-- **Status:** FI (about 30 assertions across `visionSchema` and `languages` tests).
-- **Limits:**
-  - It is a regex blocklist, so new wordings get through. Examples: "go ahead", "the coast is clear", «الطريق ما فيهاش حتى حاجة».
-  - A safe-sounding sentence that happens to contain a quoted sign is kept.
-
-#### F30 · Safety caveats
-- **What:** a sentence that says nothing is ahead always gets "that doesn't mean it's safe" (`schema.ts:90-105,230`). Questions about a path or crossing always end with "I can't confirm the way is safe, keep checking with your cane" (`schema.ts:154-159,232-235`).
-- **Status:** FI.
-- **Limits:** depends on regex detection of path questions. Wording outside the list gets no caveat.
-
-#### F31 · Urgent alert feedback
-- **What:**
-  - three high tones, played at 80 % volume or more (`earcons.ts:8,33`)
-  - a 200-100-200-100-200 ms vibration (`controller.ts:53`)
-  - interrupts all other speech
-  - red caption and stage for 5 s
-  - `role="alert"` when screen-reader echo is on (`Assistant.tsx:286`)
-- **Status:** RD.
-- **Limits:**
-  - Android Chrome may block `navigator.vibrate` without a recent user gesture.
-  - The tone needs the AudioContext unlocked by a tap first (`earcons.ts:17-25`).
-  - If the only voice is the cloud voice, an urgent warning needs a server round trip before it plays.
-
-#### F32 · Failure announcements
-- **What:**
-  - After 2 failed scans in a row: "Analysis is stopped, don't rely on me", with an error tone (`controller.ts:621-627`). "Analysis is back" when it recovers.
-  - A missing key: "service not enabled", and a 5-minute backoff.
-  - Rate limits: "too many requests" for questions.
-- **Status:** FI (e2e `aiFailure`, mocked).
-- **Limits:** during the first failure (up to about 27 s with the client timeout), the user hears nothing.
-
-#### F33 · Stale-result discard and session guard
-- **What:** results older than 12 s, or from an earlier camera session, are dropped (`controller.ts:586,591`).
-- **Status:** FI.
-
-### Voice input
-
-#### F34 · Hands-free voice commands
-- **What:** an endless listen → command or question → listen loop.
-- **Activate:** the "Voice commands" toggle (`aria-pressed`), the `V` key, or «سكّر الميكرو» / "Stop listening" to turn it off.
-- **How:**
-  - `assistantLoop` waits while speech plays, while a question is running, while hidden or while offline, then listens once (`controller.ts:915-929`).
-  - When the assistant starts speaking, the microphone is aborted, so it doesn't hear itself (`controller.ts:222`).
-  - Anything that isn't a command goes to the model as a question (`controller.ts:1039-1046`).
-- **AI/Internet:** the browser's speech service (Google in Chrome). Internet required. **Doesn't work offline.**
-- **Langs:** recognition in the chosen language; commands in all 4.
-- **Status:** RD. Real voices, accents, noise, TalkBack interplay and battery are all untested.
-- **Limits:**
-  - Every phrase overheard nearby becomes a question, with an image and quota (README).
-  - On Android, every recognition restart can beep.
-  - Single-word commands such as "stop", "back", "call", "cancel", "pardon", «يزي» or «اطلب» can fire from overheard speech. "call" or «اطلب» alone opens the Emergency page and asks for location (`commands.ts:129-134`, `controller.ts:826`).
-
-#### F35 · Ask by voice (push-to-talk)
-- **What:** listens for one question. Routine speech is held until it's done (`controller.ts:932-993`). Pressing again sends it ("Done, send question", `Assistant.tsx:354`).
-- **Activate:** the "Ask by voice" button, or the `Q` key.
-- **Status:** RD.
-- **Limits:** with hands-free mode on, it only stops speech and makes room (`controller.ts:938-939`).
-
-#### F36 · Voice-command parser
-- **What:** 21 commands, each with Derja, MSA, French and English phrases (`commands.ts:36-144`):
-  - stop-speech, repeat, pause, resume
-  - camera-on, camera-off, assistant-off
-  - yes, help, back
-  - front, describe, read, identify
-  - emergency, call
-  - louder, quieter, faster, slower
-  - lang-tn / ar / fr / en
-- **How:**
-  - The whole utterance must match exactly, after Arabic and Latin normalisation.
-  - Courtesy words around it are dropped first ("please", «يعيشك», "nadhra"…) (`commands.ts:149-168`).
-  - "Pause" requires two words, so the everyday word "wait" can't turn off warnings (`commands.ts:49-55`).
-  - Language switches require "speak X" (`commands.ts:139`).
-- **Status:** FI (tests check that every command in the spoken help works, and that everyday words don't trigger anything harmful).
-- **Limits / bug:** ~~"Stop listening" said through push-to-talk while hands-free mode is off turns hands-free mode ON.~~ Fixed 2026-11-10 (`stopAssistant()`, regression tests in `tests/controller.test.ts`).
-
-#### F37 · Recording fallback + Gemini transcription
-- **What:** for browsers without a working recognition service (Firefox, Brave, some Chromium builds), the audio is recorded and transcribed by Gemini (`voiceInput.ts:135-221`, `transcribe/route.ts`, `vision.ts:205-209`).
-- **Status:** EX. Transcription quality for Derja is unknown.
-- **Limits:** adds 1–3 s or more. Uses quota. The audio leaves the device for Google.
-
-#### F38 · Dead-speech-service detection
-- **What:** two recognition sessions in a row that end in under 1 s with no result mean the service is missing. The app announces it and switches to recording (`voiceInput.ts:64-65,107-109`, `controller.ts:1003-1020`).
-- **Status:** EX (a heuristic, tested in e2e `deadSpeechService` on desktop Chromium only).
-
-#### F39 · Turn-taking
-- **What:** while the user is talking, or after Ask, only urgent warnings play (`speechQueue.ts:109-112,148`, `controller.ts:958-966`).
-- **Status:** RD.
-- **Limits:** relies on `onspeechstart`/`onspeechend`, which Android may not fire reliably.
-
-### Speech output and feedback
-
-#### F40 · Priority speech queue
-- **What:** four priorities with pre-emption, resuming, a time-to-live, de-duplication, a watchdog and chunking (`speechQueue.ts`). Since 2026-11-10 there are five: `warning` (caution hazards) sits between answer and urgent.
-- **Status:** FI (10 tests).
-- **Limits:** a stale urgent warning (over 6 s in the queue) is dropped silently. That is correct for safety, but no tone marks it.
-
-#### F41 · Hybrid TTS
-- **What:** browser voice first. Prefers an exact `ar-TN` voice for Derja, then other Arabic voices (`lang.ts:26`), and prefers installed voices when offline (`tts.ts:147-158`). Falls back to the cloud voice.
-- **Status:** RD.
-- **Limits:**
-  - On most Android phones Derja will be read by an MSA or Gulf voice. The UI says "(Arabic, not Tunisian)" (`Assistant.tsx:251-255`).
-  - The cloud error messages are in Arabic only and never shown (`tts.ts:167-175`).
-
-#### F42 · Edge neural voice proxy
-- **What:** server-side WebSocket to Microsoft's Edge "Read aloud" endpoint, giving an MP3 (`edgeTts.ts`).
-- **Status:** EX. It is an **unofficial, undocumented endpoint** with a hard-coded client token (`edgeDrm.ts:8`). Microsoft may block it, and its terms are unclear.
-- **Limits:** 500 characters per sentence. Per-instance rate limit. Can be turned off with `EDGE_TTS_DISABLED`.
-
-#### F43 · Repeat, Stop talking, Help, Go back / cancel
-- **What:**
-  - **Repeat** says the last sentence again (`controller.ts:755-759`).
-  - **Stop talking** clears the queue.
-  - **Help** speaks the list of commands (`phrases.ts:38`).
-  - **Go back** closes the open panel, or cancels the running question and the listening, or stops speech (`controller.ts:785-798`).
-- **Activate:** buttons, `R` / `Esc` / `H`, and voice.
-- **Status:** FI.
-
-#### F44 · Earcons
-- **What:** on, off, listen, urgent, error and "still running" tones (`earcons.ts:4-11`).
-- **Status:** RD. They need the AudioContext unlocked by a tap, so the first events after a voice-only start may be silent.
-
-#### F45 · Haptics
-- **What:** on [40], off [40,80,40], listen [25], urgent [200,100,200,100,200] and error [120,80,120] (`controller.ts:49-55`). Can be turned off.
-- **Status:** RD.
-
-#### F46 · "Still running" tone
-- **What:** a soft tone after 45 s of silence, so the user knows the app hasn't died (`controller.ts:34,536-539`).
-- **Status:** FI.
-
-#### F47 · Screen-reader echo and fallback
-- **What:** an optional live region that also sends every sentence to the screen reader (`Assistant.tsx:285-286,507`). It turns on automatically for the rest of the session if the voice fails (`controller.ts:233-237`).
-- **Status:** RD. With TalkBack, the page voice and TalkBack can talk over each other. Untested.
-- **Limits:** once on, the fallback stays on until the language is changed (`controller.ts:1098`).
-
-### Languages
-
-#### F48 · Four speech languages
-- **What:** for each of the 4 languages, the app has (`lang.ts`, `phrases.ts`, `prompts.ts`, `schema.ts`, `commands.ts`):
-  - a recognition locale
-  - a voice preference list
-  - a cloud voice
-  - a system prompt
-  - every app phrase
-  - warning templates
-  - safety, distance and negation patterns
-  - command phrases
-- **Status:** RD. The README says that the **French, English and MSA wording, and the Derja, were written without native-speaker review**.
-- **Limits:**
-  - **The UI is English only**, including the Settings labels and the emergency labels.
-  - The `<html lang="en">` attribute stays fixed (`layout.tsx:26`). Sentences the assistant speaks carry their own `lang` and `dir`.
-
-#### F49 · Switch language
-- **What:** a Settings menu, or voice: "Speak French", «احكي بالتونسي»… (`commands.ts:140-143`). The switch clears the recent sentences, the history and the warning gate, switches the voice, and confirms in the new language (`controller.ts:1091-1100`).
-- **Status:** FI.
-- **Limits:** a command in another language has to get through a recognizer set to the current language. That's why the command list includes Arabic-script versions.
-
-### Emergency
-
-#### F50 · Emergency page
-- **What:** a modal with "Call [name]", "Text my location to [name]", and the SAMU 190, Police 197 and Civil protection 198 buttons (`Assistant.tsx:553-590`). On opening, it speaks a summary and asks for location once (`controller.ts:800-809`). Focus goes to "Call" or to "Add an emergency contact" (`Assistant.tsx:200-201,557,574`).
-- **Activate:** the "Emergency assistance" button, or voice: «نجدة», "Emergency", « Au secours », "help me", "call".
-- **Status:** RD (no e2e scenario covers it; only a source-code test does, `tests/safetyInvariants.test.ts`).
-- **Limits:**
-  - No shortcut key.
-  - Shortcut keys are turned off while any dialog is open (`Assistant.tsx:217`).
-  - Spoken in the speech language, labels in English.
-  - The emergency numbers are hard-coded for Tunisia.
-
-#### F51 · Call the emergency contact
-- **What:** a `tel:` link (`Assistant.tsx:158,557`). The voice command "call" / «عيّط» only **moves focus** to the button and says "double-tap to call" (`controller.ts:825-831`). Browsers only open the dialer from a real tap, and a source test checks that code never starts a call (`tests/safetyInvariants.test.ts:17-28`).
-- **Status:** RD.
-- **Limits:** TalkBack's accessibility focus doesn't always follow a programmatic `.focus()`. This must be checked on a device (`ANDROID_TESTING.md` §7).
-
-#### F52 · Text my location
-- **What:** an `sms:` link with the body "I need help. This is my location: https://maps.google.com/?q=lat,lng", or "please call me" without a location (`controller.ts:857-860`, `Assistant.tsx:159,561-569`). The position is one `getCurrentPosition` with high accuracy, a 15 s timeout and up to 60 s old (`controller.ts:834-849`). It's never sent to the server.
-- **Status:** RD.
-- **Limits:**
-  - The location is never spoken (see F70); it only appears in the on-screen status text.
-  - The `?body=` syntax for `sms:` varies between Android SMS apps.
-
-#### F53 · Tunisian emergency numbers
-- **What:** `tel:190`, `tel:197` and `tel:198` (`Assistant.tsx:112-116`).
-- **Status:** RD.
-
-### Settings
-
-#### F54 · Speech speed and volume
-- **What:** speed choices 0.7–1.3 (default 0.9) and volume 40–100 % (`settings.ts:38-39`). By voice, "louder", "quieter", "faster" and "slower" step through them and say when a limit is reached (`controller.ts:863-873`).
-- **Status:** FI.
-- **Limits:** volume is relative to the device's media volume, which the app can't change.
-
-#### F55 · Text size and theme
-- **What:** text size 100/125/150/175 %, applied on top of the browser's font size. At 150 % or more the layout drops to one column (`Assistant.tsx:329,351`, `globals.css:68`). Dark or light theme.
-- **Status:** FI.
-- **Limits:** the theme defaults to dark and **ignores `prefers-color-scheme`** (`layout.tsx:22`). There is no high-contrast theme beyond `forced-colors`.
-
-#### F56 · Narration and vibration toggles
-- **What:** native `input role="switch"` controls (`Assistant.tsx:618-625`).
-- **Status:** FI.
-
-#### F57 · Emergency contact
-- **What:** a name (40 characters) and a phone number (digits, `+` and spaces), kept only in `localStorage` (`Assistant.tsx:512-523`, `settings.ts:43,60-61`).
-- **Status:** FI.
-- **Limits:**
-  - Only one contact.
-  - No validation that the number is dialable.
-  - Several `+` signs are kept until the next load, because the UI handler doesn't use `cleanPhone` (`Assistant.tsx:521`).
-
-#### F58 · Settings persistence and validation
-- **What:** `sanitizeVisionSettings` clamps every field (`settings.ts:46-63`).
-- **Status:** FI.
-
-#### F59 · Keyboard shortcuts
-- **What:** C, D, T, I, V, Q, P, R, H and Esc, matched by physical key position, so they work with Arabic or French layouts. Turned off in text fields and dialogs (`Assistant.tsx:214-240`). Listed in Settings.
-- **Status:** FI (e2e `keyboardOnly`).
-- **Limits:** screen readers capture letter keys in browse mode. That's documented, and the user has to switch to pass-through mode.
-
-### Connectivity, power, platform
-
-#### F60 · Offline detection and degraded mode
-- **What:** on `offline`, it aborts the scan, says "No internet; only on-device warnings work" (or "analysis down" when the detector isn't ready), shows a banner, stops encoding motion frames, and pauses the voice loop. On `online`, it resets the backoff and says the connection is back (`controller.ts:245-271`, `Assistant.tsx:311`).
-- **Status:** **PI.**
-  - There is no service worker or manifest, so **the app can't be opened offline at all**.
-  - The detector only works offline if its files were already loaded or are in the HTTP cache.
-  - Voice commands don't work offline.
-  - The voice only works if a local voice for the language is installed.
-  - `navigator.onLine` doesn't catch a captive portal or a dead connection.
-
-#### F61 · Screen wake lock
-- **What:** keeps the screen on while the camera runs, and asks again when the page becomes visible (`controller.ts:274-276,454-459`).
-- **Status:** RD.
-
-#### F62 · Hidden-page handling and release
-- **What:** when the page is hidden, analysis, detection and the voice loop stop (`controller.ts:495-498,675,917`). On `pagehide` or unmount, everything is shut down (`controller.ts:273,286-303`).
-- **Status:** ~~PI~~ **RD** (2026-11-10). The camera and microphone are now released on `visibilitychange` → hidden, and the camera restarts with a spoken notice on return. Still to check on a real phone: the green camera indicator, the lock screen, the app switcher, and whether a permission prompt hides the page.
-
-#### F63 · Detector CPU budget
-- **What:** at most 20 % of main-thread time, at least 250 ms between runs, and at least one run every 3 s (`frameBudget.ts`, `controller.ts:138,689`).
-- **Status:** FI (3 tests).
-
-### Backend
-
-#### F64 · Vision API validation
-- **Status:** FI (`tests/visionRoute.test.ts` "input validation"). See §2.8.
-
-#### F65 · Provider chain and free-only guard
-- **Status:** FI (5 route tests). See §2.4.
-- **Limits:** cooldowns are kept per server instance.
-
-#### F66 · Rate limiting and same-origin check
-- **Status:** **PI.** The limits live in memory per instance and are keyed by `X-Forwarded-For` (`server/http.ts:53-55`). Requests with no `Origin` are allowed (`server/http.ts:43`). There is no authentication, so anyone who finds the URL can spend the Gemini quota.
-
-#### F67 · Security headers
-- **Status:** FI (e2e `independentApp` checks the policy).
-- **Limits:** no Content-Security-Policy and no HSTS header. Vercel adds HSTS on its domains.
-
-#### F68 · Status endpoint and disclosure
-- **What:** the provider labels shown in the consent notice come from the real configuration (`vision.ts:114-121`).
-- **Status:** FI.
-
-### Not yet built / leftovers
-
-#### F69 · Smart-glasses camera source
-- **What:** only an interface (`CameraSource`) and a one-case factory (`cameraSource.ts:18-35,132-137`). The README says glasses are not supported.
-- **Status:** PL.
-
-#### F70 · Spoken location status in the Emergency page
-- **What:** the phrases `locating`, `noLocation`, `smsReady` and `listening` exist in all 4 languages (e.g. `phrases.ts:19,52-54`), but no code uses them (`grep` finds 0 uses). The location result is only on screen, in a `role="status"` paragraph (`Assistant.tsx:565`).
-- **Status:** BR (dead code).
-
-### Other defects and leftovers found
-
-- `hazardTracker.ts:3` refers to `tests/hazardTracker.test.ts`, which doesn't exist. The tracker tests are in `tests/visionClient.test.ts`.
-- `store.ts:1-3` has a comment about "live prediction ~10/s, fps", copied from the sign-language app.
-- Legacy aliases are kept only for tests: `SPEECH`, `CAMERA_ERRORS`, `VISION_SYSTEM_PROMPT`, `TRANSCRIBE_PROMPT` and `pickArabicVoice`.
-- `SpeechQueue.hasAtLeast` and `CameraSource.isLive` are never called.
-
----
-
-## 5. User journey
-
-1. **First time opening the app.**
-   - Focus is on "Start assistance" (`Assistant.tsx:178`). TalkBack reads it first, with the hint "Turns on the camera…".
-   - The caption says "Press Start assistance to begin, or press H for help".
-   - The header says "Experimental test version".
-   - Nothing is spoken before the first tap, because browsers block audio until then.
-2. **Permissions and consent.**
-   - The first Start opens the consent dialog and speaks the privacy notice in the speech language (Derja by default). Focus goes to "I agree".
-   - Declining speaks "camera not turned on, no image sent".
-   - Agreeing stores consent for good, and Android then asks for the camera.
-   - The microphone is asked for later, by the browser, on the first voice use. Location is asked for only when the Emergency page opens.
-3. **Starting assistance.**
-   - "Camera on", a rising tone and a short vibration.
-   - The detector loads, the first scan goes out, the first description is spoken, then the experimental notice.
-4. **Voice commands.**
-   - The user turns on "Voice commands", says a command, and the assistant acts and speaks.
-   - Anything else is a question.
-   - "Help" lists what can be said.
-   - Each attempt shows "I heard «…»".
-5. **Reading text.** "Read text", `T`, or «اقرالي الكتابة». The camera starts if needed, then "One moment, let me look", then the text word for word, or a note that part is unreadable.
-6. **Identifying objects.** "Identify object", `I`, or «شنوة هاذي؟». The product and brand are named, the label is read, or the user is told to turn the object.
-7. **Describing surroundings.** On demand (`D`), or automatic narration when the scene changes. It can be turned off.
-8. **Safety warnings.**
-   - On-device: people, vehicles and furniture after 3 sightings, at "caution" or "urgent" level.
-   - Cloud: stairs and drops a few seconds later.
-   - Urgent warnings interrupt everything, with 3 tones, a strong vibration and red on screen.
-   - Warnings repeat at most every 15 or 45 s.
-   - Silence is never presented as "safe".
-9. **Switching languages.** Settings, or "Speak French" / «احكي بالتونسي». The app confirms in the new language. The UI stays English.
-10. **Emergency.**
-    - Button, or «نجدة» / "Emergency". The page opens and is read out, and location is requested.
-    - Saying "call" selects the call button, and one double-tap opens the dialer.
-    - "Text my location" opens the SMS app with a maps link, unsent.
-    - The 190, 197 and 198 buttons are there.
-    - Without a contact, the user hears that none is set, and focus goes to "Add an emergency contact".
-11. **Working offline.**
-    - Already open: the app says only on-device warnings work, and the banner shows it. Questions, reading and voice commands are unavailable. The voice works only with a local voice. It announces when the connection comes back.
-    - Not open yet: the app can't be opened at all.
-12. **Stopping and restarting.**
-    - "Stop camera" (`C`, «سكّر الكاميرا»): falling tone, "camera off", and everything is released.
-    - Pause («وقّف التحليل», `P`) stops analysis **and on-device warnings** (`controller.ts:675`) while keeping the camera on.
-    - Restarting asks no new questions, because consent is stored.
-
----
-
-## 6. Feature classification
+Each feature row above is counted once, by its status column.
 
 | Class | Count | Features |
 |---|---|---|
-| Fully implemented | **34** | F02–F07, F13–F16, F18, F26–F30, F32, F33, F36, F40, F43, F46, F49, F54–F59, F63, F64, F65, F67, F68 |
-| Implemented, needs real-device testing | **25** | F01, F08–F12, F17, F20–F23, F31, F34, F35, F39, F41, F44, F45, F47, F48, F50–F53, F61 |
-| Partially implemented | **3** | F60 (offline), F62 (background release, now RD), F66 (API protection) |
-| Experimental | **6** | F19 (two-frame motion), F24 (on-device approach heuristic), F25 (cloud stairs/drops), F37 (recorded speech via Gemini), F38 (dead-service heuristic), F42 (unofficial Edge voice) |
-| Planned, not implemented | **1** | F69 (smart glasses) |
-| Broken or deprecated | **1** | F70 (spoken location status, dead phrases) |
-| **Total** | **70** | |
+| **TS** Implemented and tested in software | **48** | A02, A04–A11, B06–B08, B11, B16, C02–C04, C07, D02, D04, D07, D09, E04–E08, E10–E12, F02, G01, G04, G05, G07, G09, J01, J02, K01, K05, L01–L03, L05–L07, M01, M02 |
+| **ND** Implemented, not tested on real devices | **35** | A01, A03, A12, B01–B05, B10, B12–B15, C05, C06, C08, D01, D03, D06, D08, E01, E09, F01, F03, F06, G02, G06, G08, I01–I04, K03, K04, L04 |
+| **EX** Experimental | **9** | B09 (web search), B17 (two-frame motion), C01 (document reading), D05 (live answers filtered after the fact), E02 (tracker), E03 (cloud hazards), F04 (recording fallback), F05 (dead-service detection), G03 (unofficial Edge voice) |
+| **NA** Unavailable or not implemented | **13** | C09, C10, I05, K02, M03–M06, N01–N05 |
+| **Total** | **105** | |
 
-The voice-command bug in F36 ("Stop listening" turns hands-free mode on when said through push-to-talk) is a defect in a feature that otherwise works, so I didn't count it as a separate feature.
+"TS" never means tested on a device or with users (§6.4). Some TS features also have language-quality caveats that tests can't settle: the safety patterns (E07) and the live voice's accent (D04) are unreviewed by native speakers.
 
----
+---|---|---|
+| **TS** Implemented and tested in software | **33** | A02, A04–A11, B06–B08, B11, B16, C02–C04, C07, D02, D04, D07, D09, E04–E08, E10–E12, F02, G01, G04, G05, G07, G09, J01, J02, K01, K05, L01–L03, L05–L07, M01, M02 |
+| **ND** Implemented, not tested on real devices | **33** | A01, A03, A12, B01–B05, B10, B12–B15, C05, C06, C08, D01, D03, D06, D08, E01, E09, F01, F03, F06, G02, G06, G08, I01–I04, K03, K04, L04 |
+| **EX** Experimental | **13** | B09, B17, C01, D05, E02, E03, F04, F05, G03, and the cloud-hazard dependence of D06 is counted under E03. Also: A06's Nadhra side (counted in M01), web search (B09) |
+| **NA** Unavailable or not implemented | **13** | C09, C10, I05, K02, M03, M04, M05, M06, N01–N05 |
+| **Total** | **92** | |
 
-## 7. Accessibility audit (blind and low-vision users)
-
-**Strengths (with evidence):**
-- **Native semantics.** `dialog` with `showModal` (focus trap, Esc, focus returns), `select`, `input role="switch"`, `aria-pressed` on the voice toggle (`Assistant.tsx:345`), `aria-keyshortcuts` on every action, and headings for each section (some `sr-only`).
-- **Reading order.** The comment in `Assistant.tsx:2-4` describes the order: what was last said, the actions, the camera, questions, then details. The video has `aria-label="Live camera preview"`, and the iris is `aria-hidden`.
-- **Spoken text** carries `lang` and `dir`, so screen readers switch voice (`Assistant.tsx:285,299`).
-- **Focus management.** The Start button has focus on load. Focus moves into consent ("I agree"). The Emergency page focuses the main action (`data-autofocus`). The voice "call" command focuses the call link.
-- **Voice-only operation.** Every main action and setting has a voice command, apart from text size, theme, camera direction and the emergency contact. Each state change is spoken and has a tone, and vibrates where possible.
-- **Large text.** The app follows the browser's font size and adds its own scale up to 175 %. The layout drops to one column at 150 %. There are no fixed bars.
-- **Touch targets.** Main controls are 5.25 rem and tiles 6 rem tall; ghost buttons are 3 rem (`globals.css:103,176,218`). The emergency buttons use `min-h-16`.
-- **Motion.** All animation stops under `prefers-reduced-motion` (`globals.css:589-596`), and there are `forced-colors` fallbacks.
-- **Automated checks.** An axe-core run in e2e (WCAG 2.0 A/AA and 2.1 AA) when `AXE` is set (`e2e/vision.mjs:124-127`). The results of the last run aren't in the repo.
-
-**Problems and risks:**
-1. **The interface is English only** for a Tunisian, mostly Arabic-speaking audience. TalkBack reads every label in English. This is the biggest accessibility gap.
-2. **The page voice and TalkBack.** With echo off (the default), the page talks through `speechSynthesis` while TalkBack reads focus changes, so the two can overlap. With echo on, everything is said twice. Untested on a device.
-3. **The first tap.** Audio, tones and vibration need a user gesture. Hands-free mode can only be turned on by a tap or key press, and the earcons stay silent until the AudioContext is unlocked.
-4. ~~**Detector failure isn't spoken**~~ (F23). Fixed 2026-11-10.
-5. **Single-letter shortcuts** clash with screen-reader browse mode. This is documented, and the buttons are the workaround.
-6. **The "What it sees now" panel and status list** change silently (no live region). That's fine for the voice path, but screen-reader-only users won't hear updates there.
-7. **Programmatic focus** for "call" may not move TalkBack's accessibility focus.
-8. **The Emergency page has no shortcut key** and no confirmation tone or vibration when the dialer opens. That is outside the browser's control.
-9. **The `ghost` header buttons** (Privacy, Settings) are icon-only on small screens. They are 48 px and have `sr-only` names, which is acceptable.
-10. **No onboarding or tutorial** beyond Help. A first-time blind user gets no audio tour of the screen layout.
+(EX lists 9 IDs: B09, B17, C01, D05, E02, E03, F04, F05, G03. The remaining 4 experimental features are the language-quality items that cut across rows: Derja voice on non-Tunisian voices (G02), the live Derja accent (D04), the unreviewed safety patterns (E07) and the unmeasured image-quality thresholds (B12). They are also counted in their rows, so the row total is 79 plus these 13 cross-cutting entries.)
 
 ---
 
-## 8. Security and privacy analysis
+## 6. Test results
 
-| Topic | Finding | Evidence |
+### 6.1 Run on 2026-11-15 (this audit)
+
+| Suite | What it is | Result |
 |---|---|---|
-| Images | Sent to Google Gemini (or OpenRouter) only while the camera is on, not paused, not hidden and online. Never stored or logged by the app. **Free tiers may keep them and use them for training, and human reviewers may see them.** This is disclosed in the consent notice and the README. | `route.ts`, `vision.ts:3-4`, `Assistant.tsx:694-696` |
-| Context sent with each image | The last 4 spoken sentences, the last 3 Q&A pairs, the camera direction and the language. No identity, location or contact. | `controller.ts:578-585,726-734`, `route.ts:54-70` |
-| Voice | Goes to Google through Chrome's recognition, or to Gemini as a WAV in the fallback. | `voiceInput.ts`, `transcribe/route.ts` |
-| Spoken text | Sent to Microsoft's Edge endpoint when the cloud voice is used. The camera image is never sent there. | `tts.ts:318`, `edgeTts.ts` |
-| Location | Asked for only on opening the Emergency page, as one fix, kept in memory, and only put into an `sms:` body. Enforced by a source test. | `controller.ts:834-849`, `tests/safetyInvariants.test.ts:30-41` |
-| Local storage | Settings, including the **emergency contact name and number in plain text**, the consent flag and the theme. No encryption, which is normal for a web app. | `settings.ts:65-80` |
-| Keys | Server-only. Error bodies from providers never reach the client (tested). | `vision.ts:49`, `tests/visionRoute.test.ts` |
-| API abuse | No authentication. Requests with no `Origin` are allowed. Rate limits are per IP and per instance. | `server/http.ts:41-55` |
-| Billing safety | Pro models and non-free OpenRouter models are refused. | `vision.ts:64,91` |
-| Prompt injection | The prompt says scene text is content, never an instruction (`prompts.ts:105`). The code safety filter still applies, whatever the model writes. | `schema.ts` |
-| Third parties | The Edge endpoint is unofficial, with a hard-coded token, so its terms and availability are a risk. | `edgeDrm.ts:8`, `edgeTts.ts:6-7` |
-| Bystanders | People in view are sent to the provider. The prompt forbids identifying them or guessing sensitive traits. | `prompts.ts:111-112` |
-| Consent | Stored for good, can't be withdrawn in the UI, and isn't asked again when the provider changes. | `settings.ts:90-95` |
+| `npm test` (26 files in `tests/`) | Node unit and integration tests: no network, no keys | **423/423** after the default-language change (422/422 before it). One launcher test (`tests/engines.test.ts`, "crash: an engine that exits by itself…") failed once under full-suite load, then passed 3/3 alone and in the full rerun. It is timing-sensitive. |
+| `npx tsc --noEmit` | TypeScript | **No errors** |
+| `npm run build` | Production build | **Succeeds** |
+| `e2e/redesign.mjs` (with `AXE`) | Chromium, fake camera, `/api/vision` and `/api/tts` mocked in the browser | **76/76, twice** (and again twice after the default-language change), including the new action-button checks and axe (WCAG 2 A/AA + best practice, camera screen) with no violations |
+| `e2e/nadhra/run.mjs` | Chromium against three `next start` servers, every outgoing server connection blocked and logged | **75/75** (and again after the default-language change) |
+| Default-language check (one-off script, not in the repo) | Chromium, production build: a first visit with nothing saved opens in Derja (right to left); a saved English or French choice is kept; loading writes nothing to storage | **3/3** |
 
----
+### 6.2 Recorded earlier (not re-run here)
 
-## 9. Limitations (cross-cutting)
+| Suite | Result as recorded | Source |
+|---|---|---|
+| `e2e/read/run.ts` | Real Gemini, 16 rendered document cases: all pass (2026-11-13) | `docs/PHASE1_DOCUMENT_READER.md` |
+| `e2e/read/browser.mjs` | Real Gemini, production build, Chromium: 13/13 (2026-11-13) | `docs/PHASE1_DOCUMENT_READER.md` |
+| Round-4 real-Gemini runs | **Not completed:** free-tier quota ran out | `docs/PHASE1_ROUND4_REPORT.md` |
+| Live latency (`e2e/live/latency.ts`) | Median 1.07 s on the developer's connection, occasionally 3 s | README "Known limits" |
+| OCR benchmark | Paddle v5 86.6 % exact lines; Tesseract 77.7 %; 31 rendered mock cases | `bench/out/ocr-summary.md` |
 
-1. **Warning latency.** On-device warnings take about 1 s after 3 sightings. Cloud warnings, the only source for stairs and drops, take at least 4 s plus about 2–3 s. *(The pause during speech was removed on 2026-11-10.)*
-2. **Distances are never given**, by design. "Near" and "far" are judged from the picture.
-3. **Linguistic quality is unreviewed** in all 4 languages. On most phones, Derja is read by a non-Tunisian voice.
-4. **Nothing has been tested on a real device or with real users.** Speech recognition has only been tested with synthetic speech (README).
-5. **Free-tier dependence.** Quotas are about 15 requests a minute per model, and model names may change.
-6. **Not a PWA.** It doesn't open offline and can't be installed.
-7. **One user per device.** There are no accounts and no sync, which is good for privacy.
-8. **Performance.** `useStore` re-renders the whole `Assistant` tree on every state patch. Patches are frequent (speaking toggles, analysis state, hazard updates), which could cost frame time on low-end Android phones next to MediaPipe on the main thread.
+### 6.3 Not run
 
----
+- `e2e/vision.mjs`, the real-model camera suite: needs `photos/street.jpg` and `photos/person.jpg` (not in the repo) and Gemini quota.
+- `e2e/live/browser.mjs` and the chat evaluations (`e2e/chat/`): real services and quota.
 
-## 10. Testing gaps
+### 6.4 Real devices and people: none
 
-**What exists:**
-- 106 unit tests, all passing on 2026-11-09. They cover the safety filters, urgency, the gate, the scheduler, the queue, the tracker, commands, prompts, languages, TTS client and server, the vision route and HTTP helpers.
-- A Playwright e2e script with 17 scenarios: consent, full pipeline, release on leave, keyboard only, permission denied, no camera, dark room, urgent warning (mocked), AI failure (mocked), approaching, recognition, recorder fallback, ask not cut off, dead speech service, mobile, panels and themes, independence from the other app.
-
-**What's missing:**
-- **The real-device checklist** (`docs/ANDROID_TESTING.md`) has never been filled in: TalkBack, the Android camera and microphone indicators, vibration, wake lock, battery and heat.
-- **No accuracy benchmark:** no labelled set of stairs, kerbs, doors, crossings, labels or medicine boxes, so recall and false-alarm rates are unknown.
-- **No latency measurement** on mobile networks for warnings.
-- **No e2e scenario** for the Emergency flow, offline mode, language switching, text size or vibration.
-- **No component tests** of `controller.ts`. It is the largest file (1,107 lines) and is only exercised through e2e: voice-loop races, the "Stop listening" toggle bug, pending tasks.
-- **No native-speaker review** of the phrases or the regex safety lists.
-- **No load test** of the rate limits across serverless instances.
-- **The e2e suite can't run from a fresh clone.** It needs `photos/street.jpg` and `photos/person.jpg`, which aren't committed.
-
----
-
-## 11. Recommendations
-
-### Essential (safety, accessibility, trust)
-1. **Run the supervised Android checklist** with blind testers and fill in the results before any wider use. Record the warning latency each time.
-2. **Don't hold back cloud scans during long speech.** Let hazard scans run while answers or readings play (`scheduler.ts:57`), and speak only hazards from them.
-3. **Speak the detector's state.** Say "on-device warnings are off" when MediaPipe fails to load, and "on-device warnings running" on start (`controller.ts:663-670`).
-4. **Release the camera when the page is hidden** (or after a short grace period), not only on `pagehide` (`controller.ts:273-282`).
-5. **Fix the "Stop listening" toggle**, so `assistant-off` only ever turns the mode off (`controller.ts:1057`).
-6. **Localise the interface** into Arabic (Derja/MSA) and French, with `lang` and `dir` on `<html>`.
-7. **Let users withdraw consent** in Settings, and ask again when the provider list changes.
-8. **Protect the API.** Require `Origin` (or a signed session token) on POST routes, and use a shared rate-limit store (for example Vercel KV or Upstash) to protect the Gemini quota.
-9. **Move off free tiers that may train on images** before real users, or at least add a way to use a paid "no training" key.
-10. **Add a service worker and manifest**, so the app opens offline with the detector cached and can be installed to the home screen.
-11. **Wire up the spoken location status** on the Emergency page (F70), and add an emergency shortcut key and a strong haptic when the page opens.
-12. **Review the person-urgency rule** with orientation-and-mobility trainers. Someone near, approaching and straight ahead is never urgent at present (`hazards.ts:21-22`).
-
-### Improving independence (optional)
-- **Guided framing for reading:** "move the page left", "closer", "all four corners visible".
-- **Document mode:** multi-page reading with "next page" and "read again from …".
-- **Currency recognition for Tunisian dinar notes and coins.** This is a very common need.
-- **Colour and light detection** on the device, with no cloud.
-- **Barcode and QR scanning** on the device (BarcodeDetector or ZXing), with a product lookup.
-- **Find-object mode** ("Where is my phone or the door?") with repeated tones that change as the object is centred.
-- **Saved places and personal object labels** (stored locally).
-- **Trusted-contact video call** handoff for difficult situations.
-- **Spoken battery and connection status** on request.
-
-### Smart-glasses readiness
-- **Add a `CameraSource`** for streams from glasses (WebRTC, or a Bluetooth/Wi-Fi bridge). Keep `videoElement()` so the on-device detector stays on (`cameraSource.ts:18-35`).
-- **Fix the facing to "outward"** for glasses, and skip the auto-detection.
-- **Spatial audio** through the glasses' speakers: pan warnings left or right according to `side`.
-- **Head-relative cues:** "turn your head right".
-- **Lower-latency, always-on detection.** Move MediaPipe to a Web Worker or OffscreenCanvas, and consider the GPU delegate.
-- **Hands-free wake word** instead of the open-microphone loop, to reduce false triggers.
-
-### Performance and battery
-- **Subscribe components to slices of state**, or memoise the sub-trees, instead of re-rendering the whole page on each patch.
-- **Encode the motion frame only when a scan is about to be sent**, using a ring of thumbnails, instead of every second (`controller.ts:511-515`).
-- **Move detection off the main thread**, and try the GPU delegate (`localDetector.ts:15`).
-- **Measure battery and heat** over 15–30 minutes on a mid-range Android phone.
-
-### Safety (more)
-- **Grow the safety regex lists** with native speakers, and consider a second classifier pass that rejects sentences implying "safe".
-- **Add an earcon** when an urgent warning expires unspoken, or log it for testers.
-- **Keep a separate gate key per object**, using the tracker id for on-device hazards, so two obstacles on the same side are both announced.
-- **Build an accuracy test set** of local streets, stairs and crossings, and re-run it whenever the model or prompt changes.
-
-### Accessibility (more)
-- **An audio onboarding tour** on first use.
-- **A live region (polite) for the findings** when echo is on, and a "what changed" summary command.
-- **Default the theme to the OS setting** (`prefers-color-scheme`), and add a high-contrast or yellow-on-black theme.
-- **Test with TalkBack, Voice Access and Switch Access**, and on Samsung's own Chrome builds.
-
----
-
-## 12. Final numbers
-
-| Measure | Count |
+| Test | Status |
 |---|---|
-| Total features discovered | **70** |
-| Fully implemented | **34** |
-| Partially implemented | **3** |
-| Experimental | **6** |
-| Implemented, needs real-device testing | **25** |
-| Planned, not implemented | 1 |
-| Broken or deprecated | 1 |
+| Android checklist (`docs/ANDROID_TESTING.md`) | **Never run** |
+| Beta checklist (`docs/BETA_TEST_CHECKLIST.md`) | **Never run** |
+| TalkBack / VoiceOver | **Never run** |
+| Blind or low-vision testers | **Never** |
+| Real-camera reading protocol (`docs/PHASE1_REAL_CAMERA_TEST_PROTOCOL.md`) | Prepared, **never run** |
+| Native-speaker review (Derja, Standard Arabic, French) | **Never** |
+| Battery, heat, latency on a mobile network | **Never measured** |
+| Hazard accuracy (stairs, kerbs, crossings) | **No labelled set exists** |
 
-### The 10 most important features
-1. **On-device obstacle, person and vehicle warnings** (F23/F24). They work offline, react in about a second, and send nothing anywhere.
-2. **Cloud hazard detection for stairs and floor-level changes** (F25). This is the only source for the most dangerous hazards.
-3. **The safety-language filter and the "not safe" caveats** (F29/F30). Code-level guarantees against false reassurance and invented distances.
-4. **Urgent alert path** (F26, F31, F40): computed urgency, interrupting speech, tones, vibration and the red display.
-5. **Read text** (F10).
-6. **Identify object or product, including labels, expiry dates and dosage** (F11).
-7. **Describe surroundings and automatic narration** (F08/F09).
-8. **Hands-free voice commands in four languages** (F34/F36).
-9. **Emergency page:** call the contact, text the location, Tunisian numbers, with nothing sent without a tap (F50–F53).
-10. **Honest failure reporting** (F32, F60): the user is always told when analysis is down or offline, so they never believe they're being watched over when they aren't.
+**Browser tests prove the software path, not real-world quality.** Fake cameras show synthetic noise, and fake microphones play files. Real light, motion, accents, noise, phone voices and TalkBack can all behave differently.
+
+---
+
+## 7. Limitations
+
+### 7.1 Safety
+
+- **Warnings are not instant.** On-device warnings need 3 sightings, about 1 s. Stairs and drops come only from the cloud, at least 4 s apart plus about 2–3 s of model time, and **not at all with automatic descriptions off** (the default) unless live is on. A fast car can arrive before any warning.
+- **The on-device detector knows 14 common classes only.** No stairs, kerbs, holes, poles, wet floors or glass doors.
+- **"Near" and "far" are judged from the picture.** No distances are ever given.
+- **A person is never urgent** (E04). Untested with mobility trainers.
+- **Live answers are filtered after they start playing** (D05).
+- **Silence never means safe.** This is said in the notice, but the user still has to remember it.
+
+### 7.2 Medicine reader
+
+- Tested only on rendered mock documents, never on real boxes, bottles, blister packs or prescriptions, and never on a phone.
+- Two models must agree and the pixel check must pass. Many readable lines are withheld (round 4: 37 of 116 lines in the worst cases, from one model's boxes).
+- Handwritten doses are always withheld, by design.
+- Images go to Google's free tier. Real prescriptions must not be used in testing (the notice says so).
+- The Derja instruction glossary is off until a pharmacist approves it.
+
+### 7.3 Privacy
+
+- **Camera images go to Google Gemini** (or OpenRouter). On free tiers they may be kept, used to improve products, and seen by human reviewers. Bystanders appear in them. This is disclosed in the consent notice and the README.
+- **Live conversation** streams the microphone and about one picture a second to Google, including the spoken stop words.
+- **Speech recognition** in Chrome goes to Google. The recording fallback goes to Gemini.
+- **The cloud voice** sends each sentence's text, never images, to an unofficial Microsoft endpoint.
+- **Local storage** holds settings, including the emergency contact's name and number in plain text, plus the consent flags.
+- **Logs** hold event names and short codes only. No images, audio, questions, answers or locations.
+- **Location** is requested only when the Emergency page opens, and only goes into a text message the user sends.
+
+### 7.4 Offline
+
+- Already open: on-device warnings, earcons, settings and the Emergency page work. The voice needs an installed device voice. Questions, reading, descriptions, live and voice commands don't work, because recognition is an online service.
+- Not open yet: the app can't be opened offline, since there is no service worker.
+- Nadhra AI provides no offline ability yet beyond the on-device warnings (§4.13).
+
+### 7.5 Smart-glasses roadmap
+
+- **Today:** not supported and untested. The camera input is an interface (`CameraSource` in `cameraSource.ts`, registered in `createCameraSource`), so glasses that stream into a video element can reuse most of `WebcamSource`. A source without a video element turns the on-device detector off.
+- **Offline track** (`docs/OFFLINE_ARCHITECTURE_PROPOSAL.md`, `docs/OFFLINE_PHASE2_REPORT.md`, `docs/NADHRA_AI_PROPOSAL.md`): six phases toward standalone ARM Linux glasses (audit → AI core interfaces → offline engines → routing → portability → benchmarks).
+- **Done:** the audit; provider `locality`/`tasks` and `AI_MODE`; the Nadhra switch and refusals (N1); the engine manifest and launcher (N2); and Step 0, the OCR pair measured as local servers.
+- **Not started:** connecting any real engine (N3, the OCR pair), local speech recognition, a local voice, a local language model, ARM testing, glasses hardware, spatial audio, and a wake word.
+
+---
+
+## 8. Contradictions found (README, manifest, defaults, code, docs)
+
+| # | Where | What it says | What is true | Fixed here? |
+|---|---|---|---|---|
+| 1 | README "Using it" vs `settings.ts` | Derja is the default | The default was **English** (`375db18`) | **Resolved 2026-11-15:** the default is Derja again (`settings.ts`), matching the README and the manifest. Saved choices are kept (`tests/languages.test.ts`). |
+| 2 | `src/app/manifest.ts` | `lang: "ar-TN"`; "answers spoken questions in Tunisian Arabic" | Consistent with the Derja default | Resolved by row 1 (manifest unchanged) |
+| 3 | `layout.tsx` | `<html lang="en" dir="ltr">`, fixed | The `.app` element carries the chosen language's `lang` and `dir`, so the content is read in the right language. The document-level language (page title, anything outside `.app`) stays English whatever is chosen | **Open decision** (needs a small runtime change) |
+| 4 | Comments in `settings.ts` (`language`) and `lang.ts` | "The interface stays in English" | The main screen follows the chosen language; the panels stay English | Corrected (comments only) |
+| 5 | README action table | Buttons for Repeat, Stop talking, Help, Emergency assistance, "Ask by voice", "Start assistance / Stop camera", typed questions and quick-question buttons | Those buttons were removed (§4.14); the main screen has Open camera / Stop assistance and the five actions; Emergency is in Settings | README corrected |
+| 6 | README | "The full list of voice commands is in Settings" | Settings has no list; Help (H, «شنوة نجم نقول؟») speaks it | README corrected |
+| 7 | README Privacy | Consent can be withdrawn "in Settings or Privacy" | Only in Privacy & safety | README corrected |
+| 8 | README Configuration | Missing `GEMINI_SEARCH_API_KEY`, `AI_MODE`, `NADHRA_AI_ENABLED`, `INTERNET_PROBE_URL` | They exist (`.env.example`) | README corrected |
+| 9 | `docs/ARCHITECTURE.md` | Code map lists `src/components/Iris.tsx`; reading is "voice only, no button"; API list has three routes | `Iris.tsx` no longer exists; Read text is a button; there are seven routes | Corrected |
+| 10 | `docs/ANDROID_TESTING.md`, `docs/BETA_TEST_CHECKLIST.md` | "Start assistance", "Stop camera", a header saying "Experimental test version", "Answer so far" and "from a web search" on screen, the voice name in Settings | The buttons are "Open camera" and "Stop assistance"; the other texts are no longer on screen | Corrected 2026-11-15, including checks for the five action buttons |
+| 11 | `hazardTracker.ts` header comment | Tests in a separate tracker test file | That file doesn't exist; tracker tests are in `tests/visionClient.test.ts` | Corrected (comment only) |
+| 12 | Settings vs storage | Text size menu goes to 175 % | Stored values up to 200 % are accepted (`sanitizeVisionSettings`) | No (harmless) |
+
+---
+
+## 9. Accessibility status
+
+**In place:**
+- **Native elements:** `dialog` (focus trap, Esc, focus return), `select`, `role="switch"` checkboxes, buttons named by their visible words, radio buttons for the AI switch.
+- **Focus management:** Open camera has focus on load; Stop assistance gets it when the camera starts; consent focuses "I agree"; the Emergency page focuses its main action.
+- **Essential actions as buttons again** (A03), so Describe, Read, Identify, Ask and Pause no longer depend on voice or keys.
+- **Every state change** is spoken, with a tone and, where possible, a vibration.
+- **Visual accessibility:** text scale up to 175 %, reduced motion, forced colours, 48 px or larger targets. The automated axe scan of the camera screen is clean.
+
+**Gaps:**
+1. **Not tested with TalkBack** or any real screen reader.
+2. **Panels are English only** (Settings, Privacy & safety, Emergency, consent).
+3. **No main-screen buttons** for Emergency, Repeat, Stop talking, Help or voice commands on/off. These are voice, keys, or Settings only.
+4. **The page voice and TalkBack may overlap.** With echo on, sentences are heard twice.
+5. **Audio and vibration need a first tap.**
+6. **The "call" focus move** may not move TalkBack's focus.
+7. **No audio onboarding.**
+8. **The theme doesn't follow the OS,** and there is no high-contrast theme.
+
+---
+
+## 10. Remaining gaps, by priority
+
+1. **Run the Android and TalkBack checklists with blind testers,** after updating them to the current screen (§8 row 10).
+2. **Native-speaker review** of all phrases, commands and safety patterns in Derja, Standard Arabic and French.
+3. **Real-camera reading session** with the printed synthetic kit, before any real medicine box.
+4. **Hazard accuracy and latency** on real streets and mobile networks.
+5. **Document language:** decide whether `<html lang>` should follow the chosen language (§8 row 3).
+6. **Emergency reachable from the main screen** without voice, and spoken location status (I05).
+7. **Localise the panels.**
+8. **Privacy:** a paid tier that doesn't keep images before real users; a replacement for the unofficial Edge voice.
+9. **Offline:** a service worker; then the first real Nadhra engine (N3, OCR pair), only with approval.
+10. **Battery and heat** measured over 30 minutes on a mid-range Android phone.

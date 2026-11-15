@@ -1,5 +1,6 @@
-// The languages the assistant can speak and hear. The interface stays in English; this only decides
-// what the voice says, what the microphone expects, and the language of the model's replies.
+// The languages the assistant can speak and hear: what the voice says, what the microphone expects,
+// the language of the model's replies, and the main screen's words (uiText.ts). The panels (Settings,
+// Privacy & safety, Emergency, consent) stay in English.
 // Pure data, shared by the browser and the server.
 
 export type SpeechLang = "tn" | "ar" | "fr" | "en";
@@ -9,7 +10,7 @@ export const SPEECH_LANGS: readonly SpeechLang[] = ["tn", "ar", "fr", "en"];
 export const isSpeechLang = (v: unknown): v is SpeechLang => typeof v === "string" && (SPEECH_LANGS as readonly string[]).includes(v);
 
 export interface LangInfo {
-  /** For the settings menu (the interface is in English). */
+  /** The language's English name. (The selector on the main screen shows each language's own name, from uiText.ts.) */
   label: string;
   /** For lang="" attributes, so screen readers switch voice. */
   bcp47: string;
@@ -28,6 +29,9 @@ export const LANGS: Record<SpeechLang, LangInfo> = {
   fr: { label: "French", bcp47: "fr", dir: "ltr", recognition: "fr-FR", voices: ["fr-FR", "fr-BE", "fr-CH", "fr-CA", "fr"], or: "ou" },
   en: { label: "English", bcp47: "en", dir: "ltr", recognition: "en-US", voices: ["en-US", "en-GB", "en-AU", "en-CA", "en-IN", "en"], or: "or" },
 };
+
+/** The page's language and direction for a speech language: the `lang` and `dir` of <html>. */
+export const documentLang = (l: SpeechLang): { lang: string; dir: "rtl" | "ltr" } => ({ lang: LANGS[l].bcp47, dir: LANGS[l].dir });
 
 /** Cloud voices for languages other than Tunisian (whose voice the server reads from EDGE_TTS_VOICE). All female. */
 export const CLOUD_VOICES: Record<Exclude<SpeechLang, "tn">, string> = {

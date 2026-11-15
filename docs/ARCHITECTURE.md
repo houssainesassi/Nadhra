@@ -38,7 +38,7 @@ Speaker ◄─ 24 kHz PCM, played as it arrives, flushed on `interrupted` ◄─
 
 The rule above all others: **Nadhra never states an unverified dose or date as fact.** A transcription is not proof, a model's "confirmed" is not proof, and two readings that agree are not proof either.
 
-Voice only, no button: «اقرالي الدوا», «اقرالي الورقة», «lis l'ordonnance», "read the prescription", and «اقرا الكل» / "read all".
+The Read text button on the camera screen, or by voice: «اقرالي الدوا», «اقرالي الورقة», «lis l'ordonnance», "read the prescription", and «اقرا الكل» / "read all".
 
 ```
 voice ── first time only: spoken notice (Google, free tier, no real prescriptions) ── «موافق»
@@ -103,7 +103,7 @@ What `document.ts` enforces (tests: `tests/document.test.ts`, F1–F6 marked):
 | Path | Responsibility |
 |---|---|
 | `src/components/Assistant.tsx` | The only screen |
-| `src/components/Iris.tsx`, `icons.tsx` | The state emblem and line icons |
+| `src/components/icons.tsx` | Line icons |
 | `src/app/globals.css` | Design tokens, controls and all motion |
 | `src/lib/assistant/controller.ts` | Runs everything: camera, frame selection, analysis, speech, voice. No React in it |
 | `src/lib/assistant/cameraSource.ts` | Camera interface and webcam implementation |
@@ -120,7 +120,7 @@ What `document.ts` enforces (tests: `tests/document.test.ts`, F1–F6 marked):
 | `src/lib/ai/vision.ts` | Server only: providers and fallback |
 | `src/lib/speech/` | Voice output: browser voice first, Edge voice as fallback |
 | `src/lib/server/http.ts` | Body limits, same-origin check, rate limiter |
-| `src/app/api/` | `vision`, `vision/transcribe`, `tts` |
+| `src/app/api/` | `vision`, `vision/transcribe`, `tts`, `live/token`, `session`, `report`, `health` |
 
 ## Design rules
 

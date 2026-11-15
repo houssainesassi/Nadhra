@@ -51,11 +51,34 @@ export const MessageIcon = (p: Props) => (
 export const GlobeIcon = (p: Props) => (
   <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" /></Svg>
 );
-/** The brand mark: an iris in a rounded square. */
+// The main-screen actions (the same drawings as before the redesign).
+export const DescribeIcon = (p: Props) => (
+  <Svg {...p}><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="3" /></Svg>
+);
+export const ReadIcon = (p: Props) => (
+  <Svg {...p}><path d="M4 5.5h16" /><path d="M4 10h16" /><path d="M4 14.5h10" /><path d="M4 19h7" /></Svg>
+);
+export const IdentifyIcon = (p: Props) => (
+  <Svg {...p}><path d="M3.5 12.6V4.5a1 1 0 0 1 1-1h8.1a1 1 0 0 1 .7.3l7.4 7.4a1 1 0 0 1 0 1.4l-8.1 8.1a1 1 0 0 1-1.4 0l-7.4-7.4a1 1 0 0 1-.3-.7z" /><circle cx="8.5" cy="8.5" r="1.5" /></Svg>
+);
+export const AskIcon = (p: Props) => (
+  <Svg {...p}><path d="M4 12a8 8 0 1 1 3.3 6.5L4 19.5l1-3.2A8 8 0 0 1 4 12z" /><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 1.8" /><path d="M12 16.2v.01" /></Svg>
+);
+export const PauseIcon = (p: Props) => (
+  <Svg {...p}><path d="M9 5.5v13" /><path d="M15 5.5v13" /></Svg>
+);
+export const PlayIcon = (p: Props) => (
+  <Svg {...p}><path d="M7 5.5v13L17 12z" /></Svg>
+);
+/** The brand mark: an eye whose iris is wired to two circuit nodes, on a white tile. Same drawing as src/app/icon.svg. */
 export const LogoMark = () => (
-  <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="logo shrink-0" aria-hidden="true">
-    <rect width="40" height="40" rx="11" fill="var(--primary)" />
-    <path d="M8 20s4.6-7.5 12-7.5S32 20 32 20s-4.6 7.5-12 7.5S8 20 8 20z" stroke="var(--primary-ink)" strokeWidth="2" strokeLinejoin="round" />
-    <circle cx="20" cy="20" r="4.2" fill="var(--primary-ink)" />
+  <svg width="40" height="40" viewBox="0 0 512 512" fill="none" className="logo shrink-0" aria-hidden="true">
+    <rect width="512" height="512" rx="140" fill="#fff" />
+    <g stroke="#0066d3" strokeWidth="26">
+      <path d="M346.5 165.5A128 128 0 0 0 165.5 165.5L75 256L106.2 287.2M145.8 287.2L216.4 216.4A56 56 0 0 1 310.1 270.5M216.4 216.4A56 56 0 0 0 200 256A56 56 0 0 0 295.6 295.6L366.2 224.8M405.8 224.8L437 256L346.5 346.5A128 128 0 0 1 165.5 346.5" />
+      <circle cx="126" cy="307" r="22.5" strokeWidth="21" />
+      <circle cx="386" cy="205" r="22.5" strokeWidth="21" />
+    </g>
+    <path fill="#0066d3" fillRule="evenodd" d="M230 256a26 26 0 1 0 52 0a26 26 0 1 0-52 0zM260 248a9 9 0 1 0 18 0a9 9 0 1 0-18 0z" />
   </svg>
 );

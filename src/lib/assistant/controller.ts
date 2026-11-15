@@ -106,6 +106,9 @@ export interface VisionState {
   /** A camera error code ("denied", "lost", …), or "". */
   cameraError: string;
   analysis: AnalysisState;
+  /** Descriptions are paused by the user (the on-device warnings keep running). Stays true while a
+   *  question asked during the pause is answered, unlike `analysis`. */
+  paused: boolean;
   mic: MicState;
   assistantOn: boolean;
   speaking: boolean;
@@ -168,6 +171,7 @@ const INITIAL: VisionState = {
   camera: "off",
   cameraError: "",
   analysis: "off",
+  paused: false,
   mic: "off",
   assistantOn: false,
   speaking: false,
@@ -557,7 +561,7 @@ export class SmartVisionController {
     this.source = source;
     this.paused = false;
     this.resetAnalysisState();
-    this.patch({ camera: "on", analysis: this.idleAnalysis(), facing: this.resolveFacing(), canSwitchCamera: false });
+    this.patch({ camera: "on", analysis: this.idleAnalysis(), paused: false, facing: this.resolveFacing(), canSwitchCamera: false });
     this.feedback("on");
     if (!quiet) this.say(this.t.cameraOn, "status");
     // Nadhra AI: once per visit, what works (on-device warnings only) and that nothing is sent.
@@ -799,7 +803,7 @@ export class SmartVisionController {
     this.scanCtrl?.abort();
     // Only the descriptions and cloud analysis stop. The on-device warnings keep running: a pause
     // must never silently turn the safety layer off, and the user is told which one is still on.
-    this.patch({ analysis: "paused" });
+    this.patch({ analysis: "paused", paused: true });
     this.feedback("off");
     this.say(this.state.detector === "ready" || this.state.detector === "loading" ? this.t.paused : this.t.pausedNoWarnings, "status");
   }
@@ -810,7 +814,7 @@ export class SmartVisionController {
     this.paused = false;
     this.lastScanAt = -Infinity; // describe the scene right away
     this.backoffUntil = 0;
-    this.patch({ analysis: this.idleAnalysis() });
+    this.patch({ analysis: this.idleAnalysis(), paused: false });
     this.feedback("on");
     this.say(this.nadhra ? this.t.nadhra.cameraNotice : this.state.settings.autoDescribe ? this.t.resumed : this.t.autoOffHint, "status");
   }
@@ -1523,7 +1527,7 @@ export class SmartVisionController {
 
   /** The location is only put into the message on this device. It is never sent to our server. */
   private locate() {
-    if (!("geolocation" in navigator)) return this.patch({ location: { status: "failed" } });
+    if (!("geolocation" in navigator)) return this.locationFailed();
     const watch = ++this.locationWatch;
     this.patch({ location: { status: "pending" } });
     navigator.geolocation.getCurrentPosition(
@@ -1533,10 +1537,21 @@ export class SmartVisionController {
       },
       () => {
         if (watch !== this.locationWatch) return;
-        this.patch({ location: { status: "failed" } });
+        this.locationFailed();
       },
       { enableHighAccuracy: true, timeout: LOCATION_TIMEOUT_MS, maximumAge: 60_000 },
     );
+  }
+
+  /**
+   * No location (refused, unavailable, timed out, or not supported). The screen shows it; it is also
+   * said, so a user who relies on the voice knows the message won't carry it. Only while the page is
+   * open with a contact to message, and at status priority: it waits for the opening sentence and
+   * never cuts it. Nothing is sent or opened: the message is still the user's own tap.
+   */
+  private locationFailed() {
+    this.patch({ location: { status: "failed" } });
+    if (this.state.sheet === "emergency" && this.state.settings.emergencyPhone) this.say(this.t.noLocation, "status");
   }
 
   private stopLocation() {
@@ -1645,12 +1660,21 @@ export class SmartVisionController {
       this.liveAudio?.flush();
       return;
     }
-    if (this.listening) {
+    // A question being recorded by Ask: pressing again sends it.
+    if (this.listening && (this.pushToTalkOpen || !this.state.assistantOn)) {
       this.voiceInput?.finish();
       return;
     }
     this.queue?.stop();
-    if (this.state.assistantOn) return;
+    if (this.state.assistantOn) {
+      // Hands-free: the microphone is open, or opens as soon as the voice stops. A button press must
+      // still be answered, so a screen-reader user knows to speak: the listening tone, and while the
+      // microphone isn't open yet, "I'm listening" (the loop only listens once it has been said, so
+      // the sentence is never taken for a question).
+      this.feedback("listen");
+      if (!this.listening) this.say(this.t.listening, "status");
+      return;
+    }
     await this.listenOnce(true);
   }
 

@@ -116,7 +116,7 @@ const TN = {
   limit: "هذا آخر حد.",
   notSafe: "هذا ما يعنيش إلي الطريق آمن.",
   locating: "نلوّج على بلاصتك.",
-  noLocation: "ما نجمتش نعرف بلاصتك. باش نحلّك الميساج من غير بلاصة.",
+  noLocation: "ما نجمتش نعرف بلاصتك. الميساج باش يقلّو يعيّطلك.",
   smsReady: "حلّيتلك الميساج. اضغط على زر البعث.",
   languageSet: "باهي، توّة نحكي بالتونسي.",
   doc: {
@@ -263,7 +263,7 @@ const AR: Phrases = {
   limit: "هذا هو الحد الأقصى.",
   notSafe: "هذا لا يعني أن الطريق آمن.",
   locating: "أبحث عن موقعك.",
-  noLocation: "لم أستطع تحديد موقعك. سأفتح الرسالة بدون موقع.",
+  noLocation: "لم أستطع تحديد موقعك. ستطلب منه الرسالة أن يتصل بك.",
   smsReady: "فتحت لك الرسالة. اضغط زر الإرسال.",
   languageSet: "حسنًا، سأتحدّث الآن بالعربية الفصحى.",
   doc: {
@@ -408,7 +408,7 @@ const FR: Phrases = {
   limit: "C'est la limite.",
   notSafe: "Cela ne veut pas dire que le chemin est sans risque.",
   locating: "Je cherche votre position.",
-  noLocation: "Je n'ai pas pu trouver votre position. J'ouvre le message sans position.",
+  noLocation: "Je n'ai pas pu trouver votre position. Le message lui demandera de vous appeler.",
   smsReady: "Le message est prêt. Appuyez sur envoyer.",
   languageSet: "D'accord, je parle maintenant en français.",
   doc: {
@@ -553,7 +553,7 @@ const EN: Phrases = {
   limit: "That's the limit.",
   notSafe: "That doesn't mean the way is safe.",
   locating: "Finding your location.",
-  noLocation: "I couldn't find your location. I'll open the message without it.",
+  noLocation: "I couldn't find your location. The message will ask them to call you.",
   smsReady: "The message is ready. Press send.",
   languageSet: "Okay, I'll speak English now.",
   doc: {

@@ -1,5 +1,5 @@
 // Assistant settings, kept per device in localStorage and validated on load.
-import { isSpeechLang, type SpeechLang } from "./lang.ts";
+import { documentLang, isSpeechLang, SPEECH_LANGS, type SpeechLang } from "./lang.ts";
 
 export type AiProvider = "gemini" | "nadhra";
 
@@ -19,7 +19,7 @@ export interface VisionSettings {
   autoDescribe: boolean;
   /** Also send every sentence to the screen reader (off by default, as it would double the voice). */
   screenReaderEcho: boolean;
-  /** The language the assistant speaks and listens for. The interface stays in English. */
+  /** The language the assistant speaks and listens for. The main screen follows it; the panels (Settings, Privacy & safety, Emergency, consent) stay in English. */
   language: SpeechLang;
   /** Vibrate on events and warnings, where the device can. */
   vibration: boolean;
@@ -42,7 +42,9 @@ export const DEFAULT_VISION_SETTINGS: VisionSettings = {
   facing: "auto",
   autoDescribe: false,
   screenReaderEcho: false,
-  language: "en",
+  // Tunisian Arabic. Applies only when nothing valid is saved: a saved choice is always kept
+  // (sanitizeVisionSettings), so changing this never switches an existing user's language.
+  language: "tn",
   vibration: true,
   textScale: 1,
   emergencyName: "",
@@ -90,6 +92,18 @@ export const CONSENT_KEY = "assistant.consent.v3";
 export const READ_CONSENT_KEY = "assistant.readConsent.v1";
 /** The spoken notice about the live conversation (voice and a picture a second to Google) was accepted. */
 export const LIVE_CONSENT_KEY = "assistant.liveConsent.v1";
+
+/**
+ * A script for the page's <head> (layout.tsx). Before the first paint, it sets <html lang> and
+ * <html dir> from the saved language, or the default when none is valid, the same rule as
+ * sanitizeVisionSettings. It only reads storage, never writes it. Built from LANGS, so the two
+ * can't drift apart. The screen keeps them in step afterwards (Assistant.tsx).
+ */
+export function documentLangScript(): string {
+  const map = Object.fromEntries(SPEECH_LANGS.map((l) => [l, documentLang(l)]));
+  const fallback = documentLang(DEFAULT_VISION_SETTINGS.language);
+  return `(function(){var m=${JSON.stringify(map)},v=${JSON.stringify(fallback)};try{var l=JSON.parse(localStorage.getItem(${JSON.stringify(SETTINGS_KEY)})||"{}").language;if(typeof l==="string"&&Object.prototype.hasOwnProperty.call(m,l))v=m[l]}catch(e){}var d=document.documentElement;d.lang=v.lang;d.dir=v.dir})()`;
+}
 
 export function loadVisionSettings(): VisionSettings {
   try {
