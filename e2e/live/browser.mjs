@@ -81,7 +81,7 @@ const browser = await chromium.launch({
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "ar-TN", permissions: ["camera", "microphone"] });
 // Test-only instrumentation: watch the live WebSocket from inside the page (the app is unchanged).
 await ctx.addInitScript(() => {
-  localStorage.setItem("assistant.consent.v2", "1");
+  localStorage.setItem("assistant.consent.v3", "1");
   const W = window.WebSocket;
   window.__live = { ev: [], sent: { audio: 0, video: 0, text: 0, setup: 0 }, micOpenAt: 0 };
   const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);

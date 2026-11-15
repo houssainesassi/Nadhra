@@ -38,6 +38,7 @@ export const CLIENT_EVENTS = new Set([
   "live-safety-claim",
   "live-medical",
   "consent-withdrawn",
+  "live-session",
 ]);
 
 /** For tests. */

@@ -12,6 +12,7 @@ import { LIVE_INPUT_RATE } from "./config.ts";
 import { apiFetch, isLocalOnly } from "../assistant/api.ts";
 import type { SpeechLang } from "../assistant/lang.ts";
 import type { CameraFacing } from "../assistant/types.ts";
+import type { LivePricing, UsageMetadata } from "./metrics.ts";
 
 export type LiveStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "failed";
 
@@ -31,6 +32,8 @@ export interface LiveEvents {
   userSpeechStart?(): void;
   /** Time from the end of the user's speech to the first audio of the answer. */
   latency?(ms: number): void;
+  /** Token counts for a model turn, as Gemini reports them. */
+  usage?(u: UsageMetadata): void;
 }
 
 interface TokenResponse {
@@ -40,6 +43,7 @@ interface TokenResponse {
   model: string;
   voice: string;
   lastModel: boolean;
+  pricing?: LivePricing | null;
 }
 
 export interface LiveSessionOptions {
@@ -74,6 +78,8 @@ export class LiveSession {
   status: LiveStatus = "idle";
   model = "";
   voice = "";
+  /** Prices from the server's configuration, for the cost estimate. Null: not configured. */
+  pricing: LivePricing | null = null;
   private ws: WebSocket | null = null;
   private handle: string | undefined;
   private modelIndex = 0;
@@ -168,11 +174,16 @@ export class LiveSession {
     return true;
   }
 
-  /** A typed question or a quick-question button. */
-  sendText(text: string) {
+  /**
+   * A typed question or a quick-question button. `measure: false` for the app's own cues (speaking
+   * first): their answers aren't the user's waiting time.
+   */
+  sendText(text: string, opts: { measure?: boolean } = {}) {
     if (!this.isOpen) return false;
-    this.speechEndAt = this.opts.now();
-    this.awaitingFirstAudio = true;
+    if (opts.measure !== false) {
+      this.speechEndAt = this.opts.now();
+      this.awaitingFirstAudio = true;
+    }
     this.send({ realtimeInput: { text } });
     return true;
   }
@@ -284,6 +295,7 @@ export class LiveSession {
             clearTimeout(setupTimer);
             this.model = tok.model;
             this.voice = tok.voice;
+            this.pricing = tok.pricing ?? null;
             this.reconnects = 0;
             this.setStatus("open");
             this.flushPendingAudio();
@@ -342,6 +354,7 @@ export class LiveSession {
     }
     // Our own detector usually saw the end of this speech first, and earlier: the server's is the fallback.
     if (m.voiceActivity?.type === "ACTIVITY_END" && this.speechEndAt < this.activityStartAt) this.markSpeechEnd();
+    if (m.usageMetadata) this.events.usage?.(m.usageMetadata);
     const sc = m.serverContent;
     if (!sc) return;
     if (sc.interrupted) {
@@ -366,6 +379,7 @@ export class LiveSession {
 interface ServerMessage {
   setupComplete?: unknown;
   goAway?: { timeLeft?: string };
+  usageMetadata?: UsageMetadata;
   sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
   voiceActivity?: { type?: string };
   serverContent?: {

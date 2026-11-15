@@ -105,7 +105,8 @@ export type ReportEvent =
   | "warning-expired"
   | "live-safety-claim"
   | "live-medical"
-  | "consent-withdrawn";
+  | "consent-withdrawn"
+  | "live-session";
 
 const queue: { e: ReportEvent; c: string }[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;

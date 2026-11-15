@@ -90,7 +90,7 @@ What `document.ts` enforces (tests: `tests/document.test.ts`, F1–F6 marked):
 - **Its own spoken consent**, after the camera's: voice and about one picture a second go to Google Gemini for as long as it runs; what the free service may do; no personal papers; how to stop. Nothing is sent until «موافق» ("I agree") or a second press of the button, which then reads "I agree: start the live conversation". «رجّع» ("go back") cancels. Withdrawing consent forgets it.
 - **While it runs:** "voice and pictures are going to Google now" at the start, a reminder every 5 minutes, and "nothing more is being sent" at the end.
 - **Stopping:**
-  - **On the phone, sending nothing:** the "Stop assistance" button on the main screen, or "End live conversation" in Settings.
+  - **On the phone, sending nothing:** the "Stop assistance" button, or the Talk live button, which reads "End live conversation" while it runs. Both are on the main screen.
   - **By voice:** «وقّف المحادثة», «وقّف الإرسال», "stop live", "stop sending" (and "stop listening", "close the camera") are matched on every partial transcript of the user's words, so sending stops as soon as the phrase is recognised. That transcript comes from Gemini Live, so the stop words reach Google; the notice and the Settings hint say so.
   - An on-device stop word is a separate future task.
 

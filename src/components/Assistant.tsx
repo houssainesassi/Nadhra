@@ -16,6 +16,7 @@ import { cameraErrorText } from "@/lib/assistant/phrases";
 import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiProvider, type FacingSetting } from "@/lib/assistant/settings";
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
+import type { DeviceTotals, LiveSummary } from "@/lib/live/metrics";
 import { AskIcon, CameraIcon, CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, DescribeIcon, GlobeIcon, IdentifyIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PauseIcon, PhoneIcon, PlayIcon, ReadIcon, SettingsIcon, ShieldIcon } from "./icons";
 
 /** Tunisia's emergency numbers. */
@@ -452,6 +453,8 @@ export default function Assistant() {
                 {s.live.framesSent > 0 && <> · {s.live.framesSent} frames sent</>}
               </p>
             )}
+            <Toggle testId="live-proactive" label="Speak first when something important appears" hint="In a live conversation, when the view changes and you are silent, Nadhra looks again and says one short sentence about a possible hazard, a door or a sign, or stays quiet. It never promises the way is clear." checked={s.settings.liveProactive} onChange={(v) => controller.updateSettings({ liveProactive: v })} />
+            {s.liveStats && <LiveStats stats={s.liveStats} totals={s.liveTotals} running={liveOn} />}
             {liveOn && s.live.ai && (
               <p className="text-base text-ink-2">Nadhra: <span dir="auto" lang={lang.bcp47} data-testid="live-ai" className={rtl ? "arabic" : ""}>{s.live.ai.trim()}</span></p>
             )}
@@ -689,5 +692,48 @@ function PrivacyText({ providers }: { providers: string }) {
         <li key={line} className="border-b border-hairline py-3 last:border-0">{line}</li>
       ))}
     </ul>
+  );
+}
+
+const secs = (ms: number | null) => (ms == null ? "—" : `${(ms / 1000).toFixed(2)} s`);
+const money = (v: number, cur: string) => `${v < 1 ? v.toFixed(4) : v.toFixed(2)} ${cur}`;
+const n = (v: number) => v.toLocaleString("en");
+const INCOMPLETE = "Cost unavailable – incomplete usage data";
+
+/** The estimate, or why there is none. A partial sum is never shown as the cost. */
+function costText(m: LiveSummary): string {
+  if (m.costStatus === "ok" && m.cost != null) return `${money(m.cost, m.currency)} (estimate from the configured prices; not a bill)`;
+  if (m.costStatus === "incomplete") return `${INCOMPLETE} (${n(m.unpricedTokens)} tokens have no price)`;
+  return "No prices configured";
+}
+
+/** Measurements of the live conversation (current or last) and of all of them on this device. */
+function LiveStats({ stats: m, totals, running }: { stats: LiveSummary; totals: DeviceTotals | null; running: boolean }) {
+  const min = m.durationMs / 60_000;
+  const skipped = m.framesSkipped.blurry + m.framesSkipped.unchanged + m.framesSkipped["too-soon"];
+  const i = m.tokens.input;
+  const o = m.tokens.output;
+  return (
+    <details className="text-base text-ink-2" data-testid="live-stats">
+      <summary>{running ? "Measurements of this live conversation" : "Measurements of the last live conversation"}</summary>
+      <h5 className="mt-2 font-medium">Measured</h5>
+      <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <dt>Connected in</dt><dd>{secs(m.connectMs)}</dd>
+        <dt>First answer</dt><dd>{secs(m.firstAnswerMs)}</dd>
+        <dt>Answer delay</dt><dd>{m.answers ? `median ${secs(m.latencyMedianMs)}, 90% under ${secs(m.latencyP90Ms)} (${m.answers} answers)` : "—"}</dd>
+        <dt>Duration</dt><dd>{min.toFixed(1)} min</dd>
+        <dt>Pictures</dt><dd>{m.framesSent} sent ({m.framesPerMinute.toFixed(1)} a minute), {skipped} skipped ({m.framesSkipped.blurry} blurry)</dd>
+        <dt>Audio</dt><dd>{m.audioSentS.toFixed(0)} s sent, {m.audioReceivedS.toFixed(0)} s of answers</dd>
+        <dt>Reconnections</dt><dd>{m.reconnects}</dd>
+        <dt>Spoke first</dt><dd>{m.proactiveSpoken} of {m.proactiveCues} checks</dd>
+        <dt>Tokens</dt>
+        <dd data-testid="live-tokens">{m.tokens.total ? <>{n(m.tokens.total)} in {m.tokens.turns} turns. In: {n(i.audio)} audio, {n(i.image)} image, {n(i.text)} text{i.other ? `, ${n(i.other)} not broken down by type` : ""}. Out: {n(o.audio)} audio{o.text ? `, ${n(o.text)} text` : ""}{o.other ? `, ${n(o.other)} not broken down by type` : ""}.</> : "not reported yet"}</dd>
+      </dl>
+      <h5 className="mt-3 font-medium">Estimated cost</h5>
+      <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <dt>This conversation</dt><dd data-testid="live-cost">{costText(m)}</dd>
+        {totals && <><dt>On this device</dt><dd data-testid="live-cost-total">{totals.sessions} conversations, {(totals.durationMs / 60_000).toFixed(0)} min, {n(totals.tokens)} tokens measured; {m.costStatus === "no-prices" ? "No prices configured" : totals.unpriced ? `${INCOMPLETE} (${totals.unpriced} of ${totals.sessions} conversations have no complete estimate)` : money(totals.cost, m.currency)}</dd></>}
+      </dl>
+    </details>
   );
 }

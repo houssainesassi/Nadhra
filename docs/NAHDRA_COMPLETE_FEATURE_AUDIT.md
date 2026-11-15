@@ -23,7 +23,7 @@ It has three layers:
 
 **Verdict:** not ready for unsupervised use. The safety rules are strong and enforced in code, and the automated tests are broad. But nothing has run on a real phone or with the people it is for.
 
-**Count:** 105 features. 48 are implemented and tested in software, 35 are implemented but not tested on real devices, 9 are experimental, and 13 are unavailable or not implemented (§5).
+**Count:** 105 features. 49 are implemented and tested in software, 35 are implemented but not tested on real devices, 9 are experimental, and 12 are unavailable or not implemented (§5).
 
 ---
 
@@ -78,7 +78,7 @@ Next.js server (Node runtime)
 
 | ID | Feature | Where | Status | Notes |
 |---|---|---|---|---|
-| A01 | **Open camera**: one press runs the consent check, then the camera, the on-device detector and hands-free voice commands | `Assistant.tsx`, `controller.startAssistance` | ND | Focus starts here. Chromium: focus, consent-first and layout checks pass. |
+| A01 | **Open camera**: one press runs the consent check, then the camera, the on-device detector and hands-free voice commands | `Assistant.tsx`, `controller.startAssistance` | ND | Focus starts here; Talk live is the next button (D01). Chromium: focus, consent-first and layout checks pass. |
 | A02 | **Camera screen**: preview, state pill, microphone pill, notices (offline, detector failed, service down), caption with "Heard «…»" | `Assistant.tsx` | TS | Text over the video sits on solid plates. |
 | A03 | **Five action buttons (restored 2026-11-15)**: Describe surroundings, Read text, Identify object, Ask a question, Pause/Resume descriptions | `Assistant.tsx` (`.actions`), `uiText.ts` (`actions`), `icons.tsx`, `globals.css`; same controller calls as the voice commands and keys | ND | See below. |
 | A04 | **Stop assistance** (camera, voice commands and live conversation off; focus returns to Open camera) | `controller.stopAssistance` | TS | Chromium: every camera track ends. |
@@ -211,7 +211,8 @@ The rule above all others: an unverified dose or date is never stated as fact.
 | Area | English | Derja | Standard Arabic | French |
 |---|---|---|---|---|
 | Spoken phrases (140 keys) | ✓ | ✓ | ✓ | ✓ |
-| Main-screen text (39 keys, including the 5 actions) | ✓ | ✓ | ✓ | ✓ |
+| Main-screen text (43 keys, including the 5 actions and Talk live) | ✓ | ✓ | ✓ | ✓ |
+| Page language (`<html lang>`/`dir`) | `en` LTR | `ar-TN` RTL | `ar` RTL | `fr` LTR |
 | Settings, Privacy & safety, Emergency, consent dialog | ✓ | English | English | English |
 | Model prompts (scan, question, read, live) | ✓ | ✓ | ✓ | ✓ |
 | Voice commands (examples parse) | 20/20 | 20/20 | 20/20 | 20/20 |
@@ -222,7 +223,8 @@ The rule above all others: an unverified dose or date is never stated as fact.
 
 - **Default:** Tunisian Derja (`DEFAULT_VISION_SETTINGS.language = "tn"`). It was English from commit `375db18` (2026-11-14) until 2026-11-15. The default applies only when no valid language is saved: a saved choice is always kept, and any user who changed any setting has their language saved. A first visit is first drawn in the default language and switches to a saved one when the page loads its settings.
 - **Switching:** the selector, Settings, or a voice command ("Speak French", «احكي بالتونسي»). Commands are understood in all four languages whatever the setting.
-- **Phrase parity:** the 140 phrase keys and 39 screen-text keys match in all four languages. This was checked by script on 2026-11-15, and the TypeScript types enforce it.
+- **Page language:** `<html lang>` and `dir` follow the chosen language. They are set before the first paint from the saved language (`settings.ts`, `documentLangScript`, run in `layout.tsx`), and kept in step without a reload (`Assistant.tsx`). Since 2026-11-15; browser-tested, with no hydration warnings in development mode.
+- **Phrase parity:** the 140 phrase keys and 43 screen-text keys match in all four languages. This was checked by script on 2026-11-15, and the TypeScript types enforce it.
 
 ### 4.9 Emergency
 
@@ -232,7 +234,7 @@ The rule above all others: an unverified dose or date is never stated as fact.
 | I02 | **Call the contact** (`tel:`); saying "call" focuses the call button, ready for one double-tap | `controller.requestCall` | ND | Programmatic focus may not move TalkBack's focus. Untested. |
 | I03 | **Text my location** (`sms:` with a map link; one location fix, kept on the device) | `controller.emergencyMessage` | ND | Nothing is sent without the user's tap in their own app. |
 | I04 | **Tunisian numbers** SAMU 190, police 197, civil protection 198 | `Assistant.tsx` (`EMERGENCY_NUMBERS`) | ND | English labels. |
-| I05 | **Location status spoken** | `phrases.ts` (`locating`, `noLocation`) | NA | The phrases exist in all four languages but are never used. The status is shown as text in a `role="status"` paragraph only. |
+| I05 | **No location, spoken**: when the lookup fails, is refused or isn't supported, while the page is open and a contact is saved, "I couldn't find your location. The message will ask them to call you." is said after the opening sentence, at status priority | `controller.ts` (`locationFailed`), `phrases.ts` (`noLocation`) | TS | Since 2026-11-15. 7 unit tests (success, failure, refused, unsupported, no contact, page closed first, wording in 4 languages) and a Chromium check with location refused. Nothing is sent or opened. A found location isn't spoken; the screen shows it. The Derja and Standard Arabic wording is unreviewed. |
 
 ### 4.10 Settings and storage
 
@@ -294,37 +296,29 @@ Each feature row above is counted once, by its status column.
 
 | Class | Count | Features |
 |---|---|---|
-| **TS** Implemented and tested in software | **48** | A02, A04–A11, B06–B08, B11, B16, C02–C04, C07, D02, D04, D07, D09, E04–E08, E10–E12, F02, G01, G04, G05, G07, G09, J01, J02, K01, K05, L01–L03, L05–L07, M01, M02 |
+| **TS** Implemented and tested in software | **49** | A02, A04–A11, B06–B08, B11, B16, C02–C04, C07, D02, D04, D07, D09, E04–E08, E10–E12, F02, G01, G04, G05, G07, G09, I05, J01, J02, K01, K05, L01–L03, L05–L07, M01, M02 |
 | **ND** Implemented, not tested on real devices | **35** | A01, A03, A12, B01–B05, B10, B12–B15, C05, C06, C08, D01, D03, D06, D08, E01, E09, F01, F03, F06, G02, G06, G08, I01–I04, K03, K04, L04 |
 | **EX** Experimental | **9** | B09 (web search), B17 (two-frame motion), C01 (document reading), D05 (live answers filtered after the fact), E02 (tracker), E03 (cloud hazards), F04 (recording fallback), F05 (dead-service detection), G03 (unofficial Edge voice) |
-| **NA** Unavailable or not implemented | **13** | C09, C10, I05, K02, M03–M06, N01–N05 |
+| **NA** Unavailable or not implemented | **12** | C09, C10, K02, M03–M06, N01–N05 |
 | **Total** | **105** | |
 
 "TS" never means tested on a device or with users (§6.4). Some TS features also have language-quality caveats that tests can't settle: the safety patterns (E07) and the live voice's accent (D04) are unreviewed by native speakers.
-
----|---|---|
-| **TS** Implemented and tested in software | **33** | A02, A04–A11, B06–B08, B11, B16, C02–C04, C07, D02, D04, D07, D09, E04–E08, E10–E12, F02, G01, G04, G05, G07, G09, J01, J02, K01, K05, L01–L03, L05–L07, M01, M02 |
-| **ND** Implemented, not tested on real devices | **33** | A01, A03, A12, B01–B05, B10, B12–B15, C05, C06, C08, D01, D03, D06, D08, E01, E09, F01, F03, F06, G02, G06, G08, I01–I04, K03, K04, L04 |
-| **EX** Experimental | **13** | B09, B17, C01, D05, E02, E03, F04, F05, G03, and the cloud-hazard dependence of D06 is counted under E03. Also: A06's Nadhra side (counted in M01), web search (B09) |
-| **NA** Unavailable or not implemented | **13** | C09, C10, I05, K02, M03, M04, M05, M06, N01–N05 |
-| **Total** | **92** | |
-
-(EX lists 9 IDs: B09, B17, C01, D05, E02, E03, F04, F05, G03. The remaining 4 experimental features are the language-quality items that cut across rows: Derja voice on non-Tunisian voices (G02), the live Derja accent (D04), the unreviewed safety patterns (E07) and the unmeasured image-quality thresholds (B12). They are also counted in their rows, so the row total is 79 plus these 13 cross-cutting entries.)
 
 ---
 
 ## 6. Test results
 
-### 6.1 Run on 2026-11-15 (this audit)
+### 6.1 Run on 2026-11-15 (final integrated state: commit `7bab38e`)
 
 | Suite | What it is | Result |
 |---|---|---|
-| `npm test` (26 files in `tests/`) | Node unit and integration tests: no network, no keys | **423/423** after the default-language change (422/422 before it). One launcher test (`tests/engines.test.ts`, "crash: an engine that exits by itself…") failed once under full-suite load, then passed 3/3 alone and in the full rerun. It is timing-sensitive. |
+| `npm test` (26 files in `tests/`) | Node unit and integration tests: no network, no keys | **434/434.** Earlier the same day, one launcher test (`tests/engines.test.ts`, "crash: an engine that exits by itself…") failed once under full-suite load, then passed on reruns. It is timing-sensitive. |
 | `npx tsc --noEmit` | TypeScript | **No errors** |
 | `npm run build` | Production build | **Succeeds** |
-| `e2e/redesign.mjs` (with `AXE`) | Chromium, fake camera, `/api/vision` and `/api/tts` mocked in the browser | **76/76, twice** (and again twice after the default-language change), including the new action-button checks and axe (WCAG 2 A/AA + best practice, camera screen) with no violations |
-| `e2e/nadhra/run.mjs` | Chromium against three `next start` servers, every outgoing server connection blocked and logged | **75/75** (and again after the default-language change) |
-| Default-language check (one-off script, not in the repo) | Chromium, production build: a first visit with nothing saved opens in Derja (right to left); a saved English or French choice is kept; loading writes nothing to storage | **3/3** |
+| `e2e/redesign.mjs` (with `AXE`) | Chromium, fake camera, `/api/vision`, `/api/tts` and `/api/live/token` mocked in the browser | **106/106, twice**: the action buttons, Talk live on the main screen, `<html lang>`/`dir` before and after React runs, no console errors, and axe (WCAG 2 A/AA + best practice) on the English and Derja camera screens with no violations |
+| `e2e/nadhra/run.mjs` | Chromium against three `next start` servers, every outgoing server connection blocked and logged | **75/75** |
+| Integrated scenario (one-off script, not in the repo) | One Chromium session, same mocks, location refused: Derja at rest → actions → Describe → switch to French (no reload) → Pause/Resume → Emergency page → Talk live notice and start → Stop → reload | **22/23.** All functional checks pass, including «no location» spoken in French after the opening sentence. The one failure is axe `scrollable-region-focusable` on `.caption-box`, with a long French notice in it (§9 gap 9). |
+| Development-mode hydration check (one-off) | React development build, nothing saved / English / French saved | **0 hydration warnings** |
 
 ### 6.2 Recorded earlier (not re-run here)
 
@@ -408,7 +402,7 @@ Each feature row above is counted once, by its status column.
 |---|---|---|---|---|
 | 1 | README "Using it" vs `settings.ts` | Derja is the default | The default was **English** (`375db18`) | **Resolved 2026-11-15:** the default is Derja again (`settings.ts`), matching the README and the manifest. Saved choices are kept (`tests/languages.test.ts`). |
 | 2 | `src/app/manifest.ts` | `lang: "ar-TN"`; "answers spoken questions in Tunisian Arabic" | Consistent with the Derja default | Resolved by row 1 (manifest unchanged) |
-| 3 | `layout.tsx` | `<html lang="en" dir="ltr">`, fixed | The `.app` element carries the chosen language's `lang` and `dir`, so the content is read in the right language. The document-level language (page title, anything outside `.app`) stays English whatever is chosen | **Open decision** (needs a small runtime change) |
+| 3 | `layout.tsx` | `<html lang="en" dir="ltr">`, fixed | The document-level language stayed English whatever was chosen | **Resolved 2026-11-15:** `<html lang>`/`dir` follow the chosen language (§4.8) |
 | 4 | Comments in `settings.ts` (`language`) and `lang.ts` | "The interface stays in English" | The main screen follows the chosen language; the panels stay English | Corrected (comments only) |
 | 5 | README action table | Buttons for Repeat, Stop talking, Help, Emergency assistance, "Ask by voice", "Start assistance / Stop camera", typed questions and quick-question buttons | Those buttons were removed (§4.14); the main screen has Open camera / Stop assistance and the five actions; Emergency is in Settings | README corrected |
 | 6 | README | "The full list of voice commands is in Settings" | Settings has no list; Help (H, «شنوة نجم نقول؟») speaks it | README corrected |
@@ -418,6 +412,7 @@ Each feature row above is counted once, by its status column.
 | 10 | `docs/ANDROID_TESTING.md`, `docs/BETA_TEST_CHECKLIST.md` | "Start assistance", "Stop camera", a header saying "Experimental test version", "Answer so far" and "from a web search" on screen, the voice name in Settings | The buttons are "Open camera" and "Stop assistance"; the other texts are no longer on screen | Corrected 2026-11-15, including checks for the five action buttons |
 | 11 | `hazardTracker.ts` header comment | Tests in a separate tracker test file | That file doesn't exist; tracker tests are in `tests/visionClient.test.ts` | Corrected (comment only) |
 | 12 | Settings vs storage | Text size menu goes to 175 % | Stored values up to 200 % are accepted (`sanitizeVisionSettings`) | No (harmless) |
+| 13 | README action tables | "Live conversation" listed under "These have no button on the main screen", although its row said "Main screen: Talk live" | Talk live has been a main-screen button since 2026-11-15 | Corrected: moved to the main-screen table |
 
 ---
 
@@ -433,12 +428,13 @@ Each feature row above is counted once, by its status column.
 **Gaps:**
 1. **Not tested with TalkBack** or any real screen reader.
 2. **Panels are English only** (Settings, Privacy & safety, Emergency, consent).
-3. **No main-screen buttons** for Emergency, Repeat, Stop talking, Help or voice commands on/off. These are voice, keys, or Settings only.
+3. **No main-screen buttons** for Emergency, Repeat, Stop talking, Help or voice commands on/off. These are voice, keys, or Settings only. (Talk live has its own main-screen button since 2026-11-15; browser-tested only.)
 4. **The page voice and TalkBack may overlap.** With echo on, sentences are heard twice.
 5. **Audio and vibration need a first tap.**
 6. **The "call" focus move** may not move TalkBack's focus.
 7. **No audio onboarding.**
 8. **The theme doesn't follow the OS,** and there is no high-contrast theme.
+9. **The caption box can't be reached by keyboard when it scrolls.** A long sentence (for example the live-conversation notice in French) makes `.caption-box` scroll, but it has no `tabindex`. axe reports `scrollable-region-focusable` (found 2026-11-15 in an integrated check). It dates from the redesign of 12 Nov. Screen readers still read the text; keyboard-only users can't scroll it. Not fixed.
 
 ---
 
@@ -448,7 +444,7 @@ Each feature row above is counted once, by its status column.
 2. **Native-speaker review** of all phrases, commands and safety patterns in Derja, Standard Arabic and French.
 3. **Real-camera reading session** with the printed synthetic kit, before any real medicine box.
 4. **Hazard accuracy and latency** on real streets and mobile networks.
-5. **Document language:** decide whether `<html lang>` should follow the chosen language (§8 row 3).
+5. **Scrolling caption reachable by keyboard:** the box with what the assistant said (`.caption-box`) scrolls when the text is long but can't be focused (§9 gap 9).
 6. **Emergency reachable from the main screen** without voice, and spoken location status (I05).
 7. **Localise the panels.**
 8. **Privacy:** a paid tier that doesn't keep images before real users; a replacement for the unofficial Edge voice.

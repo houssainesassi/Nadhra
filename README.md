@@ -32,7 +32,7 @@ Open the address, press **Open camera**, and accept the privacy notice. The came
 
 Everything can be done without seeing the screen: the assistant speaks every state change, short tones mark events, and phones vibrate (this can be turned off).
 
-**The main screen** has one large **Open camera** button. It shows the privacy notice the first time, then turns on the camera, the on-device warnings and hands-free voice commands. While assistance is on, the screen shows the camera, what the assistant last said, and these buttons:
+**The main screen** has two large buttons: **Open camera** and **Talk live**. Open camera shows the privacy notice the first time, then turns on the camera, the on-device warnings and hands-free voice commands. While assistance is on, the screen shows the camera, what the assistant last said, and these buttons:
 
 | Action | Button | Key | Voice (examples) |
 |---|---|---|---|
@@ -42,6 +42,7 @@ Everything can be done without seeing the screen: the assistant speaks every sta
 | Ask one question | Ask a question (press again to send) | `Q` | with voice commands on, just ask |
 | Pause or resume automatic descriptions | Pause descriptions / Resume descriptions (only when descriptions are automatic) | `P` | «وقّف التحليل», «كمّل», "Pause", "Continue" |
 | Stop everything | Stop assistance | `C` | «سكّر الكاميرا», "Close camera" |
+| Live conversation on or off | Talk live / End live conversation (next to Open camera at rest; beside Stop assistance while assisting) | `L` | «وقّف المحادثة», "Stop live" |
 
 Describe, Read and Identify start the camera first if it is off.
 
@@ -49,7 +50,6 @@ These have **no button on the main screen**:
 
 | Action | Where | Key | Voice (examples) |
 |---|---|---|---|
-| Live conversation on or off | Main screen: Talk live (next to Open camera; beside Stop assistance while assisting) / End live conversation | `L` | «وقّف المحادثة», "Stop live" |
 | Hands-free voice commands on or off | Settings: Voice commands | `V` | «سكّر الميكرو», "Stop listening" |
 | What's in front of me | | | «شنوة قدّامي؟», "What's in front of me?" |
 | Read the whole document | | | «اقرا الكل», "Read all" |
@@ -70,7 +70,7 @@ Help speaks the list of voice commands. There is no typed question box.
 
 **Reading documents and medicine boxes** (Read text, «اقرالي الدوا», "read the prescription"): the app takes two pictures, has them read by two different models, and checks each printed line in the pictures. A name, dose or date is only read if both readings agree word for word and the line is fully visible. Each is followed by "check it with the pharmacist". Doses are held back when the picture has glare or blur, handwritten doses are never read, and the app never gives medical advice. This has only been tested with rendered sample documents, not real boxes. Don't use real prescriptions while testing: the pictures go to Google's free service.
 
-**Emergency assistance** calls or texts a contact saved in Settings (kept on the device only), with the current location as a map link when the browser can get it, and lists Tunisia's emergency numbers (SAMU 190, police 197, civil protection 198). Browsers only open the phone app from a real tap, so saying "call" selects the Call button, ready for one tap or double-tap. Nothing is dialled or sent without that.
+**Emergency assistance** calls or texts a contact saved in Settings (kept on the device only), with the current location as a map link when the browser can get it, and lists Tunisia's emergency numbers (SAMU 190, police 197, civil protection 198). Browsers only open the phone app from a real tap, so saying "call" selects the Call button, ready for one tap or double-tap. Nothing is dialled or sent without that. If the location can't be found (refused, unavailable or not supported), the assistant says so after the page's opening sentence: the message will ask them to call you.
 
 Settings also has speech speed and volume, text size (on top of the browser's own font size, which the page follows), colours, vibration, sending speech to your screen reader, and switching camera.
 

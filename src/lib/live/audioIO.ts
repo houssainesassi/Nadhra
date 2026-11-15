@@ -94,6 +94,8 @@ export class LiveAudio {
   private nextAt = 0;
   private volume = 1;
   private ducked = false;
+  /** close() was called: a microphone that opens after that is stopped at once. */
+  private closed = false;
   private onPlaying: (playing: boolean) => void;
 
   constructor(onPlaying: (playing: boolean) => void = () => {}) {
@@ -121,6 +123,13 @@ export class LiveAudio {
       if (name === "NotReadableError" || name === "AbortError") throw new MicError("busy");
       throw new MicError("unknown");
     }
+    // Ended while the browser was still opening the microphone (a permission prompt can take
+    // seconds): it must not stay on.
+    if (this.closed) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+      throw new MicError("unknown");
+    }
     const rate = this.ctx.sampleRate;
     const vad = new LevelVad(() => events.speechStart?.(), (at) => events.speechEnd?.(at));
     const onBlock = (block: Float32Array) => {
@@ -134,10 +143,10 @@ export class LiveAudio {
     this.mute = this.ctx.createGain();
     this.mute.gain.value = 0;
     this.mute.connect(this.ctx.destination);
+    let url = "";
     try {
-      const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+      url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
       await this.ctx.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
       const node = new AudioWorkletNode(this.ctx, "nadhra-mic-tap");
       node.port.onmessage = (ev) => onBlock(ev.data as Float32Array);
       this.tap = node;
@@ -146,7 +155,10 @@ export class LiveAudio {
       const node = this.ctx.createScriptProcessor(2048, 1, 1);
       node.onaudioprocess = (ev) => onBlock(new Float32Array(ev.inputBuffer.getChannelData(0)));
       this.tap = node;
+    } finally {
+      if (url) URL.revokeObjectURL(url); // also when the worklet failed to load
     }
+    if (this.closed) return this.close(); // ended while the worklet was loading
     this.source.connect(this.tap);
     this.tap.connect(this.mute);
     await this.ctx.resume().catch(() => {});
@@ -215,6 +227,7 @@ export class LiveAudio {
   }
 
   close() {
+    this.closed = true;
     this.flush();
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;

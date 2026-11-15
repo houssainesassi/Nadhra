@@ -38,7 +38,8 @@ Record for each line: ✅ works, ⚠️ works but has a problem (write what), �
 
 ### 1. First start and consent
 - [ ] With TalkBack on, when the page has loaded, focus is on the large "Open camera" button («حِلّ الكاميرا» in Tunisian). Note what TalkBack reads first.
-- [ ] Below it, the page says it is an aid only and doesn't replace a cane or guide dog, with a "Privacy & safety" link.
+- [ ] The next item is the "Talk live" button («احكي مباشرة»), right under Open camera, read with its description (voice and pictures go to Google).
+- [ ] Below them, the page says it is an aid only and doesn't replace a cane or guide dog, with a "Privacy & safety" link.
 - [ ] Double-tap Open camera. The dialog "Before the camera starts" opens with focus on "I agree", and the privacy notice is spoken, naming Google Gemini.
 - [ ] Choose "I don't agree". The camera stays off, and you hear that no image was sent.
 - [ ] Open camera again and choose "I agree". Android asks for the camera and the microphone; allow them. You hear "the camera is on", a tone and a short vibration, then that automatic descriptions are off. Focus moves to "Stop assistance".
@@ -49,7 +50,7 @@ Record for each line: ✅ works, ⚠️ works but has a problem (write what), �
 - [ ] The companion holds an object to your left. The app says it is on your left.
 
 ### 3. Main actions (the buttons under the camera)
-With TalkBack, swipe right from the caption under the camera. The order is: Describe surroundings, Read text, Identify object, Ask a question, Pause descriptions (only when automatic descriptions are on), Stop assistance. Note any button whose name is read wrongly or not at all.
+With TalkBack, swipe right from the caption under the camera. The order is: Describe surroundings, Read text, Identify object, Ask a question, Pause descriptions (only when automatic descriptions are on), Stop assistance, Talk live. Note any button whose name is read wrongly or not at all.
 
 Do Describe, Read and Identify with the camera on, then again with the camera off: say «سكّر الكاميرا» (the buttons stay while voice commands are on). With the camera off, the button should start the camera first.
 - [ ] **Read text:** hold a printed page about 30 cm away. The text is read word for word. If some is unreadable, it says so.
@@ -75,7 +76,7 @@ Voice commands turn on by themselves with Open camera (the microphone label on t
 - [ ] Say «تحدث بالعربية». Standard Arabic. «ماذا أمامي؟» works.
 - [ ] Say "Speak English". "What is this?" and "Read this text" work.
 - [ ] Say «احكي بالتونسي» to return to Tunisian.
-- [ ] The words on the main screen and the action buttons change language too (Settings and the other panels stay in English).
+- [ ] The words on the main screen, the action buttons and Talk live change language too (Settings and the other panels stay in English). TalkBack reads them in the new language's voice, without reloading the page.
 - [ ] Note any language whose voice sounds wrong or robotic.
 
 ### 6. Warnings (the companion within arm's reach)
@@ -93,6 +94,7 @@ Voice commands turn on by themselves with Open camera (the microphone label on t
 - [ ] Say «عيّط». You hear that the call button is selected. Double-tap: the dialer opens with the companion's number, **and does not call until you press call**. Hang up.
 - [ ] Double-tap "Text my location". Messages opens with the text and a maps link, **unsent**. Send it. The companion confirms the link shows the right place.
 - [ ] SAMU 190: double-tap only to check the dialer opens with 190, then **cancel without calling**.
+- [ ] In Android Settings, refuse location for Chrome (or for the site), then open Emergency again. After the opening sentence you hear that your location couldn't be found and the message will ask them to call you. Nothing is sent. Allow location again afterwards.
 - [ ] Remove the contact in Settings and open Emergency again. You hear that there's no contact, and focus is on "Add an emergency contact".
 
 ### 8. Connection
@@ -112,7 +114,7 @@ Voice commands turn on by themselves with Open camera (the microphone label on t
 - [ ] Turn on "Also send speech to my screen reader". Note whether hearing it twice is helpful or confusing.
 
 ### 11. Live conversation
-- [ ] Settings › Talk live. The first press only speaks a notice: voice and about one picture a second go to Google. The button now says "I agree: start the live conversation". Press it again.
+- [ ] The Talk live button: on the main screen, next to Open camera, or beside Stop assistance while the camera is on. The first press only speaks a notice: voice and about one picture a second go to Google. The button now says "I agree: start the live conversation". Press it again.
 - [ ] You hear that voice and pictures are going to Google now. Ask about what the camera shows, then interrupt the answer: it stops and listens.
 - [ ] Note the seconds from the end of your question to the first word of the answer.
 - [ ] Say «وقّف المحادثة». The conversation ends, and you hear that nothing more is being sent.

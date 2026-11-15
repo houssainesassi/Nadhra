@@ -19,6 +19,12 @@ export interface VisionSettings {
   autoDescribe: boolean;
   /** Also send every sentence to the screen reader (off by default, as it would double the voice). */
   screenReaderEcho: boolean;
+  /**
+   * In a live conversation, Nadhra may speak first when the view changes and something important
+   * and new is in it (a possible hazard first), even if the user is silent. On by default; it only
+   * happens while a live conversation is on, so it sends nothing more than the conversation does.
+   */
+  liveProactive: boolean;
   /** The language the assistant speaks and listens for. The main screen follows it; the panels (Settings, Privacy & safety, Emergency, consent) stay in English. */
   language: SpeechLang;
   /** Vibrate on events and warnings, where the device can. */
@@ -42,6 +48,7 @@ export const DEFAULT_VISION_SETTINGS: VisionSettings = {
   facing: "auto",
   autoDescribe: false,
   screenReaderEcho: false,
+  liveProactive: true,
   // Tunisian Arabic. Applies only when nothing valid is saved: a saved choice is always kept
   // (sanitizeVisionSettings), so changing this never switches an existing user's language.
   language: "tn",
@@ -70,6 +77,7 @@ export function sanitizeVisionSettings(raw: unknown): VisionSettings {
     // A setting saved before this one existed («narration») is not carried over: off until chosen.
     autoDescribe: bool(r.autoDescribe, d.autoDescribe),
     screenReaderEcho: bool(r.screenReaderEcho, d.screenReaderEcho),
+    liveProactive: bool(r.liveProactive, d.liveProactive),
     language: isSpeechLang(r.language) ? r.language : d.language,
     vibration: bool(r.vibration, d.vibration),
     textScale: num(r.textScale, 1, 2, d.textScale),

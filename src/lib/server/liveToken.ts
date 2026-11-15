@@ -7,6 +7,7 @@ import { LIVE_WS_URL, liveSystemPrompt, parseLiveModels, pickLiveVoice } from ".
 import type { SpeechLang } from "../assistant/lang.ts";
 import type { CameraFacing } from "../assistant/types.ts";
 import { aiMode } from "../ai/router.ts";
+import type { LivePricing, TokenModality } from "../live/metrics.ts";
 
 const AUTH_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 
@@ -18,7 +19,28 @@ export interface LiveConfig {
   silenceMs: number;
   /** How readily a pause counts as the end of the user's turn. */
   endSensitivity: "END_SENSITIVITY_HIGH" | "END_SENSITIVITY_LOW" | undefined;
+  /**
+   * Gemini's own "proactive audio" (the model may choose not to answer input that isn't for it).
+   * Off unless GEMINI_LIVE_PROACTIVE_AUDIO=1: not every Live model or API version accepts it, and a
+   * refused setup would make every connection fall back. Speaking first works without it.
+   */
+  proactiveAudio: boolean;
+  /**
+   * Context compression: once the context reaches `triggerTokens` before a turn, the oldest part is
+   * dropped down to `targetTokens`. Every turn re-reads (and is billed for) the whole context, so
+   * this caps the cost of a turn in a long session. Google's default trigger is 80% of the model's
+   * context window (~100k tokens a turn); 25,600 / 12,800 is the example in Google's documentation
+   * (about 8 minutes of a live conversation at the ~48 tokens a second measured). 0 = Google's default.
+   */
+  contextTriggerTokens: number;
+  contextTargetTokens: number;
 }
+
+const intEnv = (v: string | undefined, def: number, min: number, max: number) => {
+  if (v == null || v.trim() === "") return def;
+  const n = Number(v);
+  return Number.isInteger(n) && (n === 0 || (n >= min && n <= max)) ? n : def;
+};
 
 export function liveConfig(): LiveConfig {
   const silence = Number(process.env.GEMINI_LIVE_SILENCE_MS);
@@ -28,13 +50,39 @@ export function liveConfig(): LiveConfig {
     models: parseLiveModels(process.env.GEMINI_LIVE_MODELS),
     voice: pickLiveVoice(process.env.GEMINI_LIVE_VOICE),
     silenceMs: Number.isFinite(silence) && silence >= 200 && silence <= 2000 ? Math.round(silence) : 500,
+    proactiveAudio: /^(1|true|yes)$/i.test(process.env.GEMINI_LIVE_PROACTIVE_AUDIO?.trim() ?? ""),
+    contextTriggerTokens: intEnv(process.env.GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS, 25_600, 4_000, 1_000_000),
+    contextTargetTokens: intEnv(process.env.GEMINI_LIVE_CONTEXT_TARGET_TOKENS, 12_800, 2_000, 1_000_000),
     endSensitivity: ({ high: "END_SENSITIVITY_HIGH", low: "END_SENSITIVITY_LOW" } as const)[process.env.GEMINI_LIVE_END_SENSITIVITY?.trim().toLowerCase() ?? ""],
   };
 }
 
 export function liveStatus() {
   const c = liveConfig();
-  return { configured: c.enabled, models: c.models, voice: c.voice };
+  return { configured: c.enabled, models: c.models, voice: c.voice, pricing: livePricing() };
+}
+
+/**
+ * Prices for the cost estimate, per million tokens, from the environment only: nothing is assumed.
+ * GEMINI_LIVE_PRICE_IN_AUDIO / _IN_IMAGE / _IN_TEXT / _IN_OTHER, GEMINI_LIVE_PRICE_OUT_AUDIO /
+ * _OUT_TEXT / _OUT_OTHER, and GEMINI_LIVE_PRICE_CURRENCY (default USD). Null when none is set.
+ */
+export function livePricing(env: Record<string, string | undefined> = process.env): LivePricing | null {
+  const read = (dir: "IN" | "OUT") => {
+    const out: Partial<Record<TokenModality, number>> = {};
+    for (const m of ["audio", "image", "text", "other"] as const) {
+      const raw = env[`GEMINI_LIVE_PRICE_${dir}_${m.toUpperCase()}`]?.trim();
+      if (!raw) continue;
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 0 && n < 10_000) out[m] = n;
+    }
+    return out;
+  };
+  const input = read("IN");
+  const output = read("OUT");
+  if (!Object.keys(input).length && !Object.keys(output).length) return null;
+  const cur = env.GEMINI_LIVE_PRICE_CURRENCY?.trim().toUpperCase();
+  return { currency: cur && /^[A-Z]{3}$/.test(cur) ? cur : "USD", input, output };
 }
 
 export interface MintOptions {
@@ -61,14 +109,17 @@ export function buildLiveSetup(o: MintOptions, c: LiveConfig = liveConfig()) {
     },
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    // Audio + video sessions end after 2 minutes without this.
-    contextWindowCompression: { slidingWindow: {} },
+    // Audio + video sessions end after 2 minutes without this. See LiveConfig.contextTriggerTokens.
+    contextWindowCompression: c.contextTriggerTokens > 0
+      ? { triggerTokens: c.contextTriggerTokens, slidingWindow: { targetTokens: Math.min(c.contextTargetTokens || c.contextTriggerTokens / 2, c.contextTriggerTokens - 1) } }
+      : { slidingWindow: {} },
     sessionResumption: o.handle ? { handle: o.handle } : {},
+    ...(c.proactiveAudio ? { proactivity: { proactiveAudio: true } } : {}),
   };
 }
 
 export type MintResult =
-  | { ok: true; token: string; url: string; setup: ReturnType<typeof buildLiveSetup>; model: string; voice: string; lastModel: boolean }
+  | { ok: true; token: string; url: string; setup: ReturnType<typeof buildLiveSetup>; model: string; voice: string; lastModel: boolean; pricing: LivePricing | null }
   | { ok: false; status: number; error: string };
 
 export async function mintLiveToken(o: MintOptions, signal?: AbortSignal): Promise<MintResult> {
@@ -88,11 +139,14 @@ export async function mintLiveToken(o: MintOptions, signal?: AbortSignal): Promi
   } catch {
     return { ok: false, status: 502, error: "upstream-unavailable" };
   }
-  const data = (await res.json().catch(() => null)) as { name?: unknown } | null;
+  const data = (await res.json().catch(() => null)) as { name?: unknown; error?: { message?: unknown; status?: unknown } } | null;
   if (!res.ok || typeof data?.name !== "string") {
-    console.warn(`[live/token] Gemini refused a token: HTTP ${res.status}`);
+    // Google's own reason (e.g. a setup field it doesn't accept), for the server log only. It never
+    // contains the key; it is cut short and kept on one line.
+    const why = [data?.error?.status, data?.error?.message].filter((x) => typeof x === "string").join(": ").replace(/\s+/g, " ").slice(0, 300);
+    console.warn(`[live/token] Gemini refused a token: HTTP ${res.status}${why ? ` (${why})` : ""}`);
     return { ok: false, status: res.status === 429 ? 429 : 502, error: res.status === 429 ? "rate-limited" : "upstream-unavailable" };
   }
   const idx = Math.min(Math.max(0, o.modelIndex), c.models.length - 1);
-  return { ok: true, token: data.name, url: LIVE_WS_URL, setup, model: c.models[idx], voice: c.voice, lastModel: idx >= c.models.length - 1 };
+  return { ok: true, token: data.name, url: LIVE_WS_URL, setup, model: c.models[idx], voice: c.voice, lastModel: idx >= c.models.length - 1, pricing: livePricing() };
 }

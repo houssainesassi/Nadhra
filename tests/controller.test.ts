@@ -1487,3 +1487,509 @@ test("Emergency: the 'no location' sentence tells the truth in every language (t
   assert.match(speech("tn").noLocation, /يعيّطلك/);
   assert.match(speech("ar").noLocation, /يتصل بك/);
 });
+
+// --- live measurements -----------------------------------------------------------------------------------
+
+test("live measurements: kept on screen when the conversation ends, added to this device's totals, reported without content", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  storage.delete("nadhra.liveTotals.v1");
+  fakeLive(h);
+  const { LiveMetrics } = await import("../src/lib/live/metrics.ts");
+  const m = new LiveMetrics();
+  h.any.liveMetrics = m;
+  m.opened();
+  m.answerLatency(1050);
+  m.usage({ promptTokenCount: 2000, responseTokenCount: 300, totalTokenCount: 2300 });
+  m.pricing = { currency: "USD", input: { other: 1 }, output: { other: 2 } };
+  h.c.stopLive();
+  const s = h.c.state.liveStats!;
+  assert.equal(s.answers, 1);
+  assert.equal(s.tokens.total, 2300);
+  assert.ok(Math.abs(s.cost! - (2000 * 1 + 300 * 2) / 1e6) < 1e-12);
+  assert.equal(h.c.state.liveTotals?.sessions, 1);
+  assert.equal(JSON.parse(localStorage.getItem("nadhra.liveTotals.v1")!).tokens, 2300);
+  // A start that never connected isn't counted.
+  fakeLive(h);
+  h.any.liveMetrics = new LiveMetrics();
+  h.c.stopLive(true);
+  assert.equal(h.c.state.liveTotals?.sessions, 1);
+});
+
+// --- speaking first in a live conversation -------------------------------------------------------------
+
+/** A live conversation through startLive, with a fake session and audio that record what happens. */
+function startFakeLive(h: ReturnType<typeof setup>) {
+  const ev: any = {};
+  const mic: any = {};
+  const audio = {
+    played: [] as Uint8Array[], flushed: 0, isPlaying: false, closed: 0,
+    play(p: Uint8Array) { this.played.push(p); }, flush() { this.flushed++; }, close() { this.closed++; }, setVolume() {}, setDucked() {},
+    async startMic(e: object) { Object.assign(mic, e); },
+  };
+  const session = {
+    status: "idle", isOpen: false, pricing: null, model: "m", voice: "Sulafat", frames: 0, stopped: 0,
+    texts: [] as { text: string; opts: { measure?: boolean } }[],
+    async start() { this.status = "open"; this.isOpen = true; ev.status("open"); },
+    stop() { this.stopped++; this.isOpen = false; }, sendAudio() {}, sendFrame() { this.frames++; return true; },
+    sendText(text: string, opts = {}) { this.texts.push({ text, opts }); return true; }, markSpeechEnd() {}, nudge() {},
+  };
+  h.any.makeLiveAudio = () => audio;
+  h.any.makeLiveSession = (_o: unknown, e: object) => { Object.assign(ev, e); return session; };
+  storage.set("assistant.liveConsent.v1", "1");
+  const quiet = () => { h.drain(); h.any.lastLiveTalkAt = Date.now() - 10_000; h.any.liveBaseline ??= new Uint8Array(160 * 120); };
+  const cues = () => session.texts.filter((t) => t.text.startsWith("[camera-update]"));
+  return { ev, mic, audio, session, quiet, cues };
+}
+const pcm = (n: number) => new Uint8Array([n, n]);
+
+test("speaking first: a changed view while the user is silent sends a cue; «SILENT» is never played or shown, real words are, from their first sound", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  assert.equal(h.c.state.live.status, "open");
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1, "the noisy fake camera is a changed view");
+  assert.equal(L.cues()[0].opts.measure, false, "not counted as the user's waiting time");
+  h.tick();
+  assert.equal(L.cues().length, 1, "one at a time");
+  // Nothing new.
+  L.ev.audio(pcm(1));
+  L.ev.aiText("SIL");
+  L.ev.audio(pcm(2));
+  L.ev.aiText("ENT.");
+  L.ev.audio(pcm(3));
+  L.ev.turnComplete();
+  assert.equal(L.audio.played.length, 0, "never played");
+  assert.doesNotMatch(h.c.state.live.ai + h.c.state.lastSpoken, /SILENT/i, "never shown or repeated");
+  // «Nothing new»: the next look waits longer (12 s → 24 s).
+  (h.any.proactive as { sent: number[] }).sent = [Date.now() - 13_000];
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1, "backoff after SILENT: 13 s is not enough any more");
+  // Later, something important.
+  (h.any.proactive as { sent: number[] }).sent = [Date.now() - 25_000];
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 2);
+  assert.doesNotMatch(L.cues()[1].text, /You last said/, "nothing was said aloud yet");
+  L.ev.audio(pcm(4));
+  assert.equal(L.audio.played.length, 0, "held until its words are known");
+  L.ev.aiText("ردّ بالك، فمّا دروج ");
+  assert.deepEqual(L.audio.played, [pcm(4)], "played from its first sound");
+  L.ev.audio(pcm(5));
+  L.ev.aiText("قدّامك.");
+  L.ev.turnComplete();
+  assert.equal(L.audio.played.length, 2);
+  assert.equal(h.c.state.lastSpoken, "ردّ بالك، فمّا دروج قدّامك.");
+  assert.equal(h.c.state.liveStats?.proactiveCues, 2);
+  assert.equal(h.c.state.liveStats?.proactiveSpoken, 1);
+  h.c.stopLive(true);
+});
+
+test("speaking first: not while the user talks or just spoke, not when turned off, and a held answer is dropped when the user starts talking", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  h.drain();
+  L.mic.speechStart();
+  h.tick();
+  assert.equal(L.cues().length, 0, "the user is talking");
+  L.mic.speechEnd(Date.now());
+  h.tick();
+  assert.equal(L.cues().length, 0, "the user has just spoken");
+  h.c.updateSettings({ liveProactive: false });
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 0, "turned off");
+  h.c.updateSettings({ liveProactive: true });
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1);
+  L.ev.audio(pcm(7));
+  L.mic.speechStart(); // the user talks over it
+  L.ev.aiText("فمّا باب");
+  assert.ok(!L.audio.played.includes(pcm(7)) && !L.audio.played.some((p) => p[0] === 7), "the held sound is never played");
+  h.c.stopLive(true);
+});
+
+test("speaking first: a held answer whose words are late is played after a moment, not lost", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1);
+  L.ev.audio(pcm(9));
+  assert.equal(L.audio.played.length, 0);
+  await sleep(1_300);
+  assert.equal(L.audio.played.length, 1);
+  h.c.stopLive(true);
+});
+
+test("speaking first: a cued answer that promises the way is clear is cut like any other, and the correction is said", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1);
+  L.ev.audio(pcm(1));
+  L.ev.aiText("الطريق فارغ، تنجم تعدّي.");
+  assert.ok(L.audio.flushed >= 1, "cut");
+  assert.equal(h.any.liveMuted, true);
+  L.ev.audio(pcm(2));
+  assert.ok(!L.audio.played.some((p) => p[0] === 2), "the rest isn't played");
+  assert.equal(L.audio.played.length, 0, "not even its first sound: its words were checked before it was played");
+  h.drain();
+  assert.ok(h.engine.said.includes(T.pathCaveat));
+  h.c.stopLive(true);
+});
+
+// --- ending a live conversation: camera and microphone ---------------------------------------------------
+
+test("ending live: a camera the conversation opened closes with it (tracks stopped, microphone closed), and the user is told", async () => {
+  const h = setup({ auto: false });
+  const L = startFakeLive(h);
+  assert.equal(h.c.state.camera, "off");
+  await h.c.startLive();
+  assert.equal(h.c.state.camera, "on", "opened for the conversation");
+  h.drain();
+  h.c.toggleLive(); // End live conversation
+  assert.equal(h.c.state.camera, "off");
+  assert.equal(h.sources[0].stopped, true, "camera tracks stopped");
+  assert.equal(L.audio.closed, 1, "microphone closed");
+  assert.equal(L.session.stopped, 1);
+  h.drain();
+  assert.ok(h.engine.said.includes(T.liveOff) && h.engine.said.includes(T.cameraOff));
+});
+
+test("ending live: a camera that was already running stays on, with its on-device warnings", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  h.c.toggleLive();
+  assert.equal(h.c.state.camera, "on");
+  assert.equal(h.sources[0].stopped, false);
+  assert.equal(L.audio.closed, 1, "microphone closed all the same");
+  h.c.stopAssistance();
+});
+
+test("ending live: voice commands taking over keep the camera; a language change restarts live and keeps it the conversation's", async () => {
+  const h = setup({ auto: false, voice: new FakeVoice(() => new Promise<VoiceResult>(() => {})) });
+  startFakeLive(h);
+  await h.c.startLive();
+  h.c.updateSettings({ language: "en" });
+  await flush();
+  assert.equal(h.c.state.camera, "on");
+  assert.ok(h.any.liveSession, "restarted");
+  assert.equal(h.any.liveOwnsCamera, true, "still the conversation's camera");
+  h.c.toggleAssistant(); // voice commands need the microphone: live ends, the camera is theirs now
+  assert.equal(h.any.liveSession, null);
+  assert.equal(h.c.state.camera, "on");
+  assert.equal(h.any.liveOwnsCamera, false);
+  h.c.stopAssistance();
+  h.c.updateSettings({ language: "tn" });
+});
+
+test("ending live: End pressed while the camera is still starting closes it", async () => {
+  const h = setup({ auto: false });
+  startFakeLive(h);
+  let release!: () => void;
+  h.any.makeSource = () => {
+    const s = new FakeSource();
+    s.start = () => new Promise<void>((r) => (release = () => { s.started = true; r(); }));
+    h.sources.push(s);
+    return s;
+  };
+  const starting = h.c.startLive();
+  await flush();
+  assert.equal(h.c.state.camera, "starting");
+  h.c.toggleLive();
+  release();
+  await starting;
+  await flush();
+  assert.notEqual(h.c.state.camera, "on");
+  assert.equal(h.sources[0].stopped, true, "the camera that finished starting is stopped at once");
+});
+
+test("ending live: hiding the page ends it; a camera it opened isn't reopened on return, and the user hears that live ended", async () => {
+  const h = setup({ auto: false });
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  h.drain();
+  (h.any.leaveWhileHidden as () => void).call(h.c);
+  assert.equal(L.audio.closed, 1);
+  assert.equal(h.c.state.camera, "off");
+  (h.any.returnFromHidden as () => void).call(h.c);
+  await flush();
+  assert.equal(h.c.state.camera, "off", "not reopened");
+  h.drain();
+  assert.ok(h.engine.said.includes(T.liveOff));
+});
+
+// --- live frame selection --------------------------------------------------------------------------------
+
+/** A smooth gradient: lit and with contrast, but no edges at all (what motion blur looks like). */
+function gradient(w: number, h: number): Uint8ClampedArray {
+  const px = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) { const v = 60 + ((i % w) * 120) / w; px.set([v, v, v, 255], i * 4); }
+  return px;
+}
+
+async function liveWithView(view: { kind: "blur" | "still" }) {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  h.sources[0].thumbnail = (w: number, hh: number) => ({ rgba: view.kind === "blur" ? gradient(w, hh) : noise(w, hh, 42), width: w, height: hh });
+  await h.c.startLive();
+  h.drain();
+  return { h, L };
+}
+
+test("live frames: a blurry picture isn't sent while a recent sharp one stands, but the model never goes long without any", async () => {
+  const view = { kind: "blur" as "blur" | "still" };
+  const { h, L } = await liveWithView(view);
+  const sent = L.session.frames;
+  h.any.lastLiveFrameAt = Date.now() - 2_000;
+  h.tick();
+  assert.equal(L.session.frames, sent, "blurry: skipped");
+  h.any.lastLiveFrameAt = Date.now() - 7_000;
+  h.tick();
+  assert.equal(L.session.frames, sent + 1, "too long without a frame: sent, so the model can say it can't see well");
+  // The user starts talking while the picture is blurry and the last frame is recent: not sent.
+  h.any.lastLiveFrameAt = Date.now() - 1_000;
+  L.mic.speechStart();
+  assert.equal(L.session.frames, sent + 1);
+  h.c.stopLive(true);
+  assert.ok((h.c.state.liveStats?.framesSkipped.blurry ?? 0) >= 2, "counted in the measurements");
+});
+
+test("live frames: a still scene nobody talks about gets a copy every 6 s, every 3 s during a conversation", async () => {
+  const view = { kind: "still" as "blur" | "still" };
+  const { h, L } = await liveWithView(view);
+  h.tick(); // the reference view
+  const base = L.session.frames;
+  h.any.lastLiveGray = (h.any.lastGray as Uint8Array).slice();
+  h.any.lastLiveTalkAt = Date.now() - 30_000;
+  h.any.lastLiveFrameAt = Date.now() - 4_000;
+  h.tick();
+  assert.equal(L.session.frames, base, "idle: 4 s is not stale yet");
+  h.any.lastLiveFrameAt = Date.now() - 6_500;
+  h.tick();
+  assert.equal(L.session.frames, base + 1, "idle heartbeat");
+  h.any.lastLiveTalkAt = Date.now();
+  h.any.lastLiveFrameAt = Date.now() - 3_500;
+  h.tick();
+  assert.equal(L.session.frames, base + 2, "in conversation: every 3 s");
+  h.c.stopLive(true);
+});
+
+test("speaking first: the user speaking resets the backoff, and the next cue tells the model what it last said", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  const gate = h.any.proactive as { sent: number[]; gapMs: number; silent(): void };
+  gate.silent();
+  gate.silent();
+  assert.equal(gate.gapMs, 48_000);
+  // The user asks something; the model answers.
+  L.ev.userText("شنوّة قدّامي؟");
+  assert.equal(gate.gapMs, 12_000, "back to the short gap");
+  L.ev.audio(pcm(1));
+  L.ev.aiText("فمّا باب على يمينك.");
+  L.ev.turnComplete();
+  gate.sent = [Date.now() - 13_000];
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1);
+  assert.match(L.cues()[0].text, /You last said: «فمّا باب على يمينك\.»/);
+  h.c.stopLive(true);
+});
+
+// --- final review regressions (mocked) ------------------------------------------------------------------
+
+test("review: a warning cuts the live answer off for good — later chunks of that answer aren't played over it; the next answer is", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  h.drain();
+  L.ev.userText("شنوّة قدّامي؟");
+  L.ev.audio(pcm(1));
+  assert.equal(L.audio.played.length, 1);
+  h.say("ردّ بالك، كرهبة قدّامك", "urgent");
+  assert.ok(L.audio.flushed >= 1, "what was playing stops");
+  L.ev.audio(pcm(2));
+  L.ev.aiText("فمّا طاولة.");
+  assert.ok(!L.audio.played.some((p) => p[0] === 2), "the rest of that answer isn't played over the warning");
+  L.ev.turnComplete();
+  h.drain();
+  L.ev.userText("وتوّا؟");
+  L.ev.audio(pcm(3));
+  assert.ok(L.audio.played.some((p) => p[0] === 3), "the next answer plays normally");
+  h.c.stopLive(true);
+});
+
+test("review: a warning while a cue's answer is held drops it — it is never released over or after the warning", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1);
+  L.ev.audio(pcm(4)); // held
+  h.say("ردّ بالك، دروج", "warning");
+  await sleep(1_400); // longer than the hold
+  L.ev.audio(pcm(5));
+  L.ev.aiText("فمّا دروج قدّامك.");
+  L.ev.turnComplete();
+  assert.ok(!L.audio.played.some((p) => p[0] === 4 || p[0] === 5), "nothing of the cue's answer is played");
+  assert.equal(h.any.liveCue, null, "forgotten once its turn ended");
+  h.c.stopLive(true);
+});
+
+test("review: the user speaking over a cue's answer that had begun discards the rest of it until its turn ends; then answers play", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  L.quiet();
+  h.tick();
+  L.ev.audio(pcm(6)); // the cue's answer has begun (held)
+  L.ev.userText("استنّى");
+  L.ev.audio(pcm(7)); // still the cue's turn
+  assert.ok(!L.audio.played.some((p) => p[0] === 6 || p[0] === 7), "the old cue answer isn't played as if it were the user's");
+  L.ev.interrupted(); // the service ends that turn
+  L.ev.audio(pcm(8)); // the answer to the user
+  assert.ok(L.audio.played.some((p) => p[0] === 8));
+  h.c.stopLive(true);
+});
+
+test("review: a cue the model never answers doesn't block speaking first for the rest of the session", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1);
+  // No answer at all. 9 s later (past answerTimeoutMs), and past the gap, another look is possible.
+  (h.any.liveCue as { sentAt: number }).sentAt -= 9_000;
+  (h.any.proactive as { sent: number[]; pendingSince: number | null }).sent = [Date.now() - 13_000];
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 2);
+  h.c.stopLive(true);
+});
+
+test("review: a new object counts for a few seconds only, and not after the model has seen the view", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  // A still view, so only a new object could send a cue (live has just started: no cue yet).
+  h.sources[0].thumbnail = (w: number, hh: number) => ({ rgba: noise(w, hh, 7), width: w, height: hh });
+  h.tick();
+  assert.equal(L.cues().length, 0);
+  h.any.liveBaseline = (h.any.lastGray as Uint8Array).slice();
+  h.any.liveNewObjectAt = Date.now() - 11_000; // seen while the user was talking, long ago
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 0, "stale");
+  h.any.liveNewObjectAt = Date.now();
+  L.ev.turnComplete(); // the model has just answered the user, with this view in front of it
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 0, "the model has seen it");
+  h.any.liveNewObjectAt = Date.now();
+  L.quiet();
+  h.tick();
+  assert.equal(L.cues().length, 1, "fresh");
+  assert.match(L.cues()[0].text, /New object in view/);
+  h.c.stopLive(true);
+});
+
+test("review: the same person flickering in and out of the detector doesn't count as new again", async () => {
+  const detector = new FakeDetector();
+  const h = setup({ detector });
+  await h.start();
+  h.drain();
+  startFakeLive(h);
+  await h.c.startLive();
+  detector.sees = [NEAR_PERSON];
+  await sleep(1_300); // the track is confirmed
+  const first = h.any.liveNewObjectAt as number | null;
+  assert.ok(first, "a person: new");
+  h.any.liveNewObjectAt = null;
+  detector.sees = [];
+  await sleep(1_800); // longer than the tracker's timeout: the track is dropped
+  detector.sees = [NEAR_PERSON];
+  await sleep(1_300); // a new track for the same person
+  assert.equal(h.any.liveNewObjectAt, null, "the same kind within a minute: not new");
+  h.c.stopLive(true);
+});
+
+test("review: urgent warnings are never held — not by the user talking, not by the speaking-first backoff; other warnings wait at most a few seconds", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  h.any.liveHoldMaxMs = 150;
+  await h.c.startLive();
+  h.drain();
+  const gate = h.any.proactive as { silent(): void; gapMs: number };
+  gate.silent(); gate.silent(); gate.silent();
+  assert.equal(gate.gapMs, 48_000);
+  L.mic.speechStart(); // the user talks (or steady street noise looks like talking)
+  const n = h.engine.said.length;
+  h.say("ردّ بالك، كرهبة جاية", "urgent");
+  assert.equal(h.engine.said.length, n + 1, "urgent: said at once");
+  h.drain();
+  h.say("فمّا شخص على يمينك", "warning");
+  assert.ok(!h.engine.said.includes("فمّا شخص على يمينك"), "a lesser warning waits while the user talks...");
+  await sleep(250);
+  assert.ok(h.engine.said.includes("فمّا شخص على يمينك"), "...but not longer than the cap");
+  L.mic.speechEnd(Date.now());
+  assert.equal(h.any.liveHoldTimer, null, "timer cleared");
+  h.c.stopLive(true);
+});
+
+test("review: no live timer survives the end of the conversation", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  L.mic.speechStart();
+  L.quiet();
+  h.tick();
+  L.ev.audio(pcm(1)); // a cue's held answer: its hold timer runs
+  assert.ok(h.any.liveHoldTimer);
+  h.c.stopLive(true);
+  assert.equal(h.any.liveHoldTimer, null);
+  assert.equal(h.any.liveCue, null);
+  assert.equal(h.any.liveSession, null);
+  assert.equal(L.audio.closed, 1);
+});

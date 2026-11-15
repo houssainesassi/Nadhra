@@ -45,13 +45,14 @@ For the first supervised beta sessions. Each session has a blind or visually imp
 - [ ] "Ask a question" button, with voice commands off (Settings): the microphone opens with a tone, the button becomes "Done, send question", and the question is heard ("Heard «…»" on screen).
 - [ ] "Ask a question" with voice commands on (the default after Open camera): a tone, and the question you then speak is answered. What you were already saying is not cut off.
 - [ ] The buttons under the camera (Describe surroundings, Read text, Identify object, Ask a question, and Pause descriptions when automatic descriptions are on) each work with one tap, in the chosen language.
+- [ ] "Talk live" (main screen): the first tap only reads the notice and the button becomes "I agree: start the live conversation"; the second tap starts it. Note the seconds to the first word of an answer. The same button ends it.
 - [ ] Hands-free mode on, then «اسكت»/«سكّر الكاميرا»: each works. Turn hands-free off: the microphone indicator goes off.
 - [ ] While the assistant speaks, it doesn't hear itself and answer its own words.
 
 ## Android Chrome only
 - [ ] The voice: note whether it sounds Tunisian, other Arabic, or like the cloud voice. (The app only shows the voice's name during a live conversation.)
 - [ ] Add to home screen (menu › Add to Home screen): it opens as "Nadhra" and the camera still works.
-- [ ] TalkBack on: focus starts on "Open camera"; after it starts, swiping from the caption reaches the five action buttons, then Stop assistance; the answer text is readable with TalkBack.
+- [ ] TalkBack on: focus starts on "Open camera", and the next item is "Talk live"; after the camera starts, swiping from the caption reaches the five action buttons, then Stop assistance and Talk live; the answer text is readable with TalkBack.
 
 ## iOS Safari only
 - [ ] **Silent switch on (ringer off): is the voice still heard?** Web audio can be muted by the silent switch on iPhone. If there's no voice with the switch on, note it: testers must keep it off. This is not yet confirmed on a real iPhone.

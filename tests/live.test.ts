@@ -46,7 +46,7 @@ test("token setup: model, female voice, instructions, VAD, transcripts, resumpti
     assert.equal(s.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, DEFAULT_LIVE_VOICE);
     assert.match(s.systemInstruction.parts[0].text, /Derja/);
     assert.deepEqual(s.sessionResumption, { handle: "abc" });
-    assert.deepEqual(s.contextWindowCompression, { slidingWindow: {} });
+    assert.deepEqual(s.contextWindowCompression, { triggerTokens: 25_600, slidingWindow: { targetTokens: 12_800 } }, "a long session's turns stay bounded");
     assert.equal(s.realtimeInputConfig.automaticActivityDetection.silenceDurationMs, 500);
     assert.equal(buildLiveSetup({ lang: "tn", facing: "outward", modelIndex: 9 }, c).model, "models/gemini-3.8-live", "index clamped");
     assert.deepEqual(buildLiveSetup({ lang: "tn", facing: "outward", modelIndex: 0 }, c).sessionResumption, {});
@@ -184,7 +184,7 @@ function makeSession(over: Partial<ConstructorParameters<typeof LiveSession>[0]>
         const body = JSON.parse(String(init.body));
         tokens.push(body);
         const model = models[Math.min(body.modelIndex, 1)];
-        return new Response(JSON.stringify({ token: `t${tokens.length}`, url: "wss://x", setup: { model, sessionResumption: body.handle ? { handle: body.handle } : {} }, model, voice: "Sulafat", lastModel: body.modelIndex >= 1 }));
+        return new Response(JSON.stringify({ token: `t${tokens.length}`, url: "wss://x", setup: { model, sessionResumption: body.handle ? { handle: body.handle } : {} }, model, voice: "Sulafat", lastModel: body.modelIndex >= 1, pricing: { currency: "USD", input: { audio: 1 }, output: {} } }));
       }) as typeof fetch,
       ...over,
     },
@@ -197,6 +197,7 @@ function makeSession(over: Partial<ConstructorParameters<typeof LiveSession>[0]>
       aiText: (t) => log.push(`ai:${t}`),
       userSpeechStart: () => log.push("speech-start"),
       latency: (ms) => log.push(`latency:${ms}`),
+      usage: (u) => log.push(`usage:${u.totalTokenCount}`),
     },
   );
   return { s, tokens, log, statuses, audio, setNow: (t: number) => (now = t) };
@@ -301,4 +302,34 @@ test("session: not configured fails at once; stop sends nothing more", async () 
   assert.equal(ok.s.sendFrame("x"), false);
   assert.equal(FakeWs.all.at(-1)!.sent.length, 1, "only the setup");
   assert.equal(ok.s.status, "closed");
+});
+
+test("session: token usage is passed on, and the server's prices are kept", async () => {
+  FakeWs.all = [];
+  const { s, log } = makeSession();
+  await s.start();
+  assert.deepEqual(s.pricing, { currency: "USD", input: { audio: 1 }, output: {} });
+  FakeWs.all[0].serve({ usageMetadata: { promptTokenCount: 900, responseTokenCount: 100, totalTokenCount: 1000 } });
+  FakeWs.all[0].serve({ serverContent: { turnComplete: true }, usageMetadata: { totalTokenCount: 50 } });
+  assert.deepEqual(log.filter((l) => l.startsWith("usage")), ["usage:1000", "usage:50"]);
+  assert.ok(log.includes("turn"), "a message with both still completes the turn");
+  s.stop();
+});
+
+test("token setup: context compression bounded by default, configurable, 0 = Google's default", () => {
+  const saved = { ...process.env };
+  try {
+    process.env.GEMINI_API_KEY = "k";
+    process.env.GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS = "40000";
+    process.env.GEMINI_LIVE_CONTEXT_TARGET_TOKENS = "20000";
+    assert.deepEqual(buildLiveSetup({ lang: "tn", facing: "outward", modelIndex: 0 }, liveConfig()).contextWindowCompression, { triggerTokens: 40_000, slidingWindow: { targetTokens: 20_000 } });
+    process.env.GEMINI_LIVE_CONTEXT_TARGET_TOKENS = "90000"; // above the trigger: kept below it
+    assert.equal((buildLiveSetup({ lang: "tn", facing: "outward", modelIndex: 0 }, liveConfig()).contextWindowCompression as { slidingWindow: { targetTokens: number } }).slidingWindow.targetTokens, 39_999);
+    process.env.GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS = "0";
+    assert.deepEqual(buildLiveSetup({ lang: "tn", facing: "outward", modelIndex: 0 }, liveConfig()).contextWindowCompression, { slidingWindow: {} });
+    process.env.GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS = "junk";
+    assert.equal((buildLiveSetup({ lang: "tn", facing: "outward", modelIndex: 0 }, liveConfig()).contextWindowCompression as { triggerTokens: number }).triggerTokens, 25_600);
+  } finally {
+    process.env = saved;
+  }
 });
