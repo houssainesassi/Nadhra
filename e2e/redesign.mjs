@@ -1,4 +1,4 @@
-// The one-screen layout in real Chromium. Home: «Asslema!» and exactly three buttons (Camera,
+// The one-screen layout in real Chromium. Home: «Asslema» and exactly three buttons (Camera,
 // Microphone, Settings). Camera → consent → camera session (one button only) → warning → Stop;
 // Microphone → live notice → live session (one button only); language in Settings; no scrolling at
 // phone, tablet and desktop sizes; focus; reduced motion.
@@ -67,8 +67,8 @@ const layout = (page) => page.evaluate(() => {
     overflowX: document.documentElement.scrollWidth > innerWidth,
     nameClipped: !!brand && brand.scrollWidth > brand.clientWidth + 1,
     vh: innerHeight, open: box(".tile-camera"), live: box(".tile-mic"), settings: box(".settings-button"), stop: box(".end-button"), stage: box(".stage"),
-    // Every button a sighted or screen-reader user can reach on the main screen (panels excluded).
-    buttons: [...document.querySelectorAll(".app button, .app a, .app select, .app input")].filter((b) => b.checkVisibility() && b.getBoundingClientRect().width > 0).map((b) => b.dataset.testid ?? b.textContent.trim()),
+    // Every control drawn on the main screen (panels excluded; screen-reader-only ones are 1 px).
+    buttons: [...document.querySelectorAll(".app button, .app a, .app select, .app input")].filter((b) => b.checkVisibility() && b.getBoundingClientRect().width > 1 && b.getBoundingClientRect().height > 1).map((b) => b.dataset.testid ?? b.textContent.trim()),
     labelsCut: [...document.querySelectorAll(".tile-label, .end-button span")].filter((e) => e.scrollWidth > e.clientWidth + 1).length,
   };
 });
@@ -108,7 +108,7 @@ const axe = async (page) => {
 
 // --- 0b. Microphone: the live conversation asks first, then only the assistant is on screen ---------
 {
-  const { page, errors } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
+  const { page, errors, state } = await context({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
   await withLang(page.context(), "en", { "assistant.consent.v3": "1" });
   let tokens = 0;
   // Answered late (then refused), so the "connecting" session can be looked at meanwhile.
@@ -130,6 +130,7 @@ const axe = async (page) => {
   await page.getByTestId("stop-assistance").tap();
   check("live: End goes back home, three buttons", !!(await until(async () => (await layout(page)).buttons.join(",") === HOME, 3000)));
   check("live: End releases every camera track", await page.evaluate(() => window.__tracks.every((t) => t.readyState === "ended")));
+  check("live: Microphone pressed first: the phone doesn't say «Asslema» (the call's greeting is the one)", !state.tts.some((t) => /Asslema/.test(t.text ?? "")), state.tts.map((t) => t.text).join(" | "));
   check("live: no page errors", errors.length === 0, errors.join(" | "));
   await page.context().close();
 }
@@ -142,7 +143,7 @@ const axe = async (page) => {
   let l = await layout(page);
   check("phone home: no scrolling, the name isn't cut off", !l.scrolls && !l.overflowX && !l.nameClipped, JSON.stringify(l));
   check("phone home: exactly three buttons, Camera, Microphone, Settings, in that order", l.buttons.join(",") === HOME, l.buttons.join(","));
-  check("phone home: the greeting is the page's heading", (await page.getByRole("heading", { level: 1 }).innerText()) === "Asslema!");
+  check("phone home: the greeting is the page's heading", (await page.getByRole("heading", { level: 1 }).innerText()) === "Asslema");
   check("phone home: Camera is large and on screen", l.open && l.open.h >= 110 && l.open.bottom <= l.vh, JSON.stringify(l.open));
   check("phone home: Microphone right under Camera, as large", l.live && l.live.top >= l.open.bottom && l.live.top - l.open.bottom <= 24 && l.live.h === l.open.h, JSON.stringify({ open: l.open, live: l.live }));
   check("phone home: Settings on screen, at least 48 px", tapOk(l.settings) && l.settings.bottom <= l.vh, JSON.stringify(l.settings));
@@ -159,7 +160,7 @@ const axe = async (page) => {
   await page.screenshot({ path: join(OUT, "phone-home.png") });
 
   await page.getByTestId("open-camera").tap();
-  check("«Asslema!» is said after the first gesture", !!(await until(() => state.tts.some((t) => /Asslema/.test(t.text ?? "")), 5000)), state.tts.map((t) => t.text).join(" | "));
+  check("«Asslema» is said after the first gesture", !!(await until(() => state.tts.some((t) => /Asslema/.test(t.text ?? "")), 5000)), state.tts.map((t) => t.text).join(" | "));
   check("Camera without consent shows the notice first", await page.getByRole("dialog", { name: "Before the camera starts" }).isVisible());
   check("no camera before consent", (await page.evaluate(() => window.__tracks.length)) === 0);
   await page.screenshot({ path: join(OUT, "phone-consent.png") });
@@ -178,7 +179,44 @@ const axe = async (page) => {
   else console.log("SKIP  axe (set AXE=/path/to/axe.min.js)");
   await page.screenshot({ path: join(OUT, "phone-active.png") });
 
-  // The actions left the screen but not the app: the same controller calls by key (and by voice).
+  // TalkBack: the actions are screen-reader-only buttons, swiped to between the camera and End.
+  const group = page.getByRole("group", { name: "Actions" });
+  const names = ["Describe surroundings", "Read text", "Identify object", "Ask a question", "Pause descriptions"];
+  const found = [];
+  for (const n of names) found.push(await group.getByRole("button", { name: n, exact: true }).count());
+  check("TalkBack: a named Actions group with the five actions, each named by its words", found.every((c) => c === 1), JSON.stringify(found));
+  const order = await page.evaluate(() => [...document.querySelectorAll("[data-testid=stage], [data-testid=actions] button, [data-testid=stop-assistance]")].map((e) => e.dataset.testid));
+  check("TalkBack: read in order camera → actions → End", order.join(",") === "stage,action-describe,action-read,action-identify,action-ask,action-pause,stop-assistance", order.join(","));
+  check("TalkBack: Pause is told that warnings keep running", (await page.getByTestId("action-pause").evaluate((b) => document.getElementById(b.getAttribute("aria-describedby"))?.textContent)) === "Warnings keep running.");
+  check("TalkBack: the actions draw nothing on screen", await page.locator("[data-testid=actions] button").evaluateAll((bs) => bs.every((b) => { const r = b.getBoundingClientRect(); return r.width <= 1 && r.height <= 1; })));
+  // A TalkBack double-tap is an accessibility click on the element itself (element.click()).
+  let sent = state.posts;
+  await page.getByTestId("action-describe").evaluate((b) => b.click());
+  check("TalkBack: Describe sends one picture", !!(await until(() => state.posts > sent, 8000)), `${state.posts - sent} sent`);
+  await page.getByTestId("action-pause").evaluate((b) => b.click());
+  check("TalkBack: Pause pauses, and now says Resume", !!(await until(async () => (await page.getByTestId("stage").getAttribute("data-analysis")) === "paused" && (await page.getByTestId("action-pause").innerText()).includes("Resume descriptions"), 3000)));
+  sent = state.posts;
+  await page.getByTestId("action-identify").evaluate((b) => b.click());
+  check("TalkBack: Identify sends a picture during the pause", !!(await until(() => state.posts > sent, 8000)));
+  // The first Read gives the one-time document notice (spoken; «موافق» to go on) and sends nothing.
+  await sleep(1500);
+  sent = state.posts;
+  const said = state.tts.length;
+  await page.getByTestId("action-read").evaluate((b) => b.click());
+  check("TalkBack: Read reaches the controller: the document notice first, nothing sent", !!(await until(() => state.tts.length > said, 5000)) && state.posts === sent, state.tts.slice(said).map((t) => t.text).join(" | "));
+  await page.keyboard.press("Escape"); // stops the notice
+  await page.getByTestId("action-pause").evaluate((b) => b.click());
+  check("TalkBack: Resume resumes", !!(await until(async () => (await page.getByTestId("stage").getAttribute("data-analysis")) !== "paused", 3000)));
+  await page.getByTestId("action-ask").evaluate((b) => b.click());
+  await sleep(500);
+  check("TalkBack: Ask keeps the hands-free microphone on", (await page.getByTestId("stage").getAttribute("data-voice-commands")) === "true");
+  await page.getByTestId("stop-assistance").focus();
+  await page.keyboard.press("Shift+Tab");
+  const shown = await page.evaluate(() => { const b = document.activeElement; const r = b.getBoundingClientRect(); return { id: b.dataset.testid, w: Math.round(r.width), h: Math.round(r.height), bottom: Math.round(r.bottom) }; });
+  check("keyboard: tabbing onto an action shows it, large and on screen", /^action-/.test(shown.id ?? "") && shown.h >= 48 && shown.w >= 200 && shown.bottom <= 844, JSON.stringify(shown));
+  await page.getByTestId("stop-assistance").focus();
+
+  // And by key (and by voice): the same controller calls.
   const before = state.posts;
   await page.keyboard.press("KeyD");
   check("D (Describe): sends one picture", !!(await until(() => state.posts > before, 8000)), `${state.posts - before} sent`);
@@ -201,7 +239,7 @@ const axe = async (page) => {
   check("Stop returns to the home screen, three buttons", !!(await until(async () => (await layout(page)).buttons.join(",") === HOME, 3000)));
   check("Stop releases every camera track", await page.evaluate(() => window.__tracks.length > 0 && window.__tracks.every((t) => t.readyState === "ended")));
   check("focus is back on Camera", (await focused(page)) === "open-camera");
-  check("«Asslema!» was said once only", state.tts.filter((t) => /Asslema/.test(t.text ?? "")).length === 1);
+  check("«Asslema» was said once only", state.tts.filter((t) => /Asslema/.test(t.text ?? "")).length === 1);
 
   await page.getByTestId("open-settings").tap();
   const settings = page.getByRole("dialog", { name: "Settings" });
@@ -213,7 +251,7 @@ const axe = async (page) => {
   await page.keyboard.press("Escape");
   await sleep(300);
   const ui = await page.evaluate(() => ({ dir: document.querySelector(".app").dir, lang: document.querySelector(".app").lang, label: document.querySelector(".tile-camera").innerText, hello: document.querySelector("h1").innerText, saved: JSON.parse(localStorage.getItem("assistant.settings")).language }));
-  check("language: the screen turns Tunisian and right to left", ui.dir === "rtl" && ui.lang === "ar-TN" && /الكاميرا/.test(ui.label) && ui.hello === "عسلامة!", JSON.stringify(ui));
+  check("language: the screen turns Tunisian and right to left", ui.dir === "rtl" && ui.lang === "ar-TN" && /الكاميرا/.test(ui.label) && ui.hello === "عسلامة", JSON.stringify(ui));
   check("language: saved for speech and recognition", ui.saved === "tn");
   check("language: the assistant says it in the new language", !!(await until(() => state.tts.some((t) => /[؀-ۿ]/.test(t.text ?? "")), 5000)));
   l = await layout(page);

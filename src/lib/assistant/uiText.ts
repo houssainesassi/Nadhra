@@ -9,7 +9,6 @@ export interface UiText {
   language: string;
   /** Said and shown when the app opens. */
   greeting: string;
-  tagline: string;
   openCamera: string;
   /** The three home buttons: Camera, Microphone (the live conversation), Settings. `*Sub` is the
       short line under a tile, read as its description. */
@@ -38,6 +37,21 @@ export interface UiText {
   live: string;
   mic: { listening: string; on: string; off: string; processing: string; denied: string; unavailable: string };
   heard: string;
+  /** The session's actions, as screen-reader-only buttons (TalkBack reaches them by swiping; they
+      take no space on screen), and the name of their group. */
+  actions: {
+    group: string;
+    describe: string;
+    read: string;
+    identify: string;
+    ask: string;
+    /** Ask while the question is being recorded: pressing again sends it. */
+    askDone: string;
+    pause: string;
+    resume: string;
+    /** Read with Pause: what keeps running. */
+    pauseHint: string;
+  };
   /** The live conversation: the Microphone button's states. `hint` is its screen-reader description. */
   talkLive: { start: string; agree: string; end: string; hint: string };
   /** Before anything was said. `example` is a question the user can ask. */
@@ -48,8 +62,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
   tn: {
     name: "تونسي",
     language: "اللغة",
-    greeting: "عسلامة!",
-    tagline: "نظرة توصفلك اللي حولك وتنبّهك للعوائق. احكي معاها وقت ما تحب.",
+    greeting: "عسلامة",
     openCamera: "حِلّ الكاميرا",
     camera: "الكاميرا",
     cameraSub: "توصفلك اللي حولك",
@@ -74,14 +87,14 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     live: "محادثة مباشرة",
     mic: { listening: "نسمع فيك", on: "الميكرو خدّام", off: "الميكرو مسكّر", processing: "قاعد نفهم…", denied: "الميكرو ممنوع", unavailable: "الصوت موش متوفّر" },
     heard: "سمعت",
+    actions: { group: "الأوامر", describe: "وصفلي البلاصة", read: "اقرالي الكتابة", identify: "شنوة هاذي؟", ask: "اسأل سؤال", askDone: "وفيت، ابعث السؤال", pause: "وقّف الوصف", resume: "كمّل الوصف", pauseHint: "التنبيهات تبقى خدّامة." },
     talkLive: { start: "احكي مباشرة", agree: "موافق: ابدا المحادثة المباشرة", end: "وقّف المحادثة المباشرة", hint: "محادثة بالصوت كيف التليفون. طول ما هي خدّامة، صوتك وصورة من الكاميرا كل ثانية تقريبا يتبعثو لـ Google Gemini." },
     prompt: (e) => `اسأل وقت ما تحب، مثلاً: «${e}»`,
   },
   ar: {
     name: "العربية",
     language: "اللغة",
-    greeting: "عسلامة!",
-    tagline: "تصف لك نظرة ما حولك وتنبّهك إلى العوائق. تحدّث إليها في أي وقت.",
+    greeting: "عسلامة",
     openCamera: "افتح الكاميرا",
     camera: "الكاميرا",
     cameraSub: "تصف لك ما حولك",
@@ -106,14 +119,14 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     live: "محادثة مباشرة",
     mic: { listening: "أستمع إليك", on: "الميكروفون يعمل", off: "الميكروفون متوقّف", processing: "أفهم…", denied: "الميكروفون غير مسموح", unavailable: "الصوت غير متاح" },
     heard: "سمعت",
+    actions: { group: "الإجراءات", describe: "صف المكان", read: "اقرأ النص", identify: "ما هذا؟", ask: "اطرح سؤالاً", askDone: "انتهيت، أرسل السؤال", pause: "أوقف الوصف", resume: "تابع الوصف", pauseHint: "تبقى التنبيهات تعمل." },
     talkLive: { start: "تحدّث مباشرة", agree: "أوافق: ابدأ المحادثة المباشرة", end: "أنهِ المحادثة المباشرة", hint: "محادثة صوتية مثل مكالمة هاتفية. طوال المحادثة يُرسل صوتك وصورة من الكاميرا كل ثانية تقريبًا إلى Google Gemini." },
     prompt: (e) => `اسأل في أي وقت، مثلاً: «${e}»`,
   },
   fr: {
     name: "Français",
     language: "Langue",
-    greeting: "Asslema !",
-    tagline: "Nadhra décrit ce qui vous entoure et vous avertit des obstacles. Parlez-lui à tout moment.",
+    greeting: "Asslema",
     openCamera: "Ouvrir la caméra",
     camera: "Caméra",
     cameraSub: "Décrit ce qui vous entoure",
@@ -138,14 +151,14 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     live: "Conversation en direct",
     mic: { listening: "J'écoute", on: "Micro actif", off: "Micro coupé", processing: "Je comprends…", denied: "Micro non autorisé", unavailable: "Voix indisponible" },
     heard: "Entendu",
+    actions: { group: "Actions", describe: "Décrire les alentours", read: "Lire le texte", identify: "Identifier un objet", ask: "Poser une question", askDone: "Terminé, envoyer la question", pause: "Mettre la description en pause", resume: "Reprendre la description", pauseHint: "Les alertes restent actives." },
     talkLive: { start: "Parler en direct", agree: "J'accepte : démarrer la conversation en direct", end: "Terminer la conversation en direct", hint: "Une conversation à voix haute, comme un appel. Tant qu'elle dure, votre voix et environ une image par seconde sont envoyées à Google Gemini." },
     prompt: (e) => `Demandez à tout moment, par exemple : « ${e} »`,
   },
   en: {
     name: "English",
     language: "Language",
-    greeting: "Asslema!",
-    tagline: "Nadhra describes what's around you and warns you about obstacles. Talk to it any time.",
+    greeting: "Asslema",
     openCamera: "Open camera",
     camera: "Camera",
     cameraSub: "Describes what’s around you",
@@ -170,6 +183,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     live: "Live conversation",
     mic: { listening: "Listening", on: "Mic on", off: "Mic off", processing: "Understanding…", denied: "Mic blocked", unavailable: "Voice unavailable" },
     heard: "Heard",
+    actions: { group: "Actions", describe: "Describe surroundings", read: "Read text", identify: "Identify object", ask: "Ask a question", askDone: "Done, send question", pause: "Pause descriptions", resume: "Resume descriptions", pauseHint: "Warnings keep running." },
     talkLive: { start: "Talk live", agree: "I agree: start the live conversation", end: "End live conversation", hint: "A spoken conversation, like a phone call. While it is on, your voice and about one picture a second go to Google Gemini." },
     prompt: (e) => `Ask any time, for example: “${e}”`,
   },

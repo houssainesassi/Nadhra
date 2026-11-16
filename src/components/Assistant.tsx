@@ -1,10 +1,11 @@
 "use client";
 // The whole app is one screen with two states.
-//   Home: «عسلامة!» (said aloud once per visit, and shown), then exactly three buttons: Camera,
+//   Home: «عسلامة» (said aloud once per visit, and shown), then exactly three buttons: Camera,
 //   Microphone (the live conversation) and Settings.
 //   A session (either one): only the assistant: the camera preview, what it is saying, its state,
-//   and one button to end it. Nothing else is on screen until it ends.
-// Everything can also be done by voice and keyboard (Describe, Read, Identify, Ask, Pause...), and
+//   and one button to end it. Nothing else is on screen until it ends. Describe, Read, Identify,
+//   Ask and Pause are screen-reader-only buttons (TalkBack swipes to them), keys and voice commands.
+// Everything can also be done by voice and keyboard, and
 // every state change is spoken, so nothing depends on seeing the screen. Settings (with the
 // language, the AI in use and Privacy & safety) and the Emergency page are panels over the screen;
 // the Emergency page opens by voice («نجدة», «عيّط»).
@@ -147,17 +148,23 @@ export default function Assistant() {
     return () => controller.detach();
   }, [controller]);
 
-  // «عسلامة!» when the app opens. Speech is locked until the first tap or key press, so: at once if
+  // «عسلامة» when the app opens. Speech is locked until the first tap or key press, so: at once if
   // the browser already allows it, otherwise in that first gesture (capture phase, before the button
-  // it lands on starts anything). The heading shows the same word meanwhile.
+  // it lands on starts anything). The heading shows the same word meanwhile. One greeting per visit:
+  // when that first gesture is the Microphone, the live conversation's own «عسلامة» is the
+  // greeting, and the phone says nothing (it would be cut off by the call anyway). `click` too: a
+  // TalkBack double-tap can reach the page as a click alone.
   useEffect(() => {
     const greet = () => controller.greet(UI_TEXT[controller.state.settings.language].greeting);
     if (navigator.userActivation?.hasBeenActive) return greet();
-    const events = ["pointerup", "touchend", "keydown"] as const;
+    const events = ["pointerup", "touchend", "keydown", "click"] as const;
     const off = () => events.forEach((e) => removeEventListener(e, once, true));
-    const once = () => {
+    const once = (e: Event) => {
+      // Not a gesture to the browser (audio stays locked): wait for the next one.
+      if (e instanceof KeyboardEvent && (e.key === "Escape" || ["Shift", "Control", "Alt", "Meta"].includes(e.key))) return;
       off();
-      greet();
+      const toLive = (e instanceof KeyboardEvent && e.code === "KeyL") || !!(e.target instanceof Element && e.target.closest("[data-testid=live-toggle]"));
+      if (!toLive) greet();
     };
     events.forEach((e) => addEventListener(e, once, true));
     return off;
@@ -264,6 +271,11 @@ export default function Assistant() {
   // What the assistant is saying: a held warning first, then a live or streaming answer.
   const caption = heldWarning ?? (liveOn && s.live.ai.trim() ? s.live.ai.trim() : s.answer.live && s.answer.text ? s.answer.text : s.lastSpoken);
   const heard = liveOn ? s.live.user.trim() : s.lastHeard;
+  // Ask is recording a question (push-to-talk): pressing it again sends the question.
+  const askRecording = s.mic === "listening" && !s.assistantOn && !liveOn;
+  // Pause only has something to stop when the descriptions are automatic (Gemini, outside a live
+  // conversation). Once paused, Resume stays in reach whatever changed since.
+  const showPause = cameraOn && (s.paused || (s.settings.autoDescribe && provider !== "nadhra" && !liveOn));
   // What the voice orb shows in a live conversation. Decoration: the state pill says it in words.
   const orb = !liveOn ? null : s.live.status !== "open" ? "connecting" : s.live.playing ? "speaking" : s.live.userTalking ? "hearing" : "listening";
   const notices = cameraOn
@@ -286,7 +298,7 @@ export default function Assistant() {
 
         <main className="main">
           {!active && (
-            // Read in this order by a screen reader: the greeting, what Nadhra does, the three buttons.
+            // Read in this order by a screen reader: the greeting, then the three buttons.
             <section className="home">
               <div className="home-ambient" aria-hidden="true" />
               <p className="home-brand">
@@ -296,7 +308,6 @@ export default function Assistant() {
               </p>
               <div className="home-center">
                 <h1 className="greeting" data-testid="greeting">{ui.greeting}</h1>
-                <p id="tagline" className="tagline">{ui.tagline}</p>
                 <div className="tiles" data-large={s.settings.textScale >= 1.5}>
                   <button ref={openRef} type="button" onClick={() => void controller.startAssistance()} aria-keyshortcuts="C" aria-describedby="camera-sub"
                     className="tile tile-camera" data-testid="open-camera">
@@ -381,7 +392,25 @@ export default function Assistant() {
           </section>
 
           {active && (
-            // The only button during a session: it ends everything (camera, microphone, live
+            // The actions, for TalkBack and screen readers only: not drawn (the screen stays the
+            // assistant and one button), but reached by swiping between the camera and End, and
+            // activated by a double-tap without the voice commands. Each one is the same controller
+            // call as its voice command and key. A keyboard user who tabs onto one sees it.
+            <div role="group" aria-label={ui.actions.group} className="sr-actions" data-testid="actions">
+              <button type="button" onClick={() => void controller.runTask("describe")} aria-keyshortcuts="D" data-testid="action-describe">{ui.actions.describe}</button>
+              <button type="button" onClick={() => void controller.runTask("read")} aria-keyshortcuts="T" data-testid="action-read">{ui.actions.read}</button>
+              <button type="button" onClick={() => void controller.runTask("identify")} aria-keyshortcuts="I" data-testid="action-identify">{ui.actions.identify}</button>
+              <button type="button" onClick={() => void controller.askByVoice()} aria-keyshortcuts="Q" data-testid="action-ask">{askRecording ? ui.actions.askDone : ui.actions.ask}</button>
+              {showPause && (
+                <button type="button" onClick={() => (s.paused ? controller.resume() : controller.pause())} aria-keyshortcuts="P" aria-describedby="pause-hint" data-testid="action-pause" data-paused={s.paused}>
+                  {s.paused ? ui.actions.resume : ui.actions.pause}
+                </button>
+              )}
+              <p id="pause-hint" hidden>{ui.actions.pauseHint}</p>
+            </div>
+          )}
+          {active && (
+            // The only visible button during a session: it ends everything (camera, microphone, live
             // conversation) and goes back home. The same call as the C key and «وقّف».
             <div className="end-bar" data-large={s.settings.textScale >= 1.5}>
               <button ref={stopRef} type="button" onClick={() => controller.stopAssistance()} aria-keyshortcuts="C" aria-describedby="stop-hint" className="end-button" data-testid="stop-assistance">

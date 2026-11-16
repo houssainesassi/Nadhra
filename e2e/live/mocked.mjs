@@ -139,11 +139,12 @@ const camera = (page) => page.getByTestId("stage").getAttribute("data-camera").c
   check("speaking first: «SILENT» is never shown", !seen.has("SILENT"));
   check("speaking first: the real sentence is shown", seen.has("answer"));
   check("frames reach the model", fake.frames >= 3, `${fake.frames} frames`);
-  check("silent microphone: no user turn was detected", !fake.texts.some((t) => !t.startsWith("[camera-update]")), JSON.stringify(fake.texts.filter((t) => !t.startsWith("[camera-update]"))));
+  check("silent microphone: no user turn was detected", !fake.texts.some((t) => !/^\[(camera-update|call-start)\]/.test(t)), JSON.stringify(fake.texts.filter((t) => !/^\[(camera-update|call-start)\]/.test(t))));
 
   const before = await tracks(page);
   check("before End: camera and microphone tracks are live", before.some((t) => t.kind === "video" && t.state === "live") && before.some((t) => t.kind === "audio" && t.state === "live"), JSON.stringify(before));
-  const liveButtons = await page.locator(".app button:visible").evaluateAll((bs) => bs.map((b) => b.dataset.testid ?? b.textContent));
+  // Drawn buttons only: the screen-reader-only actions are 1 px.
+  const liveButtons = await page.locator(".app button:visible").evaluateAll((bs) => bs.filter((b) => b.getBoundingClientRect().width > 1).map((b) => b.dataset.testid ?? b.textContent));
   check("during live: only the End button is on screen", liveButtons.join(",") === "stop-assistance" && /End live conversation|وقّف المحادثة المباشرة/.test(await page.getByTestId("stop-assistance").innerText()), liveButtons.join(","));
   await page.getByTestId("stop-assistance").click();
   await until(async () => (await tracks(page)).every((t) => t.state === "ended"), 3_000);

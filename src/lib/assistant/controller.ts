@@ -586,9 +586,11 @@ export class SmartVisionController {
   }
 
   /**
-   * The welcome when the app opens («عسلامة!»), once per visit. Browsers keep speech locked until
-   * the first tap or key press, so the page calls this at load only when audio is already allowed,
-   * and otherwise in that first gesture. A status sentence: it waits behind anything more important.
+   * The welcome when the app opens («عسلامة»), once per visit, and the only greeting of the visit:
+   * a live conversation started later doesn't greet again (and one started first greets instead).
+   * Browsers keep speech locked until the first tap or key press, so the page calls this at load
+   * only when audio is already allowed, and otherwise in that first gesture. A status sentence: it
+   * waits behind anything more important.
    */
   greet(text: string) {
     if (this.greeted || !text) return;
@@ -2287,7 +2289,8 @@ export class SmartVisionController {
         this.feedback("on");
         this.lastLiveReminderAt = Date.now();
         this.say(this.t.liveOn, "status");
-        this.liveGreetPending = true;
+        // One greeting per visit: only when the phone hasn't said «عسلامة» yet (Microphone pressed first).
+        this.liveGreetPending = !this.greeted;
         this.sendLiveGreeting(); // now if nothing is playing, else once the notice ends
       } else if (before === "reconnecting") {
         this.say(this.t.liveBack, "status");
@@ -2394,6 +2397,7 @@ export class SmartVisionController {
     if (!session?.isOpen) return;
     this.liveGreetPending = false;
     if (!session.sendText(LIVE_GREETING_CUE, { measure: false })) return;
+    this.greeted = true; // the visit's one greeting: the phone won't say «عسلامة» after it
     this.liveNewAnswer = true;
   }
 

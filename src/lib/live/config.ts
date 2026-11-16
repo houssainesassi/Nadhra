@@ -91,7 +91,7 @@ const LANGUAGE_RULES: Record<SpeechLang, string> = {
 };
 
 /** The greeting the AI says once, when a live conversation starts. */
-export const LIVE_GREETING = "عسلامة خويا";
+export const LIVE_GREETING = "عسلامة";
 /** Sent by the app when the call opens; the system prompt says how to answer it. */
 export const LIVE_GREETING_CUE = "[call-start]";
 

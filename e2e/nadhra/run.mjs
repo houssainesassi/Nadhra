@@ -144,11 +144,19 @@ const choose = async (page, p) => {
   // During a session only Stop is on screen (no Settings button, no voice command for it). The panel
   // is opened directly, so the controller's switch-while-running paths stay covered.
   else await page.evaluate((sel) => document.querySelector(sel).showModal(), SETTINGS);
+  // The moment the tap actually reaches the page, returned. Opening Settings and Playwright's click both
+  // take time (about 0.5–1.3 s for the click), and a report queued before the tap may legitimately leave
+  // then, while the previous provider is still selected. Recorded in the page, in the capture phase, so
+  // before the switch's own handler runs.
+  const before = Date.now();
+  await page.evaluate(() => { window.__tapAt = undefined; document.addEventListener("click", () => (window.__tapAt = Date.now()), { capture: true, once: true }); });
   await page.click(`${SETTINGS}[open] [data-testid=ai-provider-${p}]`);
+  const tapAt = (await page.evaluate(() => window.__tapAt)) ?? before;
   await sleep(200);
   // Closed directly, not with Esc: a consent notice the switch opened may be on top.
   await page.evaluate((sel) => document.querySelector(sel)?.open && document.querySelector(sel).close(), SETTINGS);
   await sleep(100);
+  return tapAt;
 };
 
 {
@@ -218,7 +226,7 @@ check("Gemini: no AI request before or after declining", aiPosts(t0).length === 
 // Switch to Nadhra on the home screen.
 await sleep(3_000);
 const tSwitch = Date.now();
-await choose(page, "nadhra");
+const tSwitchTap = await choose(page, "nadhra");
 check("switch to Nadhra: one tap, now active and selected", (await active(page)) === "nadhra" && (await page.locator("[data-testid=ai-provider-nadhra] input").isChecked()));
 check("switch to Nadhra: short confirmation shown", (await notice(page)) === "✓ Nadhra (experimental)");
 check("switch to Nadhra: confirmation spoken", await heard(page, T.nadhra.selected));
@@ -252,7 +260,7 @@ check("Nadhra: voice commands refused, with the reason", await heard(page, T.nad
 check("Nadhra: live conversation never started", (await page.locator("[data-testid=stage]").getAttribute("aria-label")) !== "Live conversation" && (await page.locator("[data-testid=voice-orb]").count()) === 0);
 
 await sleep(4_000);
-check("Nadhra: the page sent nothing (no POST of any kind)", posts(tSwitch).length === 0, JSON.stringify(posts(tSwitch).map((r) => r.url)));
+check("Nadhra: the page sent nothing (no POST of any kind)", posts(tSwitchTap).length === 0, JSON.stringify(posts(tSwitchTap).map((r) => r.url)));
 check("Nadhra: the page contacted no other origin", offOrigin().length === 0, JSON.stringify(offOrigin().map((r) => r.url)));
 check("Nadhra: the server made no outgoing attempt at all", since("hybrid", tSwitch).length === 0, JSON.stringify(since("hybrid", tSwitch)));
 
@@ -304,14 +312,14 @@ await page.keyboard.press("d");
 const inProgress = await until(() => since("hybrid", tQ).find(isGeminiModel), 10_000);
 check("in progress: the Gemini request is with the (delayed) upstream", !!inProgress);
 const tSwitch2 = Date.now();
-await choose(page, "nadhra");
+const tSwitch2Tap = await choose(page, "nadhra");
 check("in progress → Nadhra: the warning about stopped sending is spoken", await heard(page, T.nadhra.stoppedSending, 10_000));
 await sleep(10_000); // longer than two delayed attempts: a next provider or a retry would show by now
 setDelay(0);
 const after = since("hybrid", tSwitch2 + 50);
 check("in progress → Nadhra: the server made no further attempt (no next model, no OpenRouter, no voice retry)", after.length === 0, JSON.stringify(after));
 check("in progress → Nadhra: the page's open request was aborted", failed.some((f) => f.t >= tSwitch2 - 50 && f.url.endsWith("/api/vision")), JSON.stringify(failed.slice(-4)));
-check("in progress → Nadhra: the page sent nothing after the switch", posts(tSwitch2 + 50).length === 0, JSON.stringify(posts(tSwitch2 + 50).map((r) => r.url)));
+check("in progress → Nadhra: the page sent nothing after the switch", posts(tSwitch2Tap + 50).length === 0, JSON.stringify(posts(tSwitch2Tap + 50).map((r) => r.url)));
 check("in progress → Nadhra: no failure message for the abandoned question", (await announcedCount(page, T.questionFailed)) === failedBefore);
 
 // Back to Gemini with consent: the camera keeps running, nothing asked again.

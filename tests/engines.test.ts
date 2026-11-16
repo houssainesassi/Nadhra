@@ -235,9 +235,13 @@ test("health: a running engine that turns unhealthy is stopped (two failed check
 });
 
 test("crash: an engine that exits by itself is marked crashed; the next acquire starts a new one", async () => {
-  const l = launcher([manifest({ mode: "crash-after-ready", ms: 150 })]);
+  // It exits 1.5 s after it starts listening, well after the launcher's start-up check even on a loaded
+  // machine (at 150 ms, that check could still be running and acquire failed with "crashed").
+  const l = launcher([manifest({ mode: "crash-after-ready", ms: 1500 })]);
   const h = await l.acquire("fake-ocr");
-  await sleep(400);
+  assert.equal(l.status()[0].state, "ready");
+  const deadline = Date.now() + 5000;
+  while (l.status()[0].state !== "failed" && Date.now() < deadline) await sleep(50);
   assert.equal(l.status()[0].state, "failed");
   assert.equal(l.status()[0].lastError, "crashed");
   h.release();

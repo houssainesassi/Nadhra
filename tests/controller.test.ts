@@ -1994,10 +1994,10 @@ test("review: no live timer survives the end of the conversation", async () => {
   assert.equal(L.audio.closed, 1);
 });
 
-test("a new live conversation: the AI greets with «عسلامة خويا» once, after the phone's own notice", async () => {
+test("a new live conversation: the AI greets with «عسلامة» once, after the phone's own notice", async () => {
   const { LIVE_GREETING, LIVE_GREETING_CUE, liveSystemPrompt } = await import("../src/lib/live/config.ts");
-  assert.equal(LIVE_GREETING, "عسلامة خويا");
-  assert.ok(liveSystemPrompt("tn", "outward").includes(`${LIVE_GREETING_CUE} comes from the app when the call starts: answer it by saying only «عسلامة خويا»`));
+  assert.equal(LIVE_GREETING, "عسلامة");
+  assert.ok(liveSystemPrompt("tn", "outward").includes(`${LIVE_GREETING_CUE} comes from the app when the call starts: answer it by saying only «عسلامة»`));
   const h = setup();
   await h.start();
   h.drain();
@@ -2016,19 +2016,44 @@ test("a new live conversation: the AI greets with «عسلامة خويا» once
 
 // --- the welcome when the app opens ------------------------------------------------------------------
 
-test("the welcome «عسلامة!» is said once per visit, and waits behind the camera's own sentences", async () => {
+test("the welcome «عسلامة» is said once per visit, and waits behind the camera's own sentences", async () => {
   const h = setup();
-  h.c.greet("عسلامة!");
-  h.c.greet("عسلامة!");
-  assert.deepEqual(h.engine.said.filter((t) => t === "عسلامة!"), ["عسلامة!"], "once only");
+  h.c.greet("عسلامة");
+  h.c.greet("عسلامة");
+  assert.deepEqual(h.engine.said.filter((t) => t === "عسلامة"), ["عسلامة"], "once only");
   await h.start();
   h.drain();
   assert.ok(h.engine.said.includes(T.cameraOn), "the camera still says it is on");
-  assert.equal(h.engine.said.filter((t) => t === "عسلامة!").length, 1, "and the welcome isn't repeated");
+  assert.equal(h.engine.said.filter((t) => t === "عسلامة").length, 1, "and the welcome isn't repeated");
 });
 
 test("an empty welcome says nothing", () => {
   const h = setup();
   h.c.greet("");
   assert.equal(h.engine.said.length, 0);
+});
+
+test("one greeting per visit: after the phone's «عسلامة», a live conversation doesn't greet again", async () => {
+  const { LIVE_GREETING_CUE } = await import("../src/lib/live/config.ts");
+  const h = setup();
+  h.c.greet("عسلامة");
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  h.drain();
+  assert.equal(L.session.texts.filter((t) => t.text === LIVE_GREETING_CUE).length, 0, "no second «عسلامة» from the AI");
+});
+
+test("one greeting per visit: a live conversation started first greets, and the phone stays quiet after it", async () => {
+  const { LIVE_GREETING_CUE } = await import("../src/lib/live/config.ts");
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  h.drain();
+  assert.equal(L.session.texts.filter((t) => t.text === LIVE_GREETING_CUE).length, 1, "the call's greeting is the one");
+  h.c.greet("عسلامة");
+  assert.ok(!h.engine.said.includes("عسلامة"), "the phone doesn't greet a second time");
 });

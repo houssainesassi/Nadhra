@@ -233,7 +233,10 @@ test("read mode: a follow-up may come without an image when it brings the docume
   const sent = calls[0].body.contents[0].parts;
   assert.equal(sent.length, 1, "no image part");
   assert.match(sent[0].text, /\| EXP 03\/2027/);
-  assert.ok(!sent[0].text.includes("42"), "non-string lines are dropped");
+  // Only the block of earlier text is checked: the prompt also holds the current time, which can contain "42".
+  const earlier = sent[0].text.split("Text read earlier")[1]?.split("\n\n")[0] ?? "";
+  assert.match(earlier, /\| FEBRALIX 500 mg\n\| EXP 03\/2027$/, "the block holds exactly the string lines");
+  assert.ok(!earlier.includes("42"), "non-string lines are dropped");
   assert.match((await res.json()).analysis.spoken, /EXP 03\/2027/);
 });
 

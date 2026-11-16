@@ -1,0 +1,175 @@
+# Unit tests, typecheck, build, and the fully mocked browser suites.
+#
+# No AI quota can be used, by four independent layers:
+#   1. No keys: no secrets are referenced, and every AI key is set to empty (.env.local is gitignored).
+#   2. /etc/hosts sends the AI and cloud-voice hosts to 0.0.0.0 (after `npm ci`, which needs other hosts).
+#   3. Every test server runs under e2e/nadhra/netlog.mjs, which records and blocks all outgoing traffic.
+#   4. The guard must be loaded into the shared test server, and the last step fails the job if a server
+#      that must stay silent tried to reach Gemini or OpenRouter.
+#
+# Never run here (real models, a phone, or a 5-minute session): e2e/vision.mjs, e2e/live/browser.mjs,
+# e2e/live/real5min.mjs, e2e/live/android-phase1.mjs, e2e/read/*, e2e/chat/eval.ts.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GEMINI_API_KEY: ""
+  OPENROUTER_API_KEY: ""
+  GEMINI_SEARCH_API_KEY: ""
+  # EDGE_TTS_DISABLED is deliberately not set: unit tests exercise the cloud-voice path with fake sockets,
+  # and its host is blocked by layers 2–4 like the others.
+  NEXT_TELEMETRY_DISABLED: "1"
+  AI_HOSTS: "generativelanguage.googleapis.com openrouter.ai speech.platform.bing.com"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # The on-device detector model that `npm ci` (postinstall) downloads once.
+      - uses: actions/cache@v4
+        with:
+          path: public/mediapipe/efficientdet_lite0.tflite
+          key: mediapipe-model-${{ hashFiles('scripts/copy-mediapipe.mjs') }}
+
+      - run: npm ci
+
+      - name: Block AI hosts
+        run: for h in $AI_HOSTS; do echo "0.0.0.0 $h" | sudo tee -a /etc/hosts; done
+
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-build
+          path: |
+            .next
+            !.next/cache
+          include-hidden-files: true
+          retention-days: 1
+
+  e2e-mocked:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIXTURES: e2e/live/out/fixtures
+      CI_NETLOG: e2e/live/out/netlog-ci.jsonl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/cache@v4
+        with:
+          path: public/mediapipe/efficientdet_lite0.tflite
+          key: mediapipe-model-${{ hashFiles('scripts/copy-mediapipe.mjs') }}
+
+      - run: npm ci
+
+      - name: Block AI hosts
+        run: for h in $AI_HOSTS; do echo "0.0.0.0 $h" | sudo tee -a /etc/hosts; done
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-build
+          path: .next
+
+      # Same version as the installed playwright-core, so its Chromium build matches.
+      - name: Install Chromium
+        run: node_modules/.bin/playwright-core install --with-deps chromium
+
+      # axe-core for the screen tests' accessibility checks, the same version as local runs. Runner only:
+      # package.json and the lockfile are not changed.
+      - name: Install axe-core (runner only)
+        run: npm i --no-save axe-core@4.13.0
+
+      - name: Install Pillow and ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-pil
+
+      - name: Make the fake camera and silent audio
+        run: python3 e2e/make_synthetic_camera.py "$FIXTURES"
+
+      - name: Start the app under the network guard
+        run: |
+          mkdir -p e2e/live/out
+          NODE_OPTIONS="--import $PWD/e2e/nadhra/netlog.mjs" NETLOG_FILE="$PWD/$CI_NETLOG" \
+            nohup node_modules/.bin/next start -p 3100 > e2e/live/out/next-start.log 2>&1 &
+          echo $! > e2e/live/out/next-start.pid
+          for i in $(seq 1 60); do curl -fs -o /dev/null http://localhost:3100/ && break; sleep 1; done
+          curl -fs -o /dev/null http://localhost:3100/ || { cat e2e/live/out/next-start.log; exit 1; }
+          # The guard must be loaded into the server, or nothing would be recorded or blocked.
+          tr '\0' '\n' < /proc/$(cat e2e/live/out/next-start.pid)/environ | grep -q "netlog.mjs" || { echo "::error::network guard not loaded"; exit 1; }
+
+      - name: Screen tests (with axe)
+        run: AXE=node_modules/axe-core/axe.min.js node e2e/redesign.mjs "$FIXTURES" http://localhost:3100
+
+      - name: Live conversation (mocked)
+        if: ${{ !cancelled() }}
+        run: node e2e/live/mocked.mjs http://localhost:3100
+
+      - name: Stop the app
+        if: ${{ always() }}
+        run: kill "$(cat e2e/live/out/next-start.pid)" 2>/dev/null || true
+
+      # Starts its own three guarded servers (ports 3201–3203).
+      - name: Nadhra suite
+        if: ${{ !cancelled() }}
+        run: node --experimental-strip-types e2e/nadhra/run.mjs "$FIXTURES"
+
+      # The shared server (screen tests, mocked live) and the Nadhra `public` and `plain` servers must never
+      # try Gemini or OpenRouter. The Nadhra `hybrid` server must try Gemini (the suite checks that requests
+      # are routed there), always with a fake key, and the guard blocks it: those attempts are only counted.
+      # The free, keyless Edge cloud voice is left on so the suite's voice checks stay meaningful; its
+      # attempts are blocked by the guard and /etc/hosts, and counted. The guard writes one line per attempt,
+      # so a missing log file means no attempt.
+      - name: No AI host was reached
+        if: ${{ always() }}
+        run: |
+          fail=0
+          count() { if [ -f "$2" ]; then grep -Ec "$1" "$2" || true; else echo 0; fi; }
+          ai='generativelanguage\.googleapis\.com|openrouter\.ai'
+          voice='speech\.platform\.bing\.com'
+          for f in "$CI_NETLOG" e2e/nadhra/out/netlog-public.jsonl e2e/nadhra/out/netlog-plain.jsonl; do
+            n=$(count "$ai" "$f")
+            if [ "$n" != "0" ]; then echo "::error::$f: $n attempt(s) to Gemini or OpenRouter"; grep -E "$ai" "$f"; fail=1; else echo "$f: 0 Gemini/OpenRouter attempts"; fi
+            echo "$f: $(count "$voice" "$f") blocked cloud-voice attempt(s)"
+          done
+          f=e2e/nadhra/out/netlog-hybrid.jsonl
+          echo "hybrid: $(count "$ai" "$f") blocked Gemini/OpenRouter attempt(s) with a fake key (expected), $(count "$voice" "$f") blocked cloud-voice attempt(s)"
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: e2e-logs
+          path: |
+            e2e/live/out
+            e2e/nadhra/out
+            !e2e/live/out/fixtures
+          include-hidden-files: true
+          retention-days: 7
