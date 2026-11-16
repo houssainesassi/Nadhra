@@ -9,8 +9,8 @@ mkdir -p "$OUT"
 [ -s "$OUT/mech.jpg" ] || curl -sf -A "nadhra-test/1.0" -o "$OUT/mech.jpg" "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Mechanic_repairing_car_engine_1.jpg/960px-Mechanic_repairing_car_engine_1.jpg"
 q() {
   [ -s "$OUT/$1.pcm" ] && return
-  node --experimental-strip-types --conditions=react-server e2e/live/synth.ts ar-TN-HediNeural "$2" "$OUT/$1.mp3" >/dev/null 2>&1
-  ffmpeg -loglevel error -y -i "$OUT/$1.mp3" -ar 16000 -ac 1 -f s16le "$OUT/$1.pcm"
+  node --experimental-strip-types --conditions=react-server e2e/live/synth.ts Puck "$2" "$OUT/$1.wav" >/dev/null 2>&1
+  ffmpeg -loglevel error -y -i "$OUT/$1.wav" -ar 16000 -ac 1 -f s16le "$OUT/$1.pcm"
 }
 q q_mech "شنوة قاعد يصير توّا؟"
 q q_right "وشنوّة فمّا على يميني؟"

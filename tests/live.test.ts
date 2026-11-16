@@ -9,10 +9,10 @@ import { LiveSession, type LiveStatus } from "../src/lib/live/session.ts";
 import { buildLiveSetup, liveConfig } from "../src/lib/server/liveToken.ts";
 import { browserHeaders } from "./helpers/browser.ts";
 
-test("voice: only female voices, whatever the environment says", () => {
-  assert.equal(pickLiveVoice(undefined), DEFAULT_LIVE_VOICE);
-  assert.equal(pickLiveVoice("Kore"), "Kore");
-  for (const male of ["Puck", "Charon", "Fenrir", "Orus", "Algenib", "Iapetus", "Umbriel", "Rasalgethi", "Alnilam", "x'; drop"]) assert.equal(pickLiveVoice(male), DEFAULT_LIVE_VOICE, male);
+test("voice: always Sulafat, whatever the environment says", () => {
+  assert.equal(DEFAULT_LIVE_VOICE, "Sulafat");
+  assert.equal(pickLiveVoice(undefined), "Sulafat");
+  for (const other of ["Kore", "Leda", "Zephyr", "Puck", "Charon", "Fenrir", "Orus", "Algenib", "x'; drop"]) assert.equal(pickLiveVoice(other), "Sulafat", other);
   assert.ok((FEMALE_LIVE_VOICES as readonly string[]).includes(DEFAULT_LIVE_VOICE));
 });
 

@@ -33,6 +33,8 @@ export interface UiText {
   offline: string;
   detectorFailed: string;
   serviceDown: string;
+  /** The assistant's voice (Sulafat) failed; there is no other voice, so the screen reader reads. */
+  voiceFailed: string;
   cameraOff: string;
   live: string;
   mic: { listening: string; on: string; off: string; processing: string; denied: string; unavailable: string };
@@ -83,6 +85,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     offline: "ما فمّاش إنترنت: كان التنبيهات اللي في الجهاز",
     detectorFailed: "التنبيهات اللي في الجهاز ما خدمتش: التحليل عبر الإنترنت برك",
     serviceDown: "خدمة التحليل موش متوفّرة توّا",
+    voiceFailed: "صوت Sulafat ما خدمش: قارئ الشاشة يقرا الكلام",
     cameraOff: "الكاميرا مسكّرة.",
     live: "محادثة مباشرة",
     mic: { listening: "نسمع فيك", on: "الميكرو خدّام", off: "الميكرو مسكّر", processing: "قاعد نفهم…", denied: "الميكرو ممنوع", unavailable: "الصوت موش متوفّر" },
@@ -115,6 +118,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     offline: "لا يوجد إنترنت: تنبيهات الجهاز فقط",
     detectorFailed: "تنبيهات الجهاز لا تعمل: التحليل عبر الإنترنت فقط",
     serviceDown: "خدمة التحليل غير متاحة الآن",
+    voiceFailed: "تعذّر تشغيل صوت Sulafat: قارئ الشاشة يقرأ الكلام",
     cameraOff: "الكاميرا مغلقة.",
     live: "محادثة مباشرة",
     mic: { listening: "أستمع إليك", on: "الميكروفون يعمل", off: "الميكروفون متوقّف", processing: "أفهم…", denied: "الميكروفون غير مسموح", unavailable: "الصوت غير متاح" },
@@ -147,6 +151,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     offline: "Hors ligne : alertes de l'appareil seulement",
     detectorFailed: "Alertes de l'appareil indisponibles : analyse en ligne seulement",
     serviceDown: "Le service d'analyse est indisponible",
+    voiceFailed: "La voix Sulafat ne fonctionne pas : le lecteur d'écran lit à sa place",
     cameraOff: "La caméra est éteinte.",
     live: "Conversation en direct",
     mic: { listening: "J'écoute", on: "Micro actif", off: "Micro coupé", processing: "Je comprends…", denied: "Micro non autorisé", unavailable: "Voix indisponible" },
@@ -179,6 +184,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     offline: "Offline: on-device warnings only",
     detectorFailed: "On-device warnings failed: cloud analysis only",
     serviceDown: "The analysis service is unavailable",
+    voiceFailed: "The Sulafat voice isn't working: the screen reader reads instead",
     cameraOff: "The camera is off.",
     live: "Live conversation",
     mic: { listening: "Listening", on: "Mic on", off: "Mic off", processing: "Understanding…", denied: "Mic blocked", unavailable: "Voice unavailable" },

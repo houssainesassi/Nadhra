@@ -2,7 +2,7 @@
 // the live session:
 //   2. no connectivity request by default (passive reachability; an external probe only when opted in)
 //   3. a page that has gone (closed, or switched to Nadhra) stops the work: no next provider for a
-//      recording or a question, no retry and no new connection for the cloud voice, and a live token
+//      recording or a question, no retry and no new request for the voice (Sulafat), and a live token
 //      that arrives after the switch opens nothing.
 // Every network call is replaced; nothing leaves the machine.
 import { test, beforeEach, afterEach } from "node:test";
@@ -44,7 +44,7 @@ const vision = await import("../src/app/api/vision/route.ts");
 const transcribe = await import("../src/app/api/vision/transcribe/route.ts");
 const dc = await import("../src/lib/server/deviceCapabilities.ts");
 const { resetVisionCooldowns } = await import("../src/lib/ai/vision.ts");
-const { handleTtsPost, resetTtsState, setWsFactory } = await import("../src/lib/speech/edgeTts.ts");
+const { handleTtsPost, resetTtsState } = await import("../src/lib/speech/geminiTts.ts");
 const { LiveSession } = await import("../src/lib/live/session.ts");
 const api = await import("../src/lib/assistant/api.ts");
 
@@ -175,53 +175,32 @@ test("question: aborted by the page during the first provider → no fallback to
   assert.ok(calls.length >= 1 && calls.every((u) => /model-a/.test(u)), calls.join(" "));
 });
 
-// The cloud voice: a socket that is refused (a "handshake" failure, which is normally retried once).
-const sockets: string[] = [];
-class RefusingWs {
-  binaryType = "blob";
-  onopen: (() => void) | null = null;
-  onmessage: (() => void) | null = null;
-  onerror: ((e: unknown) => void) | null = null;
-  onclose: ((e: { code: number; reason: string }) => void) | null = null;
-  constructor(url: string) {
-    sockets.push(url);
-    setTimeout(() => {
-      this.onerror?.({});
-      this.onclose?.({ code: 1006, reason: "" });
-    }, 40);
-  }
-  send() {}
-  close() {}
-}
+// The assistant's voice (Sulafat, Gemini TTS): the page going away stops the request.
+const ttsCalls = () => calls.filter((u) => u.includes(":generateContent") && u.includes("tts")).length;
 
-test("cloud voice: aborted by the page during a refused handshake → no retry, no new connection", async () => {
-  setWsFactory(() => new RefusingWs("wss://speech") as never);
-  sockets.length = 0;
-  const ac = new AbortController();
-  const pending = handleTtsPost(req("/api/tts", { text: "قريت: دوا." }, ac.signal));
-  await wait(10);
-  ac.abort();
-  const res = await pending;
-  await wait(100);
-  assert.equal(res.status, 499);
-  assert.equal(sockets.length, 1, "the first connection only: no retry after the page went away");
+test("voice: aborted by the page while Gemini TTS works → 499, one request only", async () => {
+  process.env.GEMINI_TTS_MODEL = "model-a-tts";
+  modelA = "hang";
+  try {
+    const ac = new AbortController();
+    const pending = handleTtsPost(req("/api/tts", { text: "قريت: دوا." }, ac.signal));
+    await wait(10);
+    ac.abort();
+    const res = await pending;
+    await wait(50);
+    assert.equal(res.status, 499);
+    assert.equal(ttsCalls(), 1, "no retry after the page went away");
+  } finally {
+    delete process.env.GEMINI_TTS_MODEL;
+  }
 });
 
-test("cloud voice: a request already aborted opens no connection at all", async () => {
-  setWsFactory(() => new RefusingWs("wss://speech") as never);
-  sockets.length = 0;
+test("voice: a request already aborted sends nothing to Gemini TTS", async () => {
   const ac = new AbortController();
   ac.abort();
   const res = await handleTtsPost(req("/api/tts", { text: "مرحبا" }, ac.signal));
   assert.equal(res.status, 499);
-  assert.equal(sockets.length, 0);
-});
-
-test("cloud voice: without an abort, a refused handshake is still retried once (Gemini's behaviour unchanged)", async () => {
-  setWsFactory(() => new RefusingWs("wss://speech") as never);
-  sockets.length = 0;
-  await handleTtsPost(req("/api/tts", { text: "مرحبا" }));
-  assert.equal(sockets.length, 2);
+  assert.equal(ttsCalls(), 0);
 });
 
 // The live conversation: a token answer that arrives after the switch to Nadhra.

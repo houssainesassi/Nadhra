@@ -1,11 +1,10 @@
-// Text-to-speech engine interface + implementations:
-//   BrowserTts – browser SpeechSynthesis (offline, free; needs an installed Arabic voice)
-//   CloudTts   – free Microsoft Edge neural voice (MP3) through our server route /api/tts (no key)
-//   HybridTts  – the female cloud voice first; the browser's installed voice only when the cloud
-//                voice can't be used (offline, service down), preferring a female one
-// Keep the interface small so another engine (e.g. a local neural TTS) can be plugged in.
+// Text-to-speech engine interface + the one implementation:
+//   SulafatTts – Google Gemini TTS, voice Sulafat (MP3/WAV through our server route /api/tts).
+// Sulafat is the only voice the app speaks with. There is no fallback voice: when Sulafat can't be
+// used (offline, service down, Nadhra AI), speaking fails, the page shows it and the screen reader
+// reads the sentence instead.
 import { apiFetch } from "../assistant/api.ts";
-import { CLOUD_VOICES, LANGS, type SpeechLang } from "../assistant/lang.ts";
+import { LANGS, type SpeechLang } from "../assistant/lang.ts";
 
 export interface SpeakOptions {
   rate: number;
@@ -23,7 +22,7 @@ export interface VoiceInfo {
   name: string;
   lang: string;
   exactDialect: boolean;
-  source: "browser" | "cloud";
+  source: "cloud";
 }
 
 export interface TtsEngine {
@@ -42,9 +41,8 @@ export interface TtsEngine {
   /** Stop and release everything (event listeners, audio context). The engine is unusable afterwards. */
   dispose?(): void;
   /**
-   * Nadhra AI: speak only with voices installed on this device. No cloud voice, and no browser voice
-   * that is a network service (such as "Google العربية" on desktop Chrome), since either would send
-   * the sentence away. With no installed voice, speaking fails and the screen reader takes over.
+   * Nadhra AI: nothing may leave the device, so Sulafat (a cloud voice) is not used and speaking
+   * fails: the screen reader takes over. No other voice is used instead.
    */
   setLocalOnly?(on: boolean): void;
 }
@@ -77,147 +75,23 @@ export function speechText(text: string, lang: SpeechLang = "tn"): string {
     .trim();
 }
 
-// Browser failures after which the cloud voice is worth trying (not user cancellations).
-const BROWSER_FAILURES = new Set(["synthesis-failed", "synthesis-unavailable", "language-unavailable", "voice-unavailable", "audio-hardware", "audio-busy", "network"]);
-
-export class BrowserTts implements TtsEngine {
-  readonly name = "browser-speechsynthesis";
-  private voice: SpeechSynthesisVoice | null = null;
-  private cleanup: (() => void)[] = [];
-  private lang: SpeechLang = "tn";
-  private localOnly = false;
-  private repick: () => void = () => {};
-
-  constructor(onVoicesChanged?: () => void) {
-    if (!this.available()) return;
-    const pick = () => (this.voice = pickVoice(speechSynthesis.getVoices(), this.lang, { offline: typeof navigator !== "undefined" && navigator.onLine === false, localOnly: this.localOnly }));
-    pick();
-    const repick = () => {
-      pick();
-      onVoicesChanged?.();
-    };
-    this.repick = repick;
-    // Voices often load asynchronously (Chrome/Android): notify when they arrive.
-    if (typeof speechSynthesis.addEventListener === "function") {
-      speechSynthesis.addEventListener("voiceschanged", repick);
-      this.cleanup.push(() => speechSynthesis.removeEventListener?.("voiceschanged", repick));
-    }
-    // Offline, a network voice (e.g. "Google العربية" on desktop Chrome) fails: prefer an installed one.
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      addEventListener("offline", repick);
-      addEventListener("online", repick);
-      this.cleanup.push(() => {
-        removeEventListener("offline", repick);
-        removeEventListener("online", repick);
-      });
-    }
-  }
-
-  dispose() {
-    this.stop();
-    for (const fn of this.cleanup.splice(0)) fn();
-  }
-
-  setLanguage(lang: SpeechLang) {
-    if (lang === this.lang) return;
-    this.lang = lang;
-    this.repick();
-  }
-
-  setLocalOnly(on: boolean) {
-    if (on === this.localOnly) return;
-    this.localOnly = on;
-    this.repick();
-  }
-
-  available() {
-    return typeof window !== "undefined" && "speechSynthesis" in window;
-  }
-
-  voiceInfo(): VoiceInfo | null {
-    if (!this.voice) return null;
-    return { name: this.voice.name, lang: this.voice.lang, exactDialect: exactDialect(this.voice.lang, this.lang), source: "browser" };
-  }
-
-  /** onFailure: return true when the caller handles a real synthesis failure (e.g. cloud fallback). */
-  speak(text: string, opts: SpeakOptions, onFailure?: (code: string) => boolean) {
-    const { rate, onStart, onEnd, onError } = opts;
-    if (!this.available()) return onError?.("Speech synthesis is not supported in this browser.");
-    // Without a chosen voice the browser picks one itself, possibly a network voice: not allowed then.
-    if (this.localOnly && !this.voice) return onError?.("No voice is installed on this device for this language.");
-    if (opts.interrupt !== false || !speechSynthesis.speaking) speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(speechText(text, this.lang));
-    u.lang = this.voice?.lang ?? LANGS[this.lang].recognition;
-    if (this.voice) u.voice = this.voice;
-    u.rate = rate;
-    u.volume = clampVolume(opts.volume);
-    u.onstart = () => onStart?.();
-    u.onend = () => onEnd?.();
-    u.onerror = (e) => {
-      if (e.error === "interrupted" || e.error === "canceled") return onEnd?.();
-      if (BROWSER_FAILURES.has(e.error) && onFailure?.(e.error)) return;
-      onError?.(e.error === "not-allowed" ? "Tap anywhere on the page once to allow automatic speech." : `Speech error: ${e.error}`);
-    };
-    speechSynthesis.speak(u);
-  }
-
-  stop() {
-    if (this.available()) speechSynthesis.cancel();
-  }
-}
-
-const FEMALE_VOICE = /female|femme|\b(?:reem|hoda|salma|zariyah|laila|layla|amina|amany|mariam|maryam|fatima|sana|iman|mouna|rana|noura|sara|amira|hala|denise|julie|hortense|amelie|am[ée]lie|aurelie|aur[ée]lie|marie|virginie|jenny|aria|samantha|zira|susan|karen|moira|tessa|victoria|serena|allison|ava|joanna|kendra|kimberly|salli|ivy|emma|libby|sonia|natasha|google (?:us|uk english female))\b/i;
-const MALE_VOICE = /\bmale\b|homme|\b(?:hedi|hamed|naayf|tarik|tarek|shakir|majed|maged|omar|ali|hamdan|rami|moaz|taim|bassel|jamal|laith|fahed|saleh|henri|paul|claude|thomas|nicolas|daniel|guy|david|mark|james|george|alex|fred|ryan|christopher|eric|matthew|brian|joey|justin|google uk english male)\b/i;
-
-const norm = (l: string) => l.toLowerCase().replace("_", "-");
 const clampVolume = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1);
 
-/** Tunisian needs an ar-TN voice to be exact. The other languages only need the same language. */
-function exactDialect(voiceLang: string, lang: SpeechLang): boolean {
-  const l = norm(voiceLang);
-  return lang === "tn" ? l === "ar-tn" : l.split("-")[0] === LANGS[lang].bcp47.split("-")[0];
-}
-
-/** The best installed voice for a speech language, or null when there is none in that language. */
-export function pickVoice(voices: SpeechSynthesisVoice[], lang: SpeechLang, { offline = false, localOnly = false } = {}): SpeechSynthesisVoice | null {
-  const prefs = LANGS[lang].voices;
-  const base = prefs[prefs.length - 1];
-  let same = voices.filter((v) => norm(v.lang).split("-")[0] === base);
-  // localOnly (Nadhra AI): installed voices only, even when that leaves none.
-  if (localOnly) same = same.filter((v) => v.localService);
-  // offline: only voices installed on the device can speak
-  if (offline && same.some((v) => v.localService)) same = same.filter((v) => v.localService);
-  // The assistant's voice is female: among voices of the same language, a female one wins, and a
-  // known male one comes last. Browsers don't report gender, so this goes by the voice's name.
-  const rank = (v: SpeechSynthesisVoice) => (FEMALE_VOICE.test(v.name) ? 0 : MALE_VOICE.test(v.name) ? 2 : 1);
-  for (const pref of prefs) {
-    const match = same.filter((v) => norm(v.lang) === pref.toLowerCase());
-    if (!match.length) continue;
-    const best = Math.min(...match.map(rank));
-    const top = match.filter((v) => rank(v) === best);
-    // A known male voice of the exact dialect loses to a female voice of a close one.
-    if (best === 2 && same.some((v) => rank(v) < 2)) continue;
-    return top.find((v) => v.default) ?? top.find((v) => v.localService) ?? top[0];
-  }
-  return [...same].sort((a, b) => rank(a) - rank(b))[0] ?? null;
-}
-
-export const pickArabicVoice = (voices: SpeechSynthesisVoice[], opts: { offline?: boolean } = {}) => pickVoice(voices, "tn", opts);
-
 // ---------------------------------------------------------------------------
-// Cloud voice
+// Sulafat (Google Gemini TTS)
 
 type CloudState = "checking" | "ready" | "unavailable" | "unknown";
 
 const CLOUD_ERRORS: Record<string, string> = {
-  "not-configured": "الصوت السحابي غير مُفعّل على الخادم.",
-  "rate-limited": "تم بلوغ حدّ استعمال الصوت السحابي مؤقتًا. أعد المحاولة بعد دقيقة.",
-  "upstream-unavailable": "خدمة الصوت السحابي غير متاحة مؤقتًا. أعد المحاولة بعد دقيقة.",
+  "not-configured": "صوت Sulafat غير مُفعّل على الخادم.",
+  "rate-limited": "تم بلوغ حدّ استعمال صوت Sulafat مؤقتًا. أعد المحاولة بعد دقيقة.",
+  "upstream-unavailable": "صوت Sulafat غير متاح مؤقتًا. أعد المحاولة بعد دقيقة.",
   "too many requests": "طلبات كثيرة في وقت قصير. أعد المحاولة بعد قليل.",
   autoplay: "المتصفح منع التشغيل التلقائي. اضغط على أي زر في الصفحة لتشغيل الصوت.",
-  offline: "لا يوجد اتصال بالإنترنت لتحميل الصوت السحابي.",
+  offline: "لا يوجد اتصال بالإنترنت لتحميل صوت Sulafat.",
+  "local-only": "ذكاء نظرة لا يرسل شيئًا إلى الإنترنت، فصوت Sulafat غير مستعمل. قارئ الشاشة يقرأ الكلام.",
 };
-const CLOUD_GENERIC_ERROR = "تعذّر تشغيل الصوت السحابي. تحقّق من الاتصال ثم أعد المحاولة.";
+const CLOUD_GENERIC_ERROR = "تعذّر تشغيل صوت Sulafat. تحقّق من الاتصال ثم أعد المحاولة.";
 
 class CloudError extends Error {
   code: string;
@@ -229,11 +103,13 @@ class CloudError extends Error {
 
 const CACHE_MAX = 30;
 
-export class CloudTts implements TtsEngine {
-  readonly name = "edge-cloud-tts";
+/** The assistant's only voice. */
+export const VOICE_NAME = "Sulafat";
+
+export class SulafatTts implements TtsEngine {
+  readonly name = "gemini-tts-sulafat";
   private state: CloudState = "checking";
-  private voiceName = "";
-  private lang = "ar";
+  private localOnly = false;
   private speechLang: SpeechLang = "tn";
   private readyPromise: Promise<void>;
   private ctx: AudioContext | null = null;
@@ -262,8 +138,6 @@ export class CloudTts implements TtsEngine {
       const d = res.ok ? await res.json() : null;
       if (d && typeof d.configured === "boolean") {
         this.state = d.configured ? "ready" : "unavailable";
-        this.voiceName = String(d.voice ?? "");
-        this.lang = String(d.languageCode ?? "ar");
       } else this.state = "unknown";
     } catch {
       this.state = "unknown"; // offline or server down: try again when asked to speak
@@ -281,7 +155,7 @@ export class CloudTts implements TtsEngine {
 
   /** Worth trying: configured (or not known yet, e.g. probe failed offline) and not cooling down after failures. */
   usable() {
-    return this.state !== "unavailable" && Date.now() >= this.openUntil;
+    return !this.localOnly && this.state !== "unavailable" && Date.now() >= this.openUntil;
   }
 
   /** ms until the cloud voice is tried again after repeated failures (0 = not cooling down). */
@@ -296,24 +170,28 @@ export class CloudTts implements TtsEngine {
     }
     // user-side problems (autoplay, offline) say nothing about the service
     if (code === "autoplay" || code === "offline") return;
-    if (++this.failures >= CloudTts.MAX_FAILURES) {
+    if (++this.failures >= SulafatTts.MAX_FAILURES) {
       this.failures = 0;
-      this.openUntil = Date.now() + CloudTts.COOLDOWN_MS;
+      this.openUntil = Date.now() + SulafatTts.COOLDOWN_MS;
       this.onChange?.();
     }
   }
 
   available() {
-    return this.state === "ready" && typeof window !== "undefined" && !!audioContextClass();
+    return !this.localOnly && this.state === "ready" && typeof window !== "undefined" && !!audioContextClass();
   }
 
   voiceInfo(): VoiceInfo | null {
-    if (this.state !== "ready") return null;
-    if (this.speechLang !== "tn") {
-      const voice = CLOUD_VOICES[this.speechLang];
-      return { name: `Microsoft Edge ${voice}`, lang: voice.split("-").slice(0, 2).join("-"), exactDialect: true, source: "cloud" };
-    }
-    return { name: `Microsoft Edge ${this.voiceName}`, lang: this.lang, exactDialect: this.lang.toLowerCase() === "ar-tn", source: "cloud" };
+    if (this.localOnly || this.state !== "ready") return null;
+    // One voice for every language: Gemini speaks the language of the sentence.
+    return { name: `Google Gemini ${VOICE_NAME}`, lang: LANGS[this.speechLang].bcp47, exactDialect: true, source: "cloud" };
+  }
+
+  setLocalOnly(on: boolean) {
+    if (on === this.localOnly) return;
+    this.stop();
+    this.localOnly = on;
+    this.onChange?.();
   }
 
   setLanguage(lang: SpeechLang) {
@@ -332,7 +210,7 @@ export class CloudTts implements TtsEngine {
   }
 
   unlock() {
-    if (this.state === "unavailable") return;
+    if (this.localOnly || this.state === "unavailable") return;
     try {
       const ctx = this.context();
       void ctx.resume().catch(() => {});
@@ -389,6 +267,10 @@ export class CloudTts implements TtsEngine {
 
   speak(text: string, opts: SpeakOptions) {
     if (opts.interrupt !== false) this.stop();
+    // No other voice exists to say it instead: fail at once, and the page shows it (screen reader).
+    if (this.localOnly) return opts.onError?.(CLOUD_ERRORS["local-only"]);
+    if (this.state === "unavailable") return opts.onError?.(CLOUD_ERRORS["not-configured"]);
+    if (Date.now() < this.openUntil) return opts.onError?.(CLOUD_ERRORS["upstream-unavailable"]);
     try {
       // Synchronous part of a click: counts as a user gesture for resume() (iOS).
       const ctx = this.context();
@@ -464,92 +346,4 @@ export class CloudTts implements TtsEngine {
 function audioContextClass(): typeof AudioContext | undefined {
   if (typeof window === "undefined") return undefined;
   return window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-}
-
-// ---------------------------------------------------------------------------
-// Browser voice first, cloud voice as fallback.
-
-export class HybridTts implements TtsEngine {
-  readonly name = "hybrid";
-  private browser: BrowserTts;
-  private cloud: CloudTts;
-  private gen = 0;
-  private localOnly = false;
-  private onChange?: () => void;
-
-  constructor(onChange?: () => void, endpoint?: string) {
-    this.onChange = onChange;
-    this.browser = new BrowserTts(onChange);
-    this.cloud = new CloudTts(onChange, endpoint);
-  }
-
-  setLocalOnly(on: boolean) {
-    if (on === this.localOnly) return;
-    this.stop();
-    this.localOnly = on;
-    this.browser.setLocalOnly(on);
-    this.onChange?.();
-  }
-
-  available() {
-    return (!this.localOnly && this.cloud.available()) || !!this.browser.voiceInfo();
-  }
-
-  voiceInfo() {
-    return (!this.localOnly && this.cloud.usable() ? this.cloud.voiceInfo() : null) ?? this.browser.voiceInfo();
-  }
-
-  checking() {
-    return !this.localOnly && this.cloud.checking();
-  }
-
-  unlock() {
-    if (!this.localOnly) this.cloud.unlock();
-  }
-
-  setLanguage(lang: SpeechLang) {
-    this.stop();
-    this.browser.setLanguage(lang);
-    this.cloud.setLanguage(lang);
-  }
-
-  speak(text: string, opts: SpeakOptions) {
-    // Nadhra AI: the cloud voice is never used, not even as a fallback.
-    if (this.localOnly) return this.browser.speak(text, opts);
-    if (this.cloud.checking()) {
-      // Startup race: wait for the availability check, then decide.
-      const gen = this.gen;
-      opts.onPreparing?.();
-      void this.cloud.ready().then(() => {
-        if (gen === this.gen) this.speak(text, opts);
-      });
-      return;
-    }
-    if (this.cloud.usable()) {
-      // The female cloud voice. If it fails (network, service), the installed voice says it instead.
-      this.browser.stop();
-      this.cloud.speak(text, {
-        ...opts,
-        onError: (e) => {
-          if (this.browser.voiceInfo()) this.browser.speak(text, opts);
-          else opts.onError?.(e);
-        },
-      });
-      return;
-    }
-    // No cloud voice: the installed voice for the language (female when there is one), or the default.
-    this.browser.speak(text, opts);
-  }
-
-  stop() {
-    this.gen++;
-    this.browser.stop();
-    this.cloud.stop();
-  }
-
-  dispose() {
-    this.gen++;
-    this.browser.dispose();
-    this.cloud.dispose();
-  }
 }

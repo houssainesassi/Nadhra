@@ -26,10 +26,10 @@ env:
   GEMINI_API_KEY: ""
   OPENROUTER_API_KEY: ""
   GEMINI_SEARCH_API_KEY: ""
-  # EDGE_TTS_DISABLED is deliberately not set: unit tests exercise the cloud-voice path with fake sockets,
-  # and its host is blocked by layers 2–4 like the others.
+  # GEMINI_TTS_DISABLED is deliberately not set: unit tests exercise the voice (Sulafat) path with a fake
+  # fetch, and its host is blocked by layers 2–4 like the others.
   NEXT_TELEMETRY_DISABLED: "1"
-  AI_HOSTS: "generativelanguage.googleapis.com openrouter.ai speech.platform.bing.com"
+  AI_HOSTS: "generativelanguage.googleapis.com openrouter.ai"
 
 jobs:
   checks:

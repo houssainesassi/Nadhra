@@ -1,15 +1,15 @@
-import { handleTtsPost, ttsStatus } from "@/lib/speech/edgeTts";
+import { handleTtsPost, ttsStatus } from "@/lib/speech/geminiTts";
 
-export const runtime = "nodejs"; // needs Node's WebSocket client with custom headers (not available on Edge runtime)
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-// Reports whether the cloud voice is enabled and which voice it uses (no key exists).
+// Reports whether the assistant's voice (Gemini TTS, Sulafat) is enabled.
 export function GET() {
   return Response.json(ttsStatus(), { headers: { "Cache-Control": "no-store" } });
 }
 
-// Synthesizes one sentence to MP3 via Microsoft Edge's free online voice. Nothing is stored.
+// Synthesizes one sentence to WAV with Google Gemini TTS, voice Sulafat. Nothing is stored.
 export function POST(req: Request) {
   return handleTtsPost(req);
 }

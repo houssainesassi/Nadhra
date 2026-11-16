@@ -108,9 +108,9 @@ Set these in `.env.local`, or in the Vercel project settings. Keys are read only
 | `GEMINI_API_KEY` | Main vision provider, and speech-to-text for browsers without speech recognition |
 | `OPENROUTER_API_KEY` | Optional last-resort fallback, free models only |
 | `GEMINI_VISION_MODELS` | Models to try, in order |
-| `EDGE_TTS_VOICE` | Voice outside the live conversation. Default is the Tunisian female `ar-TN-ReemNeural`. Only female voices are accepted |
+| `GEMINI_TTS_MODEL` | Gemini TTS model for the assistant's own sentences (default `gemini-3.8-flash-tts`). The voice is always `Sulafat`; there is no fallback voice. `GEMINI_TTS_DISABLED=1` turns it off |
 | `GEMINI_LIVE_MODELS` | Live conversation models, tried in order. Default `gemini-3.1-flash-live-preview,gemini-3.8-live` |
-| `GEMINI_LIVE_VOICE` | Live conversation voice: `Sulafat` (default), `Kore`, `Leda`, `Despina`, `Achernar` or `Zephyr`. Only female voices are accepted |
+| `GEMINI_LIVE_VOICE` | Ignored: the live conversation always uses `Sulafat`, the app's only voice |
 | `GEMINI_LIVE_SILENCE_MS` | Silence that ends your turn in a live conversation (default 500) |
 | `GEMINI_LIVE_DISABLED` | `1` turns the live conversation off |
 | `DAILY_*_GLOBAL`, `DAILY_*_PER_SESSION` | Daily budgets per kind of call (vision, transcribe, tts, live, search). The global values are the hard daily ceiling |
@@ -158,7 +158,7 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - **During Talk live,** stairs and drops still come from cloud scans, every 8 s at most, so they arrive later than outside the conversation. A live answer that promises safety is cut and corrected, but its first words may already have been heard.
 - **Limits are per server instance** unless the Upstash store is configured. On Vercel, budgets are then approximate.
 - **Offline, only on-device warnings work.** The app says so and stops sending frames. The voice then works only if the device has a voice installed for the chosen language. The app can't be opened without a connection (there is no offline cache), and no Nadhra engine works offline yet.
-- **Free-tier services can be busy or change.** The Edge voice in particular is an unofficial endpoint with no guarantee.
+- **Free-tier services can be busy or change.** The voice (Gemini TTS, Sulafat) has a low per-minute limit on the free tier and takes 2–5 s per sentence; when it fails there is no other voice, the page shows it and the screen reader reads.
 - **Speech recognition has only been tested on synthetic speech.** Real voices, accents and noise will do worse. Check "I heard" on screen when an answer seems wrong.
 - **Hands-free mode treats any nearby speech as a question,** which uses quota. Use the Ask button in noisy places.
 - **Smart glasses are not supported yet.** The camera input is modular so they can be added ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#adding-another-camera)), but nothing has been tested on real glasses.

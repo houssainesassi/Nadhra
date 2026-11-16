@@ -55,12 +55,12 @@ export const LIVE_CHANGE_THRESHOLD = 0.04;
 /** Large enough to read signs and labels, small enough to upload in well under a second on 4G. */
 export const LIVE_FRAME = { maxSide: 768, quality: 0.7 } as const;
 
-const isFemaleVoice = (v: string): v is LiveVoice => (FEMALE_LIVE_VOICES as readonly string[]).includes(v);
-
-/** The configured voice if it is one of the female voices, otherwise the default. */
-export function pickLiveVoice(env: string | undefined): LiveVoice {
-  const v = env?.trim() ?? "";
-  return isFemaleVoice(v) ? v : DEFAULT_LIVE_VOICE;
+/**
+ * Always Sulafat: it is the app's only voice (the same as Gemini TTS for the assistant's own
+ * sentences), so GEMINI_LIVE_VOICE can't switch the conversation to another one.
+ */
+export function pickLiveVoice(_env?: string | undefined): LiveVoice {
+  return DEFAULT_LIVE_VOICE;
 }
 
 /** Model ids from a comma list; only plausible Gemini Live model names are kept. */

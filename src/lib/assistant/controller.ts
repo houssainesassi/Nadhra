@@ -1,7 +1,7 @@
 // Runs the assistant: camera, frame selection, cloud analysis, on-device warnings, speech and voice
 // input. It has no React in it; components read its store and call its methods.
 import { createStore } from "../store.ts";
-import { HybridTts, type TtsEngine, type VoiceInfo } from "../speech/tts.ts";
+import { SulafatTts, type TtsEngine, type VoiceInfo } from "../speech/tts.ts";
 import { FrameBudget } from "../camera/frameBudget.ts";
 import { CameraError } from "../camera/camera.ts";
 import { analyzeFrame, askStreaming, fetchVisionStatus, transcribeWav, VisionApiError } from "./client.ts";
@@ -436,7 +436,7 @@ export class SmartVisionController {
   attach(video: HTMLVideoElement, deps: { tts?: TtsEngine } = {}) {
     this.video = video;
     const refreshVoice = () => this.patch({ voice: this.tts?.voiceInfo() ?? null });
-    this.tts = deps.tts ?? new HybridTts(refreshVoice);
+    this.tts = deps.tts ?? new SulafatTts(refreshVoice);
     this.queue = new SpeechQueue(this.tts, {
       rate: () => this.state.settings.rate,
       lang: () => this.lang,

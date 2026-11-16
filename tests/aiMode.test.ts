@@ -20,7 +20,7 @@ console.warn = () => {};
 const vision = await import("../src/app/api/vision/route.ts");
 const transcribe = await import("../src/app/api/vision/transcribe/route.ts");
 const liveToken = await import("../src/app/api/live/token/route.ts");
-const { handleTtsPost, ttsStatus, resetTtsState } = await import("../src/lib/speech/edgeTts.ts");
+const { handleTtsPost, ttsStatus, resetTtsState } = await import("../src/lib/speech/geminiTts.ts");
 const { resetVisionCooldowns } = await import("../src/lib/ai/vision.ts");
 
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 7)]).toString("base64");

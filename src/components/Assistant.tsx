@@ -283,6 +283,7 @@ export default function Assistant() {
         !s.online && ui.offline,
         s.detector === "failed" && ui.detectorFailed,
         s.online && (s.analysis === "unavailable" || (s.status && !s.status.available)) && ui.serviceDown,
+        s.ttsFailed && ui.voiceFailed,
       ].filter((n): n is string => !!n)
     : [];
 
