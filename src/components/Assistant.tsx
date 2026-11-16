@@ -151,7 +151,7 @@ export default function Assistant() {
   // «عسلامة» when the app opens. Speech is locked until the first tap or key press, so: at once if
   // the browser already allows it, otherwise in that first gesture (capture phase, before the button
   // it lands on starts anything). The heading shows the same word meanwhile. One greeting per visit:
-  // when that first gesture is the Microphone, the live conversation's own «عسلامة» is the
+  // when that first gesture is Talk with Nadhra (Gemini), the live conversation's own «عسلامة» is the
   // greeting, and the phone says nothing (it would be cut off by the call anyway). `click` too: a
   // TalkBack double-tap can reach the page as a click alone.
   useEffect(() => {
@@ -163,8 +163,8 @@ export default function Assistant() {
       // Not a gesture to the browser (audio stays locked): wait for the next one.
       if (e instanceof KeyboardEvent && (e.key === "Escape" || ["Shift", "Control", "Alt", "Meta"].includes(e.key))) return;
       off();
-      const toLive = (e instanceof KeyboardEvent && e.code === "KeyL") || !!(e.target instanceof Element && e.target.closest("[data-testid=live-toggle]"));
-      if (!toLive) greet();
+      const toLive = (e instanceof KeyboardEvent && e.code === "KeyL") || !!(e.target instanceof Element && e.target.closest("[data-testid=talk-nadhra]"));
+      if (!toLive || providerOf(controller.state.settings) === "nadhra") greet();
     };
     events.forEach((e) => addEventListener(e, once, true));
     return off;
@@ -299,7 +299,7 @@ export default function Assistant() {
 
         <main className="main">
           {!active && (
-            // Read in this order by a screen reader: the greeting, then the three buttons.
+            // Read in this order by a screen reader: the greeting, Talk with Nadhra, Settings.
             <section className="home">
               <div className="home-ambient" aria-hidden="true" />
               <p className="home-brand">
@@ -310,22 +310,15 @@ export default function Assistant() {
               <div className="home-center">
                 <h1 className="greeting" data-testid="greeting">{ui.greeting}</h1>
                 <div className="tiles" data-large={s.settings.textScale >= 1.5}>
-                  <button ref={openRef} type="button" onClick={() => void controller.startAssistance()} aria-keyshortcuts="C" aria-describedby="camera-sub"
-                    className="tile tile-camera" data-testid="open-camera">
-                    <span className="tile-icon" aria-hidden="true"><CameraIcon size={40} /></span>
-                    <span className="tile-text">
-                      <span className="tile-label">{ui.camera}</span>
-                      {/* The description, not the name: read after it, through aria-describedby. */}
-                      <span id="camera-sub" className="tile-sub" aria-hidden="true">{ui.cameraSub}</span>
-                    </span>
-                  </button>
-                  {/* The live conversation. The first press only gives its notice (spoken); the button then says «I agree». */}
-                  <button type="button" onClick={() => controller.toggleLive()} aria-keyshortcuts="L" aria-describedby="mic-sub live-hint"
-                    className="tile tile-mic" data-testid="live-toggle" data-live-status={s.live.status} data-notice={s.liveNotice}>
+                  {/* One press: the camera and the microphone open together. With Gemini, the live
+                      conversation (its first press only gives its notice, spoken; the button then says
+                      «I agree»). With Nadhra AI (no live conversation): on-device warnings and voice commands. */}
+                  <button ref={openRef} type="button" aria-keyshortcuts="L"
+                    onClick={() => (provider === "nadhra" ? void controller.startAssistance() : controller.toggleLive())}
+                    className="tile tile-talk" data-testid="talk-nadhra" data-live-status={s.live.status} data-notice={s.liveNotice}>
                     <span className="tile-icon" aria-hidden="true"><MicIcon size={40} /></span>
                     <span className="tile-text">
-                      <span className="tile-label">{s.liveNotice ? ui.talkLive.agree : ui.microphone}</span>
-                      <span id="mic-sub" className="tile-sub" aria-hidden="true">{ui.micSub}</span>
+                      <span className="tile-label">{s.liveNotice ? ui.talkLive.agree : ui.talkNadhra}</span>
                     </span>
                   </button>
                 </div>

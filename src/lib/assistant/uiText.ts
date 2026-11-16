@@ -10,12 +10,9 @@ export interface UiText {
   /** Said and shown when the app opens. */
   greeting: string;
   openCamera: string;
-  /** The three home buttons: Camera, Microphone (the live conversation), Settings. `*Sub` is the
-      short line under a tile, read as its description. */
-  camera: string;
-  cameraSub: string;
-  microphone: string;
-  micSub: string;
+  /** The one home button: camera and microphone together (the live conversation, or with Nadhra AI
+      the camera and voice commands). Settings is separate. */
+  talkNadhra: string;
   stop: string;
   stopHint: string;
   privacySafety: string;
@@ -66,10 +63,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     language: "اللغة",
     greeting: "عسلامة",
     openCamera: "حِلّ الكاميرا",
-    camera: "الكاميرا",
-    cameraSub: "توصفلك اللي حولك",
-    microphone: "الميكرو",
-    micSub: "احكي مع نظرة مباشرة",
+    talkNadhra: "احكي مع نظرة",
     stop: "وقّف المساعدة",
     stopHint: "يسكّر الكاميرا والميكرو.",
     privacySafety: "الخصوصية والسلامة",
@@ -99,10 +93,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     language: "اللغة",
     greeting: "عسلامة",
     openCamera: "افتح الكاميرا",
-    camera: "الكاميرا",
-    cameraSub: "تصف لك ما حولك",
-    microphone: "الميكروفون",
-    micSub: "تحدّث مع نظرة مباشرة",
+    talkNadhra: "تحدّث مع نظرة",
     stop: "أوقف المساعدة",
     stopHint: "يغلق الكاميرا والميكروفون.",
     privacySafety: "الخصوصية والسلامة",
@@ -132,10 +123,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     language: "Langue",
     greeting: "Asslema",
     openCamera: "Ouvrir la caméra",
-    camera: "Caméra",
-    cameraSub: "Décrit ce qui vous entoure",
-    microphone: "Micro",
-    micSub: "Parlez en direct avec Nadhra",
+    talkNadhra: "Parler avec Nadhra",
     stop: "Arrêter l'assistance",
     stopHint: "Éteint la caméra et le micro.",
     privacySafety: "Confidentialité et sécurité",
@@ -165,10 +153,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     language: "Language",
     greeting: "Asslema",
     openCamera: "Open camera",
-    camera: "Camera",
-    cameraSub: "Describes what’s around you",
-    microphone: "Microphone",
-    micSub: "Talk with Nadhra live",
+    talkNadhra: "Talk with Nadhra",
     stop: "Stop assistance",
     stopHint: "Turns off the camera and the microphone.",
     privacySafety: "Privacy & safety",
