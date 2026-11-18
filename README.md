@@ -72,6 +72,8 @@ Help speaks the list of voice commands. There is no typed question box.
 
 **Emergency assistance** calls or texts a contact saved in Settings (kept on the device only), with the current location as a map link when the browser can get it, and lists Tunisia's emergency numbers (SAMU 190, police 197, civil protection 198). Browsers only open the phone app from a real tap, so saying "call" selects the Call button, ready for one tap or double-tap. Nothing is dialled or sent without that. If the location can't be found (refused, unavailable or not supported), the assistant says so after the page's opening sentence: the message will ask them to call you.
 
+**Location and walking directions** (Gemini only; details in [docs/NAVIGATION.md](docs/NAVIGATION.md)). In a conversation, ask «وين أنا توّا؟», «chnowa fama 9ribi?», «win a9reb pharmacie?», «kifeh nemchi lel pharmacie?» or "guide me to the nearest hospital". The live model calls location tools instead of guessing: the phone's GPS, OpenStreetMap addresses and places, and real walking routes (OSRM). It says the walking distance and time and asks before starting. Then the phone itself speaks each direction in Sulafat's voice, from the route, with more caution when GPS is imprecise. It notices when you leave the route or walk the wrong way, works out a new route, and says when the GPS signal is lost. «وقّف التوجيه» / "stop navigation" stops at once. Location has its own spoken consent, asked the first time. Guidance keeps running after the conversation ends, with a large Stop navigation button on the main screen. The same things work with buttons in Settings → Location & directions, which also has an optional map (Leaflet + OpenStreetMap). The map is never needed.
+
 Settings also has speech speed and volume, text size (on top of the browser's own font size, which the page follows), colours, vibration, sending speech to your screen reader, and switching camera.
 
 Screen readers often capture letter keys in browse mode, so use their pass-through mode for the shortcuts, or use the buttons.
@@ -121,6 +123,10 @@ Set these in `.env.local`, or in the Vercel project settings. Keys are read only
 | `AI_MODE` | `cloud` (default), `hybrid` or `offline`: which AI providers a task may use ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#ai-mode-and-routing-offline-track)). `offline` sends nothing and refuses what needs the cloud |
 | `NADHRA_AI_ENABLED` | `1` shows the Gemini / Nadhra switch. No Nadhra engine is connected yet, so Nadhra requests are refused |
 | `INTERNET_PROBE_URL` | Optional, hybrid mode only: an address checked to tell whether the internet is reachable |
+| `GEO_DISABLED` | `1` turns location and directions off (the live model is then told it has no location). Off in `AI_MODE=offline` too |
+| `OVERPASS_URLS`, `NOMINATIM_URL`, `OSRM_FOOT_URL` | Map services (defaults: the public OpenStreetMap ones). Point them at your own instances for real traffic |
+| `GEO_CONTACT_EMAIL` | Optional contact added to the User-Agent the map services see, as the Nominatim policy asks |
+| `GEO_RATE_LIMIT_PER_MIN`, `DAILY_GEO_PER_SESSION`, `DAILY_GEO_GLOBAL` | Limits on map requests (defaults 20 a minute, 400 a day per session, 5,000 a day in total) |
 
 The API routes only answer this site's own page: a request needs the page's Origin and its anonymous session cookie, then per-minute limits and daily budgets apply ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#api-protection-and-cost-control)). This is not authentication: a determined script can still get a cookie. The daily totals are what cap the cost.
 
@@ -143,7 +149,8 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - **Spoken questions** go to the browser's speech service (Google, in Chrome), or to Gemini when recording is used.
 - Text sent to the fallback voice goes to Microsoft's online service.
 - The camera and microphone are released when turned off or when the page is left.
-- Location is only requested when the Emergency page opens, and is only put into a text message that the user sends from their own phone app. It never reaches this app's server.
+- For the Emergency page, location is only requested when the page opens, and is only put into a text message that the user sends from their own phone app. It never reaches this app's server.
+- **Location & directions is separate, with its own spoken consent.** After it, the position goes through this app's server to the OpenStreetMap services: Nominatim for addresses, Overpass for places, and the FOSSGIS OSRM server for walking routes. It is not logged. Answers are cached in server memory by rounded position, for at most a day. In a conversation, place names, addresses and rounded distances go to Gemini, but never coordinates. GPS is read once per question, and continuously only while guidance runs. "Stop using my location" forgets the position and places; "Forget my location permission" withdraws the consent.
 
 ## Known limits
 
@@ -152,6 +159,7 @@ Paid models are refused by design, so a misconfiguration can't produce a bill. T
 - **Live answers start about 1–1.5 s after you stop talking** (measured Nov 2026 with Gemini 3.1 Flash Live: median 1.07 s on our connection, occasionally 3 s). About half of that is the service waiting to be sure you have finished. The live model can still be wrong, including about left and right: in one of our test runs it answered about the wrong side. It was also told never to invent movement it can't see; check what matters.
 - **The live voice's Tunisian accent was checked by a second AI model and by pitch measurement, not yet by Tunisian listeners.**
 - **Warnings are not instant.** The on-device detector reacts in under a second, but only knows common objects. Stairs, floor-level changes and other hazards rely on the cloud model, which takes about 2–3 s when healthy and more when busy. A fast car can arrive before any warning.
+- **Walking directions come from OpenStreetMap and phone GPS, both approximate.** GPS is often 10–50 m off between buildings, so precise turns are only announced when the reported accuracy is 20 m or better. Map data can be missing, wrong or out of date: in central Tunis, the nearest "hospital" on the map was a dentists' professional body, tagged as a hospital. Routes say nothing about obstacles, works, crossings or traffic lights. The public OpenStreetMap servers are for light use only. The GPS doesn't know which way you are facing, so the first direction is "start walking", and a wrong direction is noticed after about 25 m. Not yet tested on a real phone or outdoors.
 - **"Near" and "far" are judged from the picture,** never measured. No distances are given, because a single camera can't measure them reliably.
 - **The French, English and Standard Arabic wording, and the Derja,** were written without native-speaker review. The Derja is also written by an AI model and spoken by a synthetic voice. It needs review by Tunisian blind users. Browser voices that aren't `ar-TN` will pronounce it less naturally.
 - **Pause stops descriptions, not on-device warnings.** Those keep running and the pause notice says so.

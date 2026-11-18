@@ -8,6 +8,8 @@ import type { SpeechLang } from "../assistant/lang.ts";
 import type { CameraFacing } from "../assistant/types.ts";
 import { aiMode } from "../ai/router.ts";
 import type { LivePricing, TokenModality } from "../live/metrics.ts";
+import { geoEnabled } from "./geo.ts";
+import { GEO_FUNCTION_DECLARATIONS } from "../geo/tools.ts";
 
 const AUTH_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 
@@ -34,6 +36,8 @@ export interface LiveConfig {
    */
   contextTriggerTokens: number;
   contextTargetTokens: number;
+  /** The location tools (GPS, nearby places, walking routes) are in the session. See geo.ts. */
+  geo: boolean;
 }
 
 const intEnv = (v: string | undefined, def: number, min: number, max: number) => {
@@ -54,12 +58,13 @@ export function liveConfig(): LiveConfig {
     contextTriggerTokens: intEnv(process.env.GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS, 25_600, 4_000, 1_000_000),
     contextTargetTokens: intEnv(process.env.GEMINI_LIVE_CONTEXT_TARGET_TOKENS, 12_800, 2_000, 1_000_000),
     endSensitivity: ({ high: "END_SENSITIVITY_HIGH", low: "END_SENSITIVITY_LOW" } as const)[process.env.GEMINI_LIVE_END_SENSITIVITY?.trim().toLowerCase() ?? ""],
+    geo: geoEnabled(),
   };
 }
 
 export function liveStatus() {
   const c = liveConfig();
-  return { configured: c.enabled, models: c.models, voice: c.voice, pricing: livePricing() };
+  return { configured: c.enabled, models: c.models, voice: c.voice, pricing: livePricing(), geo: c.geo };
 }
 
 /**
@@ -103,7 +108,9 @@ export function buildLiveSetup(o: MintOptions, c: LiveConfig = liveConfig()) {
       responseModalities: ["AUDIO"],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: c.voice } } },
     },
-    systemInstruction: { parts: [{ text: liveSystemPrompt(o.lang, o.facing) }] },
+    systemInstruction: { parts: [{ text: liveSystemPrompt(o.lang, o.facing, c.geo) }] },
+    // The phone runs these (src/lib/geo/geoController.ts) and answers with what the maps say.
+    ...(c.geo ? { tools: [{ functionDeclarations: GEO_FUNCTION_DECLARATIONS }] } : {}),
     realtimeInputConfig: {
       automaticActivityDetection: { silenceDurationMs: c.silenceMs, prefixPaddingMs: 100, ...(c.endSensitivity ? { endOfSpeechSensitivity: c.endSensitivity } : {}) },
     },

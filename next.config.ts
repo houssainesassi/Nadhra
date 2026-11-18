@@ -10,7 +10,8 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  // OpenStreetMap tiles, only for the optional map in Location & directions.
+  "img-src 'self' data: blob: https://tile.openstreetmap.org",
   "font-src 'self'",
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
@@ -29,9 +30,10 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Frame-Options", value: "DENY" },
-  // The assistant needs the camera and microphone (the browser still asks the user). Location only
-  // for the Emergency page: asked for when it opens, and put only into a message the user sends.
-  // It is never sent to this app's server.
+  // The assistant needs the camera and microphone (the browser still asks the user). Location: for
+  // the Emergency page (put only into a message the user sends, never sent to this server), and,
+  // after its own spoken consent, for Location & directions (sent through this server to the
+  // OpenStreetMap services; see src/lib/server/geo.ts).
   { key: "Permissions-Policy", value: "camera=(self), microphone=(self), geolocation=(self)" },
 ];
 

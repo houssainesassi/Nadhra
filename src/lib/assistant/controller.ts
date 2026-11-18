@@ -18,11 +18,16 @@ import { LANGS, questionLang, type SpeechLang } from "./lang.ts";
 import { backoffMs, decideScan } from "./scheduler.ts";
 import { flushReports, report, setLocalOnly } from "./api.ts";
 import { isSafetyClaim, splitSentences } from "./schema.ts";
-import { DEFAULT_VISION_SETTINGS, hasConsent, providerOf, type AiProvider, hasLiveConsent, hasReadConsent, loadVisionSettings, RATE_CHOICES, saveVisionSettings, setConsent, setLiveConsent, setReadConsent, VOLUME_CHOICES, type VisionSettings } from "./settings.ts";
+import { DEFAULT_VISION_SETTINGS, hasConsent, providerOf, type AiProvider, hasLiveConsent, hasLocationConsent, hasReadConsent, loadVisionSettings, RATE_CHOICES, saveVisionSettings, setConsent, setLiveConsent, setLocationConsent, setReadConsent, VOLUME_CHOICES, type VisionSettings } from "./settings.ts";
 import { isRepeat, SpeechQueue, type SpeechPriority } from "./speechQueue.ts";
 import type { CameraFacing, Detection, DocumentReading, Hazard, SceneAnalysis, SceneText, SpeechSegment, VisionMode, VisionStatus } from "./types.ts";
 import { RecognitionInput, RecorderInput, recognitionSupported, recordingSupported, VoiceError, type VoiceInput } from "./voiceInput.ts";
-import { LiveSession, type LiveStatus } from "../live/session.ts";
+import { LiveSession, type LiveFunctionCall, type LiveStatus } from "../live/session.ts";
+import { GEO_IDLE, GeoController, type GeoSayKind, type GeoState } from "../geo/geoController.ts";
+import { BrowserPosition, httpGeoApi, type GeoApi, type PositionSource } from "../geo/client.ts";
+import { isGeoTool } from "../geo/tools.ts";
+import { geoSpeech } from "../geo/phrases.ts";
+import type { PlaceCategory } from "../geo/types.ts";
 import { LiveAudio, MicError } from "../live/audioIO.ts";
 import { classifyCueAnswer, cueText, NewObjectFilter, PROACTIVE, ProactiveGate } from "../live/proactive.ts";
 import { addToTotals, LiveMetrics, loadTotals, saveTotals, summaryCode, type DeviceTotals, type LiveSummary } from "../live/metrics.ts";
@@ -48,6 +53,8 @@ const SECOND_FRAME_DELAY_MS = 400;
  * when the view has changed this much from it, on two ticks in a row: the paper was put away.
  */
 const DOCUMENT_AWAY_CHANGE = 0.5;
+/** A location tool slower than this gets a spoken "searching the map". */
+const GEO_SLOW_TOOL_MS = 2_500;
 /** While a live conversation runs, the user is reminded this often that it is sending to Google. */
 const LIVE_REMINDER_MS = 5 * 60_000;
 /** Moving camera with automatic descriptions off: reminded that stairs and holes aren't seen, at most this often… */
@@ -93,7 +100,7 @@ export type AnalysisState = "off" | "watching" | "manual" | "local" | "analyzing
 export type MicState = "off" | "listening" | "processing" | "denied" | "unavailable";
 export type DetectorState = "off" | "loading" | "ready" | "failed";
 /** The panels over the main screen. The controller owns this so voice can open and close them. */
-export type SheetName = "none" | "settings" | "privacy" | "emergency";
+export type SheetName = "none" | "settings" | "privacy" | "emergency" | "places";
 /** Something the user asked for that runs once the camera is on. */
 export type Task = "front" | "describe" | "read" | "identify";
 export type LocationState = { status: "idle" | "pending" | "failed" } | { status: "ready"; lat: number; lng: number; accuracy: number };
@@ -163,6 +170,8 @@ export interface VisionState {
   liveStats: LiveSummary | null;
   /** All live conversations on this device (no accounts: this is the per-user figure). */
   liveTotals: DeviceTotals | null;
+  /** Location, nearby places and walking guidance (src/lib/geo/geoController.ts). */
+  geo: GeoState;
 }
 
 export interface LiveState {
@@ -223,6 +232,7 @@ const INITIAL: VisionState = {
   online: true,
   answer: { text: "", live: false, web: false },
   live: LIVE_OFF,
+  geo: GEO_IDLE,
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -232,6 +242,16 @@ const isTouchDevice = () => typeof matchMedia === "function" && matchMedia("(poi
 
 export class SmartVisionController {
   readonly store = createStore<VisionState>(INITIAL);
+  /** Location and walking guidance. Replaceable in tests (useGeo). */
+  private geo: GeoController = this.makeGeo(new BrowserPosition(), httpGeoApi);
+  /** Counts the user's turns in a live conversation: starting guidance needs a yes in a later one. */
+  private liveUserTurn = 0;
+  /** The phone spoke for the model's last tool call: the rest of that answer isn't played or shown. */
+  private liveAppSpoke = false;
+  /** «وقّف التوجيه» was already acted on during this user turn (from the partial transcript). */
+  private liveNavStopped = false;
+  /** Tool calls the user talked over: their answers are not sent. */
+  private liveCancelledCalls = new Set<string>();
 
   private video: HTMLVideoElement | null = null;
   private source: CameraSource | null = null;
@@ -582,6 +602,7 @@ export class SmartVisionController {
     this.resumeOnReturn = false;
     if (this.liveSession) this.stopLive(true);
     this.stopLocation();
+    this.geo.destroy();
     this.stopAssistantLoop();
     this.releaseCamera();
     this.queue?.stop();
@@ -697,8 +718,16 @@ export class SmartVisionController {
     await this.startCamera();
   }
 
-  /** The Stop button: camera, voice commands and any live conversation all end. */
+  /**
+   * The Stop button: camera, voice commands and any live conversation all end. Walking guidance
+   * keeps going (it needs neither), and the user is told how to stop it.
+   */
   stopAssistance() {
+    this.stopSession();
+    if (this.geo.navigating) this.say(geoSpeech(this.lang).navReminder, "status");
+  }
+
+  private stopSession() {
     this.unlockAudio();
     this.pendingVoice = false;
     this.pendingTask = null;
@@ -1303,6 +1332,8 @@ export class SmartVisionController {
       this.sendLiveFrame(true);
       this.liveNewUserTurn = true;
       this.liveNewAnswer = true;
+      this.liveUserTurn++; // a typed question is a turn of the user's too
+      this.liveNavStopped = false;
       this.patch({ live: { ...this.state.live, user: q, ai: "" } });
       this.liveSession.sendText(q);
       return;
@@ -1997,12 +2028,14 @@ export class SmartVisionController {
         if (this.state.liveNotice) return (this.goBack(), true);
         return (this.stopLive(), true);
       case "emergency": return (this.openSheet("emergency"), true);
+      case "nav-stop": return (this.geo.stopNavigation(), true);
       case "call": return (this.requestCall(), true);
       case "louder": return (this.step("volume", 1), true);
       case "quieter": return (this.step("volume", -1), true);
       case "faster": return (this.step("rate", 1), true);
       case "slower": return (this.step("rate", -1), true);
       case "yes":
+        if (this.geo.state.asking) return (this.geoAccept(), true);
         if (this.pendingRead) return (this.acceptReadNotice(), true);
         if (this.state.liveNotice) return (void this.startLive(), true);
         // Otherwise a follow-up («yes, read it») for the model.
@@ -2014,6 +2047,114 @@ export class SmartVisionController {
         this.updateSettings({ language: lang });
         return true;
       }
+    }
+  }
+
+  // --- location and walking guidance -------------------------------------------------------------------
+  // The live model calls the tools (onLiveToolCall); the Navigation panel's buttons call these.
+  // Directions are spoken by the phone (Sulafat), from the route, never made up by the model.
+
+  private makeGeo(position: PositionSource, api: GeoApi): GeoController {
+    return new GeoController({
+      lang: () => this.lang,
+      say: (text, kind) => this.geoSay(text, kind),
+      onChange: (geo) => this.patch({ geo }),
+      position,
+      api,
+      consent: { get: hasLocationConsent, set: setLocationConsent },
+      toLive: (text) => void this.liveSession?.sendText(text, { measure: false }),
+    });
+  }
+
+  /** For tests: a fake GPS and fake map routes. */
+  useGeo(position: PositionSource, api: GeoApi) {
+    this.geo.destroy();
+    this.geo = this.makeGeo(position, api);
+    this.patch({ geo: this.geo.state });
+  }
+
+  /** A direction at a turn interrupts (like a warning, and cuts the live answer); the rest waits less. */
+  private geoSay(text: string, kind: GeoSayKind) {
+    if (kind !== "status" && this.liveAudio?.isPlaying) this.cutLiveForWarning();
+    this.say(text, kind === "now" ? "warning" : kind === "info" ? "answer" : "status");
+  }
+
+  /** Nadhra AI sends nothing anywhere: the map services are refused like the other cloud features. */
+  private geoAllowed(): boolean {
+    this.unlockAudio();
+    if (!this.nadhra) return true;
+    this.refuseNadhra();
+    return false;
+  }
+
+  get navigating() {
+    return this.geo.navigating;
+  }
+  geoWhereAmI() {
+    if (this.geoAllowed()) void this.geo.whereAmIByUser();
+  }
+  geoSearch(category: PlaceCategory) {
+    if (this.geoAllowed()) void this.geo.searchByUser(category);
+  }
+  geoRoute(placeId: string) {
+    if (this.geoAllowed()) void this.geo.routeByUser(placeId);
+  }
+  /** The Start button: pressing it is the confirmation. */
+  geoStart(routeId: string) {
+    if (this.geoAllowed()) this.geo.startNavigation(routeId);
+  }
+  geoRefresh() {
+    if (this.geoAllowed()) void this.geo.refreshByUser();
+  }
+  geoStop() {
+    this.unlockAudio();
+    this.geo.stopNavigation();
+  }
+  geoStopTracking() {
+    this.unlockAudio();
+    this.geo.stopTracking();
+  }
+  geoAccept() {
+    this.unlockAudio();
+    if (this.nadhra) return this.refuseNadhra();
+    this.geo.acceptConsent();
+  }
+  geoDecline() {
+    this.unlockAudio();
+    this.geo.declineConsent();
+  }
+  geoWithdraw() {
+    this.unlockAudio();
+    this.geo.withdrawConsent();
+    this.say(geoSpeech(this.lang).trackingStopped, "status");
+  }
+
+  /** The model calls location tools. Answered in order, each with what the maps and GPS said. */
+  private async onLiveToolCall(gen: number, calls: LiveFunctionCall[], connection: number | undefined) {
+    for (const call of calls) {
+      if (gen !== this.liveGen) return;
+      let response: Record<string, unknown>;
+      let appSpoke = false;
+      if (this.nadhra) response = { ok: false, error: "unavailable" };
+      else if (!isGeoTool(call.name)) response = { ok: false, error: "unknown_tool" };
+      else {
+        // A slow map service: a short "searching" so the user isn't left in silence.
+        const slow = setTimeout(() => gen === this.liveGen && this.say(geoSpeech(this.lang).searching, "status"), GEO_SLOW_TOOL_MS);
+        const out = await this.geo.runTool(call.name, call.args, { userTurn: this.liveUserTurn }).finally(() => clearTimeout(slow));
+        response = out.response;
+        appSpoke = out.appSpoke;
+      }
+      if (gen !== this.liveGen) return;
+      if (this.liveCancelledCalls.delete(call.id)) continue;
+      if (appSpoke) {
+        // The phone is speaking (the location notice, the start of guidance): the model's words
+        // for this turn would talk over it, so they are neither played nor shown.
+        if (this.liveNewAnswer) this.startLiveAnswer();
+        this.liveMuted = true;
+        this.liveAppSpoke = true;
+        this.liveAudio?.flush();
+      }
+      this.liveSession?.sendToolResponse([{ id: call.id, name: call.name, response }], connection);
     }
   }
 
@@ -2133,10 +2274,21 @@ export class SmartVisionController {
         this.liveTurnOpenAt = null;
       },
       userSpeechStart: () => this.sendLiveFrame(false),
+      toolCall: (calls) => {
+        if (gen !== this.liveGen) return;
+        void this.onLiveToolCall(gen, calls, (session as { connection?: number }).connection);
+      },
+      toolCallCancelled: (ids) => {
+        if (gen === this.liveGen) for (const id of ids) this.liveCancelledCalls.add(id);
+      },
       userText: (piece) => {
         if (gen !== this.liveGen) return;
         const user = this.liveNewUserTurn ? piece.trimStart() : this.state.live.user + piece;
-        if (this.liveNewUserTurn) this.liveCommandChecked = false;
+        if (this.liveNewUserTurn) {
+          this.liveCommandChecked = false;
+          this.liveUserTurn++;
+          this.liveNavStopped = false;
+        }
         this.liveNewUserTurn = false;
         this.lastLiveTalkAt = Date.now();
         this.proactive.resetBackoff(); // a real conversation again: the short gap
@@ -2149,6 +2301,7 @@ export class SmartVisionController {
         if (gen !== this.liveGen) return;
         if (this.liveNewAnswer) this.startLiveAnswer();
         if (this.checkLiveCommand()) return;
+        if (this.liveAppSpoke) return; // the phone spoke for this turn: these words were never played
         const cue = this.liveCue;
         if (cue && cue.state !== "speak") {
           if (cue.state === "silent" || cue.state === "dropped") return;
@@ -2269,6 +2422,14 @@ export class SmartVisionController {
    */
   private checkLiveStop(user: string): boolean {
     const stop = parseCommand(user);
+    if (stop === "nav-stop") {
+      // Emergency stop: the guidance ends as soon as the words are heard, not after the turn.
+      if (this.geo.navigating && !this.liveNavStopped) {
+        this.liveNavStopped = true;
+        this.geo.stopNavigation();
+      }
+      return true;
+    }
     if (stop !== "live-off" && stop !== "assistant-off" && stop !== "camera-off") return false;
     this.stopLive();
     if (stop === "camera-off") this.stopCamera();
@@ -2279,6 +2440,7 @@ export class SmartVisionController {
   private startLiveAnswer() {
     this.liveTurnOpenAt = Date.now();
     this.liveNewAnswer = false;
+    this.liveAppSpoke = false;
     this.liveCheckedChars = 0;
     this.liveMuted = false;
     this.patch({ live: { ...this.state.live, ai: "" } });
@@ -2306,6 +2468,21 @@ export class SmartVisionController {
     if (command === "assistant-off" || command === "camera-off" || command === "live-off") {
       this.stopLive();
       if (command === "camera-off") this.stopCamera();
+      return true;
+    }
+    // The answer to the location notice, said during a live conversation.
+    if (this.geo.state.asking && (command === "yes" || command === "back")) {
+      this.liveMuted = true;
+      this.liveAudio?.flush();
+      if (command === "yes") this.geo.acceptConsent();
+      else this.geo.declineConsent();
+      return true;
+    }
+    if (command === "nav-stop") {
+      this.liveMuted = true;
+      this.liveAudio?.flush();
+      if (!this.liveNavStopped) this.geo.stopNavigation();
+      this.liveNavStopped = true;
       return true;
     }
     // The answer to the notice about documents, said during a live conversation.
@@ -2411,6 +2588,8 @@ export class SmartVisionController {
    */
   stopLive(quiet = false, opts: { keepCamera?: boolean } = {}) {
     this.liveGen++;
+    this.liveCancelledCalls.clear();
+    this.liveAppSpoke = false;
     this.liveGreetPending = false;
     this.pendingLive = false;
     const had = !!this.liveSession || !!this.liveAudio;

@@ -100,6 +100,12 @@ export const CONSENT_KEY = "assistant.consent.v3";
 export const READ_CONSENT_KEY = "assistant.readConsent.v1";
 /** The spoken notice about the live conversation (voice and a picture a second to Google) was accepted. */
 export const LIVE_CONSENT_KEY = "assistant.liveConsent.v1";
+/**
+ * The spoken notice about location (the position goes through this app's server to OpenStreetMap
+ * services, and place names and distances to Gemini) was accepted. Separate from the others: the
+ * camera consent says the location stays on the device, which is true until this one is given.
+ */
+export const LOCATION_CONSENT_KEY = "assistant.locationConsent.v1";
 
 /**
  * A script for the page's <head> (layout.tsx). Before the first paint, it sets <html lang> and
@@ -169,5 +175,20 @@ export function setLiveConsent(granted: boolean) {
   try {
     if (granted) localStorage.setItem(LIVE_CONSENT_KEY, "1");
     else localStorage.removeItem(LIVE_CONSENT_KEY);
+  } catch {}
+}
+
+export function hasLocationConsent(): boolean {
+  try {
+    return localStorage.getItem(LOCATION_CONSENT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setLocationConsent(granted: boolean) {
+  try {
+    if (granted) localStorage.setItem(LOCATION_CONSENT_KEY, "1");
+    else localStorage.removeItem(LOCATION_CONSENT_KEY);
   } catch {}
 }

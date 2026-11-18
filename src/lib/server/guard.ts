@@ -13,7 +13,7 @@ import { usageStore } from "./usageStore.ts";
 import { record } from "./monitor.ts";
 
 /** Everything that costs an upstream call. */
-export type UsageKind = "vision" | "transcribe" | "tts" | "live" | "search" | "report";
+export type UsageKind = "vision" | "transcribe" | "tts" | "live" | "search" | "report" | "geo";
 
 interface Limits {
   perMinuteSession: number;
@@ -47,6 +47,10 @@ export function limitsFor(kind: UsageKind): Limits {
       return { perMinuteSession: 6, perMinuteAddress: 18, perDaySession: int(e.DAILY_SEARCH_PER_SESSION, 30), perDayGlobal: int(e.DAILY_SEARCH_GLOBAL, 150) };
     case "report":
       return { perMinuteSession: 10, perMinuteAddress: 30, perDaySession: 500, perDayGlobal: 50_000 };
+    // Maps (OpenStreetMap services, free but shared): a walk with guidance makes a few route
+    // requests, a question one or two. Kept well under the services' fair-use limits.
+    case "geo":
+      return { perMinuteSession: int(e.GEO_RATE_LIMIT_PER_MIN, 20), perMinuteAddress: int(e.GEO_RATE_LIMIT_PER_MIN, 20) * 3, perDaySession: int(e.DAILY_GEO_PER_SESSION, 400), perDayGlobal: int(e.DAILY_GEO_GLOBAL, 5_000) };
   }
 }
 
@@ -125,7 +129,7 @@ export async function allowNewSession(req: Request, now = Date.now()): Promise<b
 
 /** Today's totals for the whole service, for the health route. */
 export async function usageToday(now = Date.now()) {
-  const kinds: UsageKind[] = ["vision", "transcribe", "tts", "live", "search"];
+  const kinds: UsageKind[] = ["vision", "transcribe", "tts", "live", "search", "geo"];
   const d = today(now);
   const used = await usageStore().peek(kinds.map((k) => `d:${d}:${k}:g`));
   return {

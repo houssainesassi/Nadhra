@@ -333,3 +333,32 @@ test("token setup: context compression bounded by default, configurable, 0 = Goo
     process.env = saved;
   }
 });
+
+test("session: function calls (location tools) come out as events; answers go back on the same connection only", async () => {
+  FakeWs.all = [];
+  const calls: unknown[] = [];
+  const cancelled: string[][] = [];
+  const s = new LiveSession(
+    {
+      lang: "tn",
+      facing: "outward",
+      WebSocketImpl: FakeWs as unknown as typeof WebSocket,
+      fetchImpl: (async () => new Response(JSON.stringify({ token: "t", url: "wss://x", setup: { model: "m" }, model: "m", voice: "Sulafat", lastModel: true }))) as typeof fetch,
+    },
+    { toolCall: (c) => calls.push(c), toolCallCancelled: (ids) => cancelled.push(ids) },
+  );
+  await s.start();
+  const ws = FakeWs.all[0];
+  // As Gemini sent it in the real probe (Nov 2026): one call per message, args an object.
+  ws.serve({ toolCall: { functionCalls: [{ name: "get_current_location", args: {}, id: "fc_1" }] } });
+  ws.serve({ toolCall: { functionCalls: [{ name: "search_nearby_places", args: { category: "pharmacy" }, id: "fc_2" }, { name: 3, id: "bad" }] } });
+  ws.serve({ toolCallCancellation: { ids: ["fc_2", 7] } });
+  assert.deepEqual(calls, [[{ id: "fc_1", name: "get_current_location", args: {} }], [{ id: "fc_2", name: "search_nearby_places", args: { category: "pharmacy" } }]]);
+  assert.deepEqual(cancelled, [["fc_2"]]);
+  const conn = s.connection;
+  assert.equal(s.sendToolResponse([{ id: "fc_1", name: "get_current_location", response: { ok: true, accuracy_m: 9 } }], conn), true);
+  assert.deepEqual(ws.sent.at(-1), { toolResponse: { functionResponses: [{ id: "fc_1", name: "get_current_location", response: { ok: true, accuracy_m: 9 } }] } });
+  assert.equal(s.sendToolResponse([{ id: "x", name: "y", response: {} }], conn + 1), false, "a call from an earlier connection is forgotten by the model");
+  s.stop();
+  assert.equal(s.sendToolResponse([{ id: "x", name: "y", response: {} }], conn), false);
+});

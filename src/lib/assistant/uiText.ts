@@ -57,6 +57,21 @@ export interface UiText {
   controls: { micMute: string; micUnmute: string; switchCamera: string; switching: string; fullscreen: string; exitFullscreen: string };
   /** Before anything was said. `example` is a question the user can ask. */
   prompt: (example: string) => string;
+  /** Location and walking guidance on the main screen: the strip shown while it runs. */
+  nav: {
+    /** Opens the Location & directions panel. */
+    open: string;
+    /** Big button: ends the guidance (the same as «وقّف التوجيه»). */
+    stop: string;
+    to: (destination: string) => string;
+    left: (distance: string) => string;
+    gpsWeak: string;
+    gpsLost: string;
+    rerouting: string;
+    /** The location notice, shown while it is said. */
+    allow: string;
+    notNow: string;
+  };
 }
 
 export const UI_TEXT: Record<SpeechLang, UiText> = {
@@ -90,6 +105,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     talkLive: { start: "احكي مباشرة", agree: "موافق: ابدا المحادثة المباشرة", end: "وقّف المحادثة المباشرة", hint: "محادثة بالصوت كيف التليفون. طول ما هي خدّامة، صوتك وصورة من الكاميرا كل ثانية تقريبا يتبعثو لـ Google Gemini." },
     controls: { micMute: "سكّر الميكرو", micUnmute: "حِلّ الميكرو", switchCamera: "بدّل الكاميرا (قدّام / تالي)", switching: "قاعدة نبدّل الكاميرا…", fullscreen: "الكاميرا في الشاشة الكل", exitFullscreen: "اخرج من الشاشة الكاملة" },
     prompt: (e) => `اسأل وقت ما تحب، مثلاً: «${e}»`,
+    nav: { open: "البلايص والطريق", stop: "وقّف التوجيه", to: (d) => `ماشي لـ${d}`, left: (d) => `باقي ${d}`, gpsWeak: "الـGPS موش دقيق", gpsLost: "ضاع الـGPS", rerouting: "نحسب طريق جديد…", allow: "موافق، استعمل بلاصتي", notNow: "لا، موش توّا" },
   },
   ar: {
     name: "العربية",
@@ -121,6 +137,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     talkLive: { start: "تحدّث مباشرة", agree: "أوافق: ابدأ المحادثة المباشرة", end: "أنهِ المحادثة المباشرة", hint: "محادثة صوتية مثل مكالمة هاتفية. طوال المحادثة يُرسل صوتك وصورة من الكاميرا كل ثانية تقريبًا إلى Google Gemini." },
     controls: { micMute: "أطفئ الميكروفون", micUnmute: "شغّل الميكروفون", switchCamera: "بدّل الكاميرا (أمامية / خلفية)", switching: "جارٍ تبديل الكاميرا…", fullscreen: "الكاميرا بملء الشاشة", exitFullscreen: "اخرج من ملء الشاشة" },
     prompt: (e) => `اسأل في أي وقت، مثلاً: «${e}»`,
+    nav: { open: "الأماكن والطريق", stop: "أوقف الإرشاد", to: (d) => `في الطريق إلى ${d}`, left: (d) => `بقي ${d}`, gpsWeak: "تحديد الموقع غير دقيق", gpsLost: "فُقدت إشارة الموقع", rerouting: "جارٍ حساب طريق جديد…", allow: "موافق، استعمل موقعي", notNow: "لا، ليس الآن" },
   },
   fr: {
     name: "Français",
@@ -152,6 +169,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     talkLive: { start: "Parler en direct", agree: "J'accepte : démarrer la conversation en direct", end: "Terminer la conversation en direct", hint: "Une conversation à voix haute, comme un appel. Tant qu'elle dure, votre voix et environ une image par seconde sont envoyées à Google Gemini." },
     controls: { micMute: "Couper le micro", micUnmute: "Activer le micro", switchCamera: "Changer de caméra (avant / arrière)", switching: "Changement de caméra…", fullscreen: "Caméra en plein écran", exitFullscreen: "Quitter le plein écran" },
     prompt: (e) => `Demandez à tout moment, par exemple : « ${e} »`,
+    nav: { open: "Lieux et itinéraire", stop: "Arrêter le guidage", to: (d) => `Vers ${d}`, left: (d) => `Reste ${d}`, gpsWeak: "GPS imprécis", gpsLost: "Signal GPS perdu", rerouting: "Nouvel itinéraire…", allow: "J'accepte, utiliser ma position", notNow: "Pas maintenant" },
   },
   en: {
     name: "English",
@@ -183,5 +201,6 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     talkLive: { start: "Talk live", agree: "I agree: start the live conversation", end: "End live conversation", hint: "A spoken conversation, like a phone call. While it is on, your voice and about one picture a second go to Google Gemini." },
     controls: { micMute: "Mute microphone", micUnmute: "Unmute microphone", switchCamera: "Switch camera (front / back)", switching: "Switching camera…", fullscreen: "Full-screen camera", exitFullscreen: "Exit full screen" },
     prompt: (e) => `Ask any time, for example: “${e}”`,
+    nav: { open: "Places & directions", stop: "Stop navigation", to: (d) => `To ${d}`, left: (d) => `${d} left`, gpsWeak: "GPS not precise", gpsLost: "GPS signal lost", rerouting: "Finding a new route…", allow: "I agree, use my location", notNow: "Not now" },
   },
 };

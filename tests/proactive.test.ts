@@ -94,7 +94,11 @@ test("prompt: what to notice, reading as written in four languages, no 'nothing 
     assert.match(p, /Don't translate unless asked/);
     assert.match(p, /Never say there is no obstacle/);
     assert.match(p, /Not seeing something doesn't mean it isn't there/);
-    assert.match(p, /not a navigation or collision-avoidance system/);
+    // Directions exist now, but only from the location tools, never estimated from the camera.
+    assert.match(p, /not a collision-avoidance system/);
+    assert.match(p, /never estimate distances in metres or steps from the camera/);
+    assert.match(p, /You don't know where the user is and have no maps/, "without the tools, no location is ever guessed");
+    assert.match(liveSystemPrompt(lang, "outward", true), /Never invent a place, a name, an address, a distance, a time or a direction/);
     assert.match(p, /\[camera-update\] come from the app/);
     assert.match(p, /only the word SILENT/);
     assert.match(p, /first a possible hazard \(stairs, a step or drop/, "how to answer a cue lives in the prompt now");

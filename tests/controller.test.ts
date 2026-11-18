@@ -2198,3 +2198,141 @@ test("switch camera: no other camera is said; a camera that can't be reopened is
   assert.equal(src.stopped, true, "released");
   assert.equal(h.engine.last, T.cameraLost);
 });
+
+// --- location tools in the live conversation ------------------------------------------------------------
+
+const { GEO_PHRASES } = await import("../src/lib/geo/phrases.ts");
+const { parseOsrm } = await import("../src/lib/geo/osm.ts");
+const { readFileSync } = await import("node:fs");
+const G = GEO_PHRASES.tn;
+const footRoute = parseOsrm(JSON.parse(readFileSync(new URL("./fixtures/geo/osrm-foot.json", import.meta.url), "utf8")))!;
+
+/** A live conversation whose model calls location tools, with a fake GPS and fake map routes. */
+function startGeoLive(h: ReturnType<typeof setup>) {
+  const L = startFakeLive(h);
+  const responses: { id: string; name: string; response: any }[] = [];
+  (L.session as any).sendToolResponse = (r: typeof responses) => (responses.push(...r), true);
+  const gps = { watching: 0, stops: 0, onFix: null as null | ((f: unknown) => void),
+    async current() { return { lat: footRoute.geometry[0].lat, lon: footRoute.geometry[0].lon, accuracy: 8, at: Date.now() }; },
+    watch(f: (x: unknown) => void) { this.watching++; this.onFix = f; return () => void this.stops++; } };
+  const api = {
+    async reverse() { return { label: "نهج اليونان، باب البحر، تونس", road: "نهج اليونان", houseNumber: null, neighbourhood: null, city: "تونس", name: null }; },
+    async nearby() { return { places: [{ osmId: "n1", lat: 36.802851, lon: 10.182755, name: "Pharmacie Centrale", category: "pharmacy" as const, kind: "pharmacy", address: null, openingHours: null, phone: null, wheelchair: null }], source: "overpass" as const, partial: false, radius: 1000 }; },
+    async route() { return footRoute; },
+  };
+  h.c.useGeo(gps as any, api);
+  let n = 0;
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const id = `fc_${++n}`;
+    L.ev.toolCall([{ id, name, args }]);
+    await flush();
+    return responses.find((r) => r.id === id)!.response;
+  };
+  /** The user says something (a new turn), and the model starts answering. */
+  const user = (text: string) => {
+    L.ev.userText(text);
+    L.ev.aiText("…");
+  };
+  return { ...L, responses, gps, call, user };
+}
+
+test("location in a conversation: the notice is said instead of the model's words; «موافق» agrees and the model is told to go on", async () => {
+  storage.delete("assistant.locationConsent.v1");
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startGeoLive(h);
+  await h.c.startLive();
+  h.drain();
+  L.user("وين أنا توّا؟");
+  const r = await L.call("get_current_location");
+  assert.equal(r.error, "permission_pending");
+  assert.ok(h.engine.said.includes(G.consentNotice), "said by the phone, in its own voice");
+  // The model talks anyway: neither played nor shown.
+  const played = L.audio.played.length;
+  L.ev.audio(pcm(9));
+  L.ev.aiText("نجّم نعرف بلاصتك؟");
+  assert.equal(L.audio.played.length, played);
+  assert.doesNotMatch(h.c.state.live.ai, /نجّم نعرف/);
+  L.ev.turnComplete();
+  assert.equal(h.c.state.geo.asking, true);
+  L.user("موافق");
+  await flush();
+  assert.equal(storage.get("assistant.locationConsent.v1"), "1");
+  assert.equal(h.c.state.geo.asking, false);
+  assert.ok(L.session.texts.some((t) => t.text.startsWith("[app] location-allowed") && t.opts.measure === false));
+  const again = await L.call("reverse_geocode");
+  assert.equal(again.address, "نهج اليونان، باب البحر، تونس");
+  h.c.stopLive(true);
+});
+
+test("guidance from a conversation: the yes must come in a later turn; «وقّف التوجيه» stops it as soon as it is heard, once", async () => {
+  storage.set("assistant.locationConsent.v1", "1");
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startGeoLive(h);
+  await h.c.startLive();
+  h.drain();
+  L.user("Nheb nemchi lel a9reb pharmacie");
+  const found = await L.call("search_nearby_places", { category: "pharmacy" });
+  assert.equal(found.places[0].name, "Pharmacie Centrale");
+  const routeInfo = await L.call("calculate_walking_route", { place_id: found.places[0].place_id });
+  assert.equal(routeInfo.walking_distance_m, 600);
+  assert.equal((await L.call("start_navigation", { route_id: routeInfo.route_id })).error, "needs_user_confirmation");
+  L.ev.turnComplete();
+  L.user("إيه، يزّي نبداو");
+  const started = await L.call("start_navigation", { route_id: routeInfo.route_id });
+  assert.equal(started.started, true);
+  assert.equal(h.c.navigating, true);
+  assert.equal(L.gps.watching, 1);
+  assert.ok(h.engine.said.some((t) => t.startsWith("نبداو. Pharmacie Centrale")), h.engine.said.join(" | "));
+  L.ev.turnComplete();
+  h.drain();
+  // The emergency stop: on the partial transcript, before the user even finishes.
+  L.ev.userText("وقّف التوجيه");
+  assert.equal(h.c.navigating, false);
+  assert.equal(L.gps.stops, 1);
+  L.ev.aiText("باهي");
+  L.ev.turnComplete();
+  h.drain();
+  assert.equal(h.engine.said.filter((t) => t === G.stopped).length, 1, "said once");
+  assert.ok(!h.engine.said.includes(G.noNavigation));
+  h.c.stopLive(true);
+});
+
+test("guidance outlives the conversation: End leaves it running and says how to stop it; a voice command stops it", async () => {
+  storage.set("assistant.locationConsent.v1", "1");
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startGeoLive(h);
+  await h.c.startLive();
+  L.user("guide me to the nearest pharmacy");
+  const found = await L.call("search_nearby_places", { category: "pharmacy" });
+  const r = await L.call("calculate_walking_route", { place_id: found.places[0].place_id });
+  L.ev.turnComplete();
+  L.user("yes");
+  await L.call("start_navigation", { route_id: r.route_id });
+  h.c.stopAssistance();
+  h.drain();
+  assert.equal(h.c.state.live.status, "off");
+  assert.equal(h.c.navigating, true, "walking guidance needs neither the camera nor the conversation");
+  assert.ok(h.engine.said.includes(G.navReminder));
+  assert.equal(parseCommand("وقّف التوجيه"), "nav-stop");
+  assert.equal(parseCommand("stop navigation please"), "nav-stop");
+  assert.equal(parseCommand("arrête le guidage"), "nav-stop");
+  (h.any.runCommand as (c: string) => boolean).call(h.c, "nav-stop");
+  assert.equal(h.c.navigating, false);
+  assert.equal(L.gps.stops, 1);
+});
+
+test("with Nadhra AI selected, location tools are refused and nothing is looked up", async () => {
+  storage.set("assistant.locationConsent.v1", "1");
+  const h = setup({ auto: false });
+  const L = startGeoLive(h);
+  h.c.store.set({ ...h.c.state, settings: { ...h.c.state.settings, provider: "nadhra" } as any });
+  await (h.any.onLiveToolCall as Function).call(h.c, h.any.liveGen, [{ id: "x", name: "search_nearby_places", args: { category: "pharmacy" } }], undefined);
+  assert.deepEqual(L.responses.length, 0, "no live session is open for Nadhra, so nothing goes back either");
+  assert.equal(h.c.state.geo.search.status, "idle", "no search started");
+});

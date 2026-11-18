@@ -31,6 +31,7 @@ export type VoiceCommand =
   | "quieter"
   | "faster"
   | "slower"
+  | "nav-stop"
   | `lang-${SpeechLang}`;
 
 const clean = (text: string) => normalizeArabic(text).replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
@@ -170,6 +171,13 @@ const COMMANDS: [VoiceCommand, string[]][] = [
     "appelle", "appeler", "appelle le", "appelle la",
     "call", "call them", "call my contact",
   ]],
+  // Walking guidance stops at once (in a live conversation, on the partial transcript).
+  ["nav-stop", [
+    "وقف التوجيه", "سكر التوجيه", "وقف الطريق", "وقف الخريطة", "بطل التوجيه", "وقف النافيقاسيون",
+    "أوقف الإرشاد", "أوقف التوجيه", "أوقف الملاحة", "ألغ الإرشاد",
+    "arrête le guidage", "arrête la navigation", "stop guidage", "annule le guidage", "fin du guidage",
+    "stop navigation", "stop navigating", "stop the navigation", "end navigation", "cancel navigation", "stop guidance", "stop directions",
+  ]],
   ["louder", ["علي الصوت", "على صوتك", "ارفع الصوت", "plus fort", "parle plus fort", "louder", "speak louder", "volume up"]],
   ["quieter", ["هبط الصوت", "وطي صوتك", "اخفض الصوت", "moins fort", "parle moins fort", "quieter", "softer", "volume down"]],
   ["faster", ["احكي بالزربة", "اسرع", "أسرع", "تحدث بسرعة", "plus vite", "parle plus vite", "faster", "speak faster"]],
@@ -233,5 +241,6 @@ const EXAMPLES: [VoiceCommand, [string, string, string, string]][] = [
   ["louder", ["علّي الصوت", "ارفع الصوت", "Plus fort", "Louder"]],
   ["slower", ["احكي بالشوية", "أبطأ", "Plus lentement", "Slower"]],
   ["emergency", ["نجدة", "طوارئ", "Urgence", "Emergency"]],
+  ["nav-stop", ["وقّف التوجيه", "أوقف الإرشاد", "Arrête le guidage", "Stop navigation"]],
   ["assistant-off", ["سكّر الميكرو", "أطفئ الميكروفون", "Coupe le micro", "Stop listening"]],
 ];

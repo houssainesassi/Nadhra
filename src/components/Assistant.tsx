@@ -22,6 +22,8 @@ import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiPr
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
 import type { DeviceTotals, LiveSummary } from "@/lib/live/metrics";
+import NavPanel from "./NavPanel";
+import { geoSpeech } from "@/lib/geo/phrases";
 import { CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, ExpandIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon, SwitchCameraIcon } from "./icons";
 
 /** Tunisia's emergency numbers. */
@@ -167,6 +169,7 @@ export default function Assistant() {
   const settingsRef = useRef<HTMLDialogElement>(null);
   const privacyRef = useRef<HTMLDialogElement>(null);
   const emergencyRef = useRef<HTMLDialogElement>(null);
+  const placesRef = useRef<HTMLDialogElement>(null);
   const callRef = useRef<HTMLAnchorElement>(null);
   const appRef = useRef<HTMLDivElement>(null);
   const endBarRef = useRef<HTMLDivElement>(null);
@@ -246,7 +249,7 @@ export default function Assistant() {
 
   // The controller owns which panel is open, so voice commands can open and close them too.
   useEffect(() => {
-    const sheets: [SheetName, HTMLDialogElement | null][] = [["settings", settingsRef.current], ["privacy", privacyRef.current], ["emergency", emergencyRef.current]];
+    const sheets: [SheetName, HTMLDialogElement | null][] = [["settings", settingsRef.current], ["privacy", privacyRef.current], ["emergency", emergencyRef.current], ["places", placesRef.current]];
     for (const [name, dialog] of sheets) if (dialog?.open && name !== s.sheet) dialog.close();
     for (const [name, dialog] of sheets) {
       if (!dialog || dialog.open || name !== s.sheet) continue;
@@ -391,6 +394,7 @@ export default function Assistant() {
                 {s.cameraError && (
                   <p role="alert" className="home-alert">{cameraErrorText(language, s.cameraError)}</p>
                 )}
+                <NavStrip s={s} ui={ui} controller={controller} />
               </div>
               <button type="button" onClick={() => controller.openSheet("settings")} className="settings-button" data-testid="open-settings">
                 <SettingsIcon size={22} />
@@ -440,10 +444,15 @@ export default function Assistant() {
                 </button>
               )}
             </div>
-            {notices.length > 0 && (
-              <ul className="notices" role="status">
-                {notices.map((n) => <li key={n} className="pill" data-tone="notice">{n}</li>)}
-              </ul>
+            {(notices.length > 0 || s.geo.nav || s.geo.asking) && (
+              <div className="notices">
+                {notices.length > 0 && (
+                  <ul className="notices-list" role="status">
+                    {notices.map((n) => <li key={n} className="pill" data-tone="notice">{n}</li>)}
+                  </ul>
+                )}
+                {active && <NavStrip s={s} ui={ui} controller={controller} />}
+              </div>
             )}
 
             <div className="caption-box" data-urgent={urgentNow}>
@@ -476,6 +485,7 @@ export default function Assistant() {
                   {s.paused ? ui.actions.resume : ui.actions.pause}
                 </button>
               )}
+              <button type="button" onClick={() => controller.openSheet("places")} data-testid="action-places">{ui.nav.open}</button>
               <p id="pause-hint" hidden>{ui.actions.pauseHint}</p>
             </div>
           )}
@@ -520,6 +530,9 @@ export default function Assistant() {
               <ProviderSwitch provider={provider} offered={!!s.status?.nadhra} onChange={(p) => controller.updateSettings({ provider: p })} />
             </div>
           )}
+          <button type="button" onClick={() => controller.openSheet("places")} className="control control-quiet min-h-16" data-testid="open-places">
+            <span>Location &amp; directions</span>
+          </button>
           <button type="button" onClick={() => controller.openSheet("privacy")} className="control control-quiet min-h-16" data-testid="open-privacy">
             <ShieldIcon />
             <span>Privacy &amp; safety</span>
@@ -641,6 +654,10 @@ export default function Assistant() {
         </div>
       </Sheet>
 
+      <Sheet dialogRef={placesRef} title="Location & directions" onClose={() => controller.closeSheet("places")}>
+        <NavPanel controller={controller} s={s} />
+      </Sheet>
+
       <dialog ref={consentRef} lang="en" dir="ltr" onCancel={(e) => { e.preventDefault(); controller.declineConsent(); }} aria-labelledby="consent-title" className="modal m-auto w-[min(92vw,40rem)] rounded-[1.75rem] p-6 shadow-2xl sm:p-8">
         <LogoMark />
         <h2 id="consent-title" className="mt-3 text-[1.75rem] leading-tight font-semibold tracking-tight">Before the camera starts</h2>
@@ -651,6 +668,42 @@ export default function Assistant() {
         </div>
       </dialog>
     </>
+  );
+}
+
+/**
+ * Location on the main screen, only while something needs it: the location notice (said aloud, with
+ * its two answers as buttons), or walking guidance (where to, how far, and a big Stop). Everything
+ * here is also spoken, so nobody has to find it; it is for touch and for sighted helpers.
+ */
+function NavStrip({ s, ui, controller }: { s: VisionState; ui: UiText; controller: SmartVisionController }) {
+  const g = s.geo;
+  if (g.asking) {
+    return (
+      <div className="nav-strip" data-testid="nav-strip" data-state="asking">
+        <div className="nav-strip-actions">
+          <button type="button" className="nav-strip-main" onClick={() => controller.geoAccept()} data-testid="nav-strip-allow">{ui.nav.allow}</button>
+          <button type="button" className="nav-strip-small" onClick={() => controller.geoDecline()}>{ui.nav.notNow}</button>
+        </div>
+      </div>
+    );
+  }
+  const nav = g.nav;
+  if (!nav) return null;
+  const left = geoSpeech(s.settings.language).metres(nav.remaining);
+  const gps = nav.rerouting ? ui.nav.rerouting : nav.signal === "lost" ? ui.nav.gpsLost : nav.signal === "weak" ? ui.nav.gpsWeak : null;
+  return (
+    <div className="nav-strip" data-testid="nav-strip" data-state="navigating">
+      <p className="nav-strip-text">
+        <span dir="auto" className="nav-strip-dest">{ui.nav.to(nav.destination)}</span>
+        <span> · {ui.nav.left(left)}</span>
+        {gps && <span className="nav-strip-gps"> · {gps}</span>}
+      </p>
+      <div className="nav-strip-actions">
+        <button type="button" className="nav-strip-stop" onClick={() => controller.geoStop()} data-testid="nav-strip-stop">{ui.nav.stop}</button>
+        <button type="button" className="nav-strip-small" onClick={() => controller.openSheet("places")}>{ui.nav.open}</button>
+      </div>
+    </div>
   );
 }
 

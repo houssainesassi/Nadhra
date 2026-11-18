@@ -1205,3 +1205,71 @@ dialog::backdrop {
   .greeting { color: CanvasText; background: none; }
   .orb { forced-color-adjust: none; }
 }
+
+/* Location and walking guidance (Assistant.tsx NavStrip, NavPanel, NavMap). */
+.notices-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.nav-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  width: 100%;
+  max-width: 34rem;
+  border-radius: 1rem;
+  background: rgb(12 12 14 / 0.86);
+  color: #fff;
+  padding: 0.6rem 0.75rem;
+  backdrop-filter: blur(8px);
+}
+.home .nav-strip {
+  margin-top: 1rem;
+}
+.nav-strip-text {
+  flex: 1 1 12rem;
+  font-size: 1.05rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.nav-strip-gps {
+  color: #ffc66d;
+}
+.nav-strip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.nav-strip button {
+  min-height: 3.25rem;
+  border-radius: 999px;
+  padding-inline: 1.1rem;
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+.nav-strip-stop {
+  background: #d93025;
+  color: #fff;
+  min-width: 10rem;
+}
+.nav-strip-main {
+  background: #fff;
+  color: #111;
+}
+.nav-strip-small {
+  background: rgb(255 255 255 / 0.14);
+  color: #fff;
+}
+.nav-strip button:focus-visible {
+  outline: 3px solid #ffc66d;
+  outline-offset: 2px;
+}
+.nav-map {
+  height: min(60vh, 22rem);
+  width: 100%;
+  border-radius: 1rem;
+  overflow: hidden;
+}

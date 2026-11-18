@@ -34,6 +34,16 @@ export interface LiveEvents {
   latency?(ms: number): void;
   /** Token counts for a model turn, as Gemini reports them. */
   usage?(u: UsageMetadata): void;
+  /** The model calls functions (the location tools): answer each with sendToolResponse. */
+  toolCall?(calls: LiveFunctionCall[]): void;
+  /** The user talked over it: these calls' answers are no longer wanted. */
+  toolCallCancelled?(ids: string[]): void;
+}
+
+export interface LiveFunctionCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
 }
 
 interface TokenResponse {
@@ -194,6 +204,21 @@ export class LiveSession {
    */
   endAudioStream() {
     if (this.isOpen) this.send({ realtimeInput: { audioStreamEnd: true } });
+  }
+
+  /**
+   * The answers to function calls, by id. Sent only on the connection that asked: after a reconnect
+   * the model has forgotten the call, so a late answer is dropped (false).
+   */
+  sendToolResponse(responses: { id: string; name: string; response: Record<string, unknown> }[], gen?: number) {
+    if (!this.isOpen || (gen != null && gen !== this.gen) || !responses.length) return false;
+    this.send({ toolResponse: { functionResponses: responses } });
+    return true;
+  }
+
+  /** The connection a function call arrived on, to pass back to sendToolResponse. */
+  get connection() {
+    return this.gen;
   }
 
   /** The user stopped talking, by our own measure (the server's ACTIVITY_END also counts). */
@@ -363,6 +388,13 @@ export class LiveSession {
     // Our own detector usually saw the end of this speech first, and earlier: the server's is the fallback.
     if (m.voiceActivity?.type === "ACTIVITY_END" && this.speechEndAt < this.activityStartAt) this.markSpeechEnd();
     if (m.usageMetadata) this.events.usage?.(m.usageMetadata);
+    if (m.toolCall?.functionCalls?.length) {
+      const calls = m.toolCall.functionCalls
+        .filter((c) => typeof c?.id === "string" && typeof c?.name === "string")
+        .map((c) => ({ id: c.id!, name: c.name!, args: c.args && typeof c.args === "object" ? c.args : {} }));
+      if (calls.length) this.events.toolCall?.(calls);
+    }
+    if (m.toolCallCancellation?.ids?.length) this.events.toolCallCancelled?.(m.toolCallCancellation.ids.filter((x): x is string => typeof x === "string"));
     const sc = m.serverContent;
     if (!sc) return;
     if (sc.interrupted) {
@@ -390,6 +422,8 @@ interface ServerMessage {
   usageMetadata?: UsageMetadata;
   sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
   voiceActivity?: { type?: string };
+  toolCall?: { functionCalls?: { id?: string; name?: string; args?: Record<string, unknown> }[] };
+  toolCallCancellation?: { ids?: unknown[] };
   serverContent?: {
     modelTurn?: { parts?: { inlineData?: { data?: string; mimeType?: string }; text?: string }[] };
     interrupted?: boolean;
