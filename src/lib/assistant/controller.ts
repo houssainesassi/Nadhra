@@ -6,7 +6,7 @@ import { FrameBudget } from "../camera/frameBudget.ts";
 import { CameraError } from "../camera/camera.ts";
 import { analyzeFrame, askStreaming, fetchVisionStatus, transcribeWav, VisionApiError } from "./client.ts";
 import { parseCommand, type VoiceCommand } from "./commands.ts";
-import { createCameraSource, type CameraSource, type CapturedFrame } from "./cameraSource.ts";
+import { createCameraSource, type CameraPick, type CameraSource, type CapturedFrame } from "./cameraSource.ts";
 import { Earcons, type Earcon } from "./earcons.ts";
 import { changedFraction, classifyQuality, frameStats, QUALITY_LIMITS, READ_BLUR_LIMIT, rgbaToGray, sharpestTile, type LocalQuality } from "./frameAnalysis.ts";
 import { documentContext, isMedicalQuestion, isReadRequest, MAX_CONTEXT_LINES, mentionsDose, readAllSegments } from "./document.ts";
@@ -144,6 +144,8 @@ export interface VisionState {
   settings: VisionSettings;
   facing: CameraFacing;
   canSwitchCamera: boolean;
+  /** Switching between the front and back camera (the picture is briefly gone). */
+  cameraSwitching: boolean;
   lastLatencyMs: number | null;
   scansSent: number;
   sheet: SheetName;
@@ -178,9 +180,11 @@ export interface LiveState {
   model: string;
   voice: string;
   framesSent: number;
+  /** The user muted the microphone: nothing is captured or sent until they turn it on again. */
+  micMuted: boolean;
 }
 
-const LIVE_OFF: LiveState = { status: "off", user: "", ai: "", playing: false, userTalking: false, latencyMs: null, model: "", voice: "", framesSent: 0 };
+const LIVE_OFF: LiveState = { status: "off", user: "", ai: "", playing: false, userTalking: false, latencyMs: null, model: "", voice: "", framesSent: 0, micMuted: false };
 
 const INITIAL: VisionState = {
   liveNotice: false,
@@ -210,6 +214,7 @@ const INITIAL: VisionState = {
   settings: DEFAULT_VISION_SETTINGS,
   facing: "user",
   canSwitchCamera: false,
+  cameraSwitching: false,
   lastLatencyMs: null,
   scansSent: 0,
   sheet: "none",
@@ -357,7 +362,9 @@ export class SmartVisionController {
   /** The user's last live turn was already checked for an emergency command. */
   private liveCommandChecked = false;
   /** Replaceable in tests. */
-  protected makeSource: (video: HTMLVideoElement) => CameraSource = (video) => createCameraSource("webcam", video);
+  protected makeSource: (video: HTMLVideoElement, pick?: CameraPick | null) => CameraSource = (video, pick) => createCameraSource("webcam", video, pick);
+  /** The camera the user chose (front or back) for this visit: the next start opens the same one. */
+  private cameraPick: CameraPick | null = null;
   protected detectorLoadTimeoutMs = DETECTOR_LOAD_TIMEOUT_MS;
 
   get state() {
@@ -618,7 +625,7 @@ export class SmartVisionController {
       return;
     }
     this.patch({ camera: "starting", cameraError: "" });
-    const source = this.makeSource(this.video);
+    const source = this.makeSource(this.video, this.cameraPick);
     const session = this.session;
     try {
       await source.start();
@@ -790,6 +797,7 @@ export class SmartVisionController {
     this.detectTimer = null;
     this.scanCtrl?.abort();
     this.questionCtrl?.abort();
+    this.cameraPick = this.source?.lens?.() ?? this.cameraPick;
     this.source?.stop();
     this.source = null;
     void this.wakeLock?.release().catch(() => {});
@@ -801,17 +809,99 @@ export class SmartVisionController {
     this.patch({ camera: "off", analysis: "off", localHazards: [], detector: "off", detections: [], environment: null, texts: [] });
   }
 
+  /**
+   * Front ↔ back camera (on a computer, the next webcam). Everything else keeps running: the live
+   * conversation and the descriptions get the new camera's pictures. Said aloud, since the user may
+   * not see which camera is on. If the other camera won't open, the previous one comes back.
+   */
   async switchCamera() {
     this.unlockAudio();
-    if (!this.source?.switchDevice) return;
+    const source = this.source;
+    if (!source?.switchDevice || this.state.cameraSwitching || this.state.camera !== "on") return;
+    const session = this.session;
+    this.patch({ cameraSwitching: true });
+    let switched: boolean;
     try {
-      await this.source.switchDevice();
-      this.tracker.clear();
-      this.resetAnalysisState();
-      this.patch({ facing: this.resolveFacing() });
-    } catch {
-      this.say(cameraErrorText(this.lang, "unknown"), "answer");
+      switched = await source.switchDevice();
+    } catch (e) {
+      if (session !== this.session) return;
+      // Neither camera would open again: the same as a camera that stopped on its own.
+      const code = e instanceof CameraError ? e.code : "unknown";
+      report("camera-error", "switch");
+      this.releaseCamera();
+      this.patch({ camera: "error", cameraError: code, cameraSwitching: false });
+      this.feedback("error");
+      this.say(this.t.cameraLost, "urgent");
+      return;
     }
+    if (session !== this.session) return; // stopped meanwhile: releaseCamera has cleaned up
+    this.patch({ cameraSwitching: false });
+    if (!switched) {
+      this.say(this.t.noOtherCamera, "status");
+      return;
+    }
+    this.cameraPick = source.lens?.() ?? this.cameraPick;
+    this.tracker.clear();
+    this.resetAnalysisState();
+    this.lastGray = null;
+    this.lastLiveGray = null;
+    this.patch({ facing: this.resolveFacing() });
+    this.feedback("on");
+    const f = source.facing;
+    this.say(f === "user" ? this.t.cameraFront : f === "environment" ? this.t.cameraBack : this.t.cameraSwitched, "status");
+  }
+
+  // --- microphone button ----------------------------------------------------------------------
+
+  /** The microphone is listening: the live conversation's, or the voice commands'. */
+  get micOn(): boolean {
+    if (this.liveAudio) return !this.state.live.micMuted;
+    return this.state.assistantOn;
+  }
+
+  /**
+   * The microphone button: off and on again, without ending anything else. In a live conversation
+   * the microphone's tracks stop (nothing is captured or sent) while the conversation, the camera and
+   * Nadhra's voice go on. Otherwise the microphone is the voice commands', so they are turned off/on.
+   */
+  toggleMic() {
+    this.unlockAudio();
+    if (this.liveAudio) return void this.setLiveMic(this.state.live.micMuted);
+    this.toggleAssistant();
+  }
+
+  private async setLiveMic(on: boolean) {
+    const audio = this.liveAudio;
+    if (!audio) return;
+    const gen = this.liveGen;
+    if (!on) {
+      audio.stopMic();
+      this.liveSession?.endAudioStream();
+      // Whatever the user was saying ends here, as if they had stopped talking.
+      if (this.state.live.userTalking) this.liveSession?.markSpeechEnd();
+      audio.setDucked(false);
+      if (this.liveHoldTimer) clearTimeout(this.liveHoldTimer);
+      this.liveHoldTimer = null;
+      this.queue?.setHold(false);
+      this.patch({ live: { ...this.state.live, micMuted: true, userTalking: false } });
+      this.feedback("off");
+      this.say(this.t.assistantOff, "status");
+      return;
+    }
+    this.patch({ live: { ...this.state.live, micMuted: false } });
+    try {
+      await audio.resumeMic();
+    } catch (e) {
+      if (gen !== this.liveGen) return;
+      const code = e instanceof MicError ? e.code : "unknown";
+      this.patch({ live: { ...this.state.live, micMuted: true }, ...(code === "denied" ? { mic: "denied" as const } : {}) });
+      this.feedback("error");
+      this.say(code === "denied" ? this.t.micDenied : code === "not-found" ? this.t.micMissing : this.t.liveFailed, "answer");
+      return;
+    }
+    if (gen !== this.liveGen || this.state.live.micMuted) return; // ended, or muted again meanwhile
+    this.feedback("on");
+    this.say(this.t.micOn, "status");
   }
 
   private resolveFacing(): CameraFacing {
@@ -1751,9 +1841,11 @@ export class SmartVisionController {
   /** The Ask button. With the assistant on, the microphone is already open: this only makes room. */
   async askByVoice() {
     this.unlockAudio();
-    // Live: the microphone is always open. Ask only stops the answer so the user can talk.
+    // Live: the microphone is open. Ask only stops the answer so the user can talk (and turns a
+    // muted microphone back on: the user pressed Ask to speak).
     if (this.liveSession) {
       this.liveAudio?.flush();
+      if (this.state.live.micMuted) void this.setLiveMic(true);
       return;
     }
     // A question being recorded by Ask: pressing again sends it.

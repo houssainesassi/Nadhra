@@ -2057,3 +2057,144 @@ test("one greeting per visit: a live conversation started first greets, and the 
   h.c.greet("عسلامة");
   assert.ok(!h.engine.said.includes("عسلامة"), "the phone doesn't greet a second time");
 });
+
+// --- microphone button and front/back camera --------------------------------------------------------
+
+test("mic button in a live conversation: mute stops the microphone and ends the audio stream, the conversation and camera go on; unmute reopens it", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  const calls: string[] = [];
+  Object.assign(L.audio, { stopMic() { calls.push("stopMic"); }, async resumeMic() { calls.push("resumeMic"); } });
+  Object.assign(L.session, { endAudioStream() { calls.push("endAudioStream"); } });
+  await h.c.startLive();
+  assert.equal(h.c.micOn, true);
+  L.mic.speechStart(); // the user was talking
+  assert.equal(h.c.state.live.userTalking, true);
+  h.c.toggleMic();
+  assert.deepEqual(calls, ["stopMic", "endAudioStream"]);
+  assert.equal(h.c.state.live.micMuted, true);
+  assert.equal(h.c.state.live.userTalking, false, "their turn ends with the mute");
+  assert.equal(h.c.micOn, false);
+  assert.equal(h.c.state.live.status, "open", "the conversation goes on");
+  assert.equal(h.c.state.camera, "on", "the camera goes on");
+  assert.equal(L.session.stopped, 0);
+  assert.equal(h.engine.last, T.assistantOff);
+  L.ev.audio(pcm(7));
+  assert.deepEqual(L.audio.played, [pcm(7)], "Nadhra's voice still plays while muted");
+  h.drain();
+  h.c.toggleMic();
+  await flush();
+  assert.deepEqual(calls, ["stopMic", "endAudioStream", "resumeMic"]);
+  assert.equal(h.c.state.live.micMuted, false);
+  assert.equal(h.engine.last, T.micOn);
+  h.c.stopLive(true);
+  assert.equal(h.c.state.live.micMuted, false, "a new conversation starts unmuted");
+});
+
+test("mic button: unmuting fails (permission withdrawn) → stays muted and says why; Ask unmutes a muted live microphone", async () => {
+  const h = setup();
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  const { MicError } = await import("../src/lib/live/audioIO.ts");
+  let fail = true;
+  let resumed = 0;
+  Object.assign(L.audio, { stopMic() {}, async resumeMic() { resumed++; if (fail) throw new MicError("denied"); } });
+  Object.assign(L.session, { endAudioStream() {} });
+  await h.c.startLive();
+  h.c.toggleMic();
+  h.drain();
+  h.c.toggleMic();
+  await flush();
+  assert.equal(h.c.state.live.micMuted, true);
+  assert.equal(h.engine.last, T.micDenied);
+  h.drain();
+  fail = false;
+  await h.c.askByVoice();
+  await flush();
+  assert.equal(resumed, 2);
+  assert.equal(h.c.state.live.micMuted, false, "Ask means the user wants to talk");
+  h.c.stopLive(true);
+});
+
+test("mic button without a live conversation turns the voice commands off and on; the camera stays on", async () => {
+  const h = setup({ voice: new FakeVoice(() => new Promise(() => {})) });
+  await h.c.startAssistance();
+  await flush();
+  assert.equal(h.c.state.assistantOn, true);
+  assert.equal(h.c.micOn, true);
+  h.c.toggleMic();
+  assert.equal(h.c.state.assistantOn, false);
+  assert.equal(h.c.state.camera, "on");
+  assert.equal(h.c.micOn, false);
+  h.c.toggleMic();
+  assert.equal(h.c.state.assistantOn, true);
+});
+
+/** A camera source that can switch between a back ("back") and a front ("front") camera. */
+class SwitchSource extends FakeSource {
+  current: { facing: "user" | "environment"; deviceId: string } = { facing: "environment", deviceId: "back" };
+  result: "ok" | "none" | "dead" = "ok";
+  use(c: SwitchSource["current"]) {
+    this.current = c;
+    (this as unknown as { facing: string }).facing = c.facing;
+  }
+  async switchDevice() {
+    if (this.result === "none") return false;
+    if (this.result === "dead") throw new Error("gone");
+    this.use(this.current.facing === "environment" ? { facing: "user", deviceId: "front" } : { facing: "environment", deviceId: "back" });
+    return true;
+  }
+  lens() { return { ...this.current, exact: true }; }
+}
+
+test("switch camera: front ↔ back is said aloud, left/right follows the camera, and the choice is kept for the next start", async () => {
+  const h = setup();
+  const made: SwitchSource[] = [];
+  const picks: unknown[] = [];
+  h.any.makeSource = (_v: unknown, pick: unknown) => {
+    picks.push(pick);
+    const s = new SwitchSource();
+    if (pick) s.use(pick as SwitchSource["current"]);
+    made.push(s);
+    return s;
+  };
+  await h.start();
+  h.drain();
+  assert.equal(h.c.state.facing, "outward");
+  await h.c.switchCamera();
+  assert.equal(h.c.state.facing, "user", "the selfie camera: the image is a mirror");
+  assert.equal(h.engine.last, T.cameraFront);
+  assert.equal(h.c.state.cameraSwitching, false);
+  assert.equal(h.c.state.camera, "on");
+  h.drain();
+  h.c.stopCamera();
+  await h.start();
+  assert.deepEqual(picks[1], { facing: "user", deviceId: "front", exact: true }, "reopens the camera the user chose");
+  assert.equal(h.c.state.facing, "user");
+  h.drain();
+  await h.c.switchCamera();
+  assert.equal(h.engine.last, T.cameraBack);
+  assert.equal(h.c.state.facing, "outward");
+});
+
+test("switch camera: no other camera is said; a camera that can't be reopened is reported like a lost camera", async () => {
+  const h = setup();
+  const src = new SwitchSource();
+  h.any.makeSource = () => src;
+  await h.start();
+  h.drain();
+  src.result = "none";
+  await h.c.switchCamera();
+  assert.equal(h.engine.last, T.noOtherCamera);
+  assert.equal(h.c.state.camera, "on");
+  h.drain();
+  src.result = "dead";
+  await h.c.switchCamera();
+  assert.equal(h.c.state.camera, "error");
+  assert.equal(h.c.state.cameraSwitching, false);
+  assert.equal(src.stopped, true, "released");
+  assert.equal(h.engine.last, T.cameraLost);
+});

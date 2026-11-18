@@ -31,6 +31,16 @@ export const ShieldIcon = (p: Props) => (
 export const CloseIcon = (p: Props) => (
   <Svg {...p}><path d="m6 6 12 12" /><path d="M18 6 6 18" /></Svg>
 );
+/** Front ↔ back camera: a camera with turning arrows. */
+export const SwitchCameraIcon = (p: Props) => (
+  <Svg {...p}><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2.6l1.3-2h7.2l1.3 2h2.6A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" /><path d="M9 11.6a3.3 3.3 0 0 1 5.6-1" /><path d="M14.9 9v1.9H13" /><path d="M15 14.4a3.3 3.3 0 0 1-5.6 1" /><path d="M9.1 17v-1.9H11" /></Svg>
+);
+export const ExpandIcon = (p: Props) => (
+  <Svg {...p}><path d="M4 9V4h5" /><path d="M20 9V4h-5" /><path d="M4 15v5h5" /><path d="M20 15v5h-5" /></Svg>
+);
+export const CollapseIcon = (p: Props) => (
+  <Svg {...p}><path d="M9 4v5H4" /><path d="M15 4v5h5" /><path d="M9 20v-5H4" /><path d="M15 20v-5h5" /></Svg>
+);
 /** Gemini: the work is done online. */
 export const CloudIcon = (p: Props) => (
   <Svg {...p}><path d="M7 18.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.1 9.6 4.5 4.5 0 0 0 7 18.5z" /></Svg>

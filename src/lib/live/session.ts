@@ -188,6 +188,14 @@ export class LiveSession {
     return true;
   }
 
+  /**
+   * The microphone was muted: no more audio comes for now. With automatic activity detection, Gemini
+   * then closes the user's turn with what it already has instead of waiting for more audio.
+   */
+  endAudioStream() {
+    if (this.isOpen) this.send({ realtimeInput: { audioStreamEnd: true } });
+  }
+
   /** The user stopped talking, by our own measure (the server's ACTIVITY_END also counts). */
   markSpeechEnd(at = this.opts.now()) {
     this.speechEndAt = at;

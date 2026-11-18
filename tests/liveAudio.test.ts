@@ -63,3 +63,41 @@ test("live audio: ended while the audio worklet was loading — nothing is conne
   await starting;
   assert.equal(track.stopped, true);
 });
+
+test("live audio: stopMic (mute) stops the track and keeps playback; resumeMic opens a new microphone; the worklet is loaded once", async () => {
+  const tracks: FakeTrack[] = [];
+  install(async () => { const t = new FakeTrack(); tracks.push(t); return { getTracks: () => [t] }; });
+  const a = new LiveAudio();
+  let modules = 0;
+  FakeCtx.last!.audioWorklet.addModule = async () => void modules++;
+  await a.startMic({ chunk() {} });
+  assert.equal(a.micOn, true);
+  a.stopMic();
+  assert.equal(tracks[0].stopped, true, "nothing captured while muted");
+  assert.equal(a.micOn, false);
+  assert.equal(FakeCtx.last?.closed, false, "the answer can still play");
+  await a.resumeMic();
+  assert.equal(tracks.length, 2);
+  assert.equal(tracks[1].stopped, false);
+  assert.equal(a.micOn, true);
+  assert.equal(modules, 1, "registering the processor twice would throw");
+  a.close();
+  assert.equal(tracks[1].stopped, true);
+});
+
+test("live audio: muted while the microphone was still opening — the late track is stopped, and resumeMic after close does nothing", async () => {
+  const tracks: FakeTrack[] = [];
+  let open!: () => void;
+  install(() => new Promise((r) => (open = () => { const t = new FakeTrack(); tracks.push(t); r({ getTracks: () => [t] }); })));
+  const a = new LiveAudio();
+  const starting = a.startMic({ chunk() {} });
+  await new Promise((r) => setTimeout(r, 5));
+  a.stopMic();
+  open();
+  await starting; // not an error: the user muted it
+  assert.equal(tracks[0].stopped, true);
+  assert.equal(a.micOn, false);
+  a.close();
+  await a.resumeMic();
+  assert.equal(tracks.length, 1, "no microphone after the conversation ended");
+});

@@ -96,6 +96,10 @@ export class LiveAudio {
   private ducked = false;
   /** close() was called: a microphone that opens after that is stopped at once. */
   private closed = false;
+  /** Changes when the microphone is muted or opened again: an older opening that finishes late is stopped. */
+  private micGen = 0;
+  private events: MicEvents | null = null;
+  private worklet: Promise<boolean> | null = null;
   private onPlaying: (playing: boolean) => void;
 
   constructor(onPlaying: (playing: boolean) => void = () => {}) {
@@ -110,10 +114,38 @@ export class LiveAudio {
 
   /** Opens the microphone. Echo cancellation keeps the assistant's own voice out of it. */
   async startMic(events: MicEvents): Promise<void> {
+    this.events = events;
+    await this.openMic();
+  }
+
+  /** The microphone is open (not muted, not closed). */
+  get micOn() {
+    return !!this.stream;
+  }
+
+  /**
+   * Mute: the microphone's tracks stop, so nothing is captured and the browser's microphone
+   * indicator goes off. The answer keeps playing; `resumeMic` opens the microphone again.
+   */
+  stopMic() {
+    this.micGen++; // a microphone still opening is stopped as soon as it arrives
+    this.releaseMic();
+  }
+
+  /** Unmute. Rejects with a MicError (permission withdrawn meanwhile, say) and stays muted then. */
+  async resumeMic(): Promise<void> {
+    if (this.closed || this.stream || !this.events) return;
+    await this.openMic();
+  }
+
+  private async openMic(): Promise<void> {
     if (typeof window !== "undefined" && !window.isSecureContext) throw new MicError("insecure");
     if (!navigator.mediaDevices?.getUserMedia) throw new MicError("unsupported");
+    const events = this.events!;
+    const gen = ++this.micGen;
+    let stream: MediaStream;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
       });
     } catch (e) {
@@ -126,10 +158,12 @@ export class LiveAudio {
     // Ended while the browser was still opening the microphone (a permission prompt can take
     // seconds): it must not stay on.
     if (this.closed) {
-      this.stream.getTracks().forEach((t) => t.stop());
-      this.stream = null;
+      stream.getTracks().forEach((t) => t.stop());
       throw new MicError("unknown");
     }
+    // Muted (or reopened) meanwhile: this one isn't wanted any more.
+    if (gen !== this.micGen) return stream.getTracks().forEach((t) => t.stop());
+    this.stream = stream;
     const rate = this.ctx.sampleRate;
     const vad = new LevelVad(() => events.speechStart?.(), (at) => events.speechEnd?.(at));
     const onBlock = (block: Float32Array) => {
@@ -138,30 +172,63 @@ export class LiveAudio {
       const pcm = floatToPcm16(block, rate, LIVE_INPUT_RATE);
       events.chunk(new Uint8Array(pcm.buffer));
     };
-    this.source = this.ctx.createMediaStreamSource(this.stream);
+    const useWorklet = await this.loadWorklet();
+    if (this.closed) return this.close(); // ended while the worklet was loading
+    if (gen !== this.micGen || this.stream !== stream) {
+      // Muted while the worklet was loading (stopMic already stopped the tracks).
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    this.source = this.ctx.createMediaStreamSource(stream);
     // The tap must reach the destination to run in some browsers: through a muted gain.
     this.mute = this.ctx.createGain();
     this.mute.gain.value = 0;
     this.mute.connect(this.ctx.destination);
-    let url = "";
-    try {
-      url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
-      await this.ctx.audioWorklet.addModule(url);
+    if (useWorklet) {
       const node = new AudioWorkletNode(this.ctx, "nadhra-mic-tap");
       node.port.onmessage = (ev) => onBlock(ev.data as Float32Array);
       this.tap = node;
-    } catch {
+    } else {
       // Older Safari: no AudioWorklet.
       const node = this.ctx.createScriptProcessor(2048, 1, 1);
       node.onaudioprocess = (ev) => onBlock(new Float32Array(ev.inputBuffer.getChannelData(0)));
       this.tap = node;
-    } finally {
-      if (url) URL.revokeObjectURL(url); // also when the worklet failed to load
     }
-    if (this.closed) return this.close(); // ended while the worklet was loading
     this.source.connect(this.tap);
     this.tap.connect(this.mute);
     await this.ctx.resume().catch(() => {});
+  }
+
+  /** The worklet is registered once per audio context: a second registration would throw. */
+  private loadWorklet(): Promise<boolean> {
+    return (this.worklet ??= (async () => {
+      let url = "";
+      try {
+        url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+        await this.ctx.audioWorklet.addModule(url);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        if (url) URL.revokeObjectURL(url); // also when the worklet failed to load
+      }
+    })());
+  }
+
+  /** Stops the microphone's tracks and disconnects its nodes. Playback is untouched. */
+  private releaseMic() {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    try {
+      this.source?.disconnect();
+      this.tap?.disconnect();
+      this.mute?.disconnect();
+    } catch {}
+    if (this.tap instanceof AudioWorkletNode) this.tap.port.onmessage = null;
+    else if (this.tap) (this.tap as ScriptProcessorNode).onaudioprocess = null;
+    this.source = null;
+    this.tap = null;
+    this.mute = null;
   }
 
   /** Plays a chunk of the answer right after the previous one, without gaps. */
@@ -229,14 +296,7 @@ export class LiveAudio {
   close() {
     this.closed = true;
     this.flush();
-    this.stream?.getTracks().forEach((t) => t.stop());
-    this.stream = null;
-    try {
-      this.source?.disconnect();
-      this.tap?.disconnect();
-      this.mute?.disconnect();
-    } catch {}
-    if (this.tap instanceof AudioWorkletNode) this.tap.port.onmessage = null;
+    this.releaseMic();
     void this.ctx.close().catch(() => {});
   }
 }

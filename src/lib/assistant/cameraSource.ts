@@ -35,8 +35,21 @@ export interface CameraSource {
   videoElement(): HTMLVideoElement | null;
   /** Called if the source dies on its own (unplugged, permission revoked). */
   onEnded(fn: () => void): void;
-  /** Switch to the next camera, when there is more than one. Resolves false if there is none. */
+  /**
+   * Switch between the front and back camera (on a computer: to the next webcam). Resolves false when
+   * there is no other camera or it couldn't be opened; the previous camera is then on again. Throws
+   * only if no camera could be reopened at all.
+   */
   switchDevice?(): Promise<boolean>;
+  /** The camera in use, so the next start (after Stop, or coming back to the page) opens the same one. */
+  lens?(): CameraPick | null;
+}
+
+/** Which camera to open. `exact`: `facing` is known for certain (it was asked for exactly). */
+export interface CameraPick {
+  facing: "user" | "environment";
+  deviceId?: string;
+  exact?: boolean;
 }
 
 const STILL_TIMEOUT_MS = 3_000;
@@ -50,37 +63,71 @@ export class WebcamSource implements CameraSource {
   private ended: (() => void) | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private thumb: HTMLCanvasElement | null = null;
-  private wanted: "user" | "environment" = "environment";
+  /** What was asked for. Prefers the back camera; a laptop simply gives its only webcam. */
+  private pick: CameraPick;
+  /** stop() was called: a camera that finishes opening after that (during a switch) is closed at once. */
+  private halted = false;
 
-  constructor(video: HTMLVideoElement) {
+  constructor(video: HTMLVideoElement, pick?: CameraPick | null) {
     this.video = video;
+    this.pick = pick ?? { facing: "environment" };
   }
 
   get facing(): "user" | "environment" | "unknown" {
     const f = this.stream?.getVideoTracks()[0]?.getSettings().facingMode;
-    return f === "user" || f === "environment" ? f : "unknown";
+    if (f === "user" || f === "environment") return f;
+    // Some Android browsers don't say; a camera opened with an exact facing is that facing.
+    return this.stream && this.pick.exact ? this.pick.facing : "unknown";
   }
 
   async start() {
-    await this.open();
+    this.halted = false;
+    await this.openPicked();
   }
 
-  private async open() {
-    // Prefers the back camera; a laptop simply gives its only webcam. 720p so small print stays readable.
-    const stream = await openCamera(this.wanted, { width: 1280, height: 720, frameRate: 15 });
+  private async openPicked() {
+    if (!this.pick.deviceId) return this.open(this.pick);
+    try {
+      await this.open(this.pick);
+    } catch (e) {
+      // The remembered camera is gone (unplugged) or busy: any camera facing the same way.
+      if (e instanceof CameraError && e.code === "denied") throw e;
+      await this.open({ facing: this.pick.facing });
+    }
+  }
+
+  private async open(pick: CameraPick) {
+    // 720p so small print stays readable.
+    const stream = await openCamera(pick.facing, { width: 1280, height: 720, frameRate: 15 }, { deviceId: pick.deviceId, exact: pick.exact });
+    if (this.halted) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new CameraError("unknown", "The camera was stopped.");
+    }
     this.stream = stream;
+    this.pick = { ...pick, deviceId: stream.getVideoTracks()[0]?.getSettings().deviceId || pick.deviceId };
     stream.getVideoTracks()[0]?.addEventListener("ended", () => {
       if (this.stream === stream) this.ended?.();
     });
     try {
       await attachStream(this.video, stream);
     } catch (e) {
-      this.stop();
+      this.release();
       throw new CameraError("unknown", (e as Error).message);
     }
   }
 
+  lens(): CameraPick | null {
+    if (!this.stream) return null;
+    const f = this.facing;
+    return f === "unknown" ? { ...this.pick } : { ...this.pick, facing: f, exact: true };
+  }
+
   stop() {
+    this.halted = true;
+    this.release();
+  }
+
+  private release() {
     const stream = this.stream;
     this.stream = null; // an "ended" event from our own stop is not a failure
     stopCamera(this.video, stream);
@@ -167,19 +214,41 @@ export class WebcamSource implements CameraSource {
   }
 
   async switchDevice(): Promise<boolean> {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    if (devices.filter((d) => d.kind === "videoinput").length < 2) return false;
-    this.stop();
-    this.wanted = this.wanted === "environment" ? "user" : "environment";
-    await this.open();
-    return true;
+    const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+    if (cameras.length < 2) return false;
+    const before = this.lens() ?? this.pick;
+    const facing = this.facing;
+    const to: "user" | "environment" = (facing === "unknown" ? this.pick.facing : facing) === "user" ? "environment" : "user";
+    // The next webcam in the list, for computers (their webcams don't say which way they face).
+    const at = cameras.findIndex((d) => d.deviceId === before.deviceId);
+    const next = cameras[(at + 1) % cameras.length];
+    const tries: CameraPick[] = [{ facing: to, exact: true }];
+    if (next?.deviceId && next.deviceId !== before.deviceId) tries.push({ facing: to, deviceId: next.deviceId });
+    // A phone can't open its second camera while the first is still open.
+    this.release();
+    for (const pick of tries) {
+      if (this.halted) break;
+      try {
+        await this.open(pick);
+      } catch (e) {
+        if (e instanceof CameraError && e.code === "denied") break;
+        continue;
+      }
+      if (!before.deviceId || this.pick.deviceId !== before.deviceId) return true;
+      this.release(); // the same camera again: not a switch
+    }
+    if (this.halted) return false;
+    // No other camera would open: the one the user had comes back.
+    this.pick = before;
+    await this.openPicked();
+    return false;
   }
 }
 
 /** Register other camera sources here. */
-export function createCameraSource(kind: "webcam", video: HTMLVideoElement): CameraSource {
+export function createCameraSource(kind: "webcam", video: HTMLVideoElement, pick?: CameraPick | null): CameraSource {
   switch (kind) {
     case "webcam":
-      return new WebcamSource(video);
+      return new WebcamSource(video, pick);
   }
 }

@@ -53,6 +53,8 @@ export interface UiText {
   };
   /** The live conversation: the Microphone button's states. `hint` is its screen-reader description. */
   talkLive: { start: string; agree: string; end: string; hint: string };
+  /** The buttons over the camera: what each does when pressed (their accessible names). */
+  controls: { micMute: string; micUnmute: string; switchCamera: string; switching: string; fullscreen: string; exitFullscreen: string };
   /** Before anything was said. `example` is a question the user can ask. */
   prompt: (example: string) => string;
 }
@@ -86,6 +88,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     heard: "سمعت",
     actions: { group: "الأوامر", describe: "وصفلي البلاصة", read: "اقرالي الكتابة", identify: "شنوة هاذي؟", ask: "اسأل سؤال", askDone: "وفيت، ابعث السؤال", pause: "وقّف الوصف", resume: "كمّل الوصف", pauseHint: "التنبيهات تبقى خدّامة." },
     talkLive: { start: "احكي مباشرة", agree: "موافق: ابدا المحادثة المباشرة", end: "وقّف المحادثة المباشرة", hint: "محادثة بالصوت كيف التليفون. طول ما هي خدّامة، صوتك وصورة من الكاميرا كل ثانية تقريبا يتبعثو لـ Google Gemini." },
+    controls: { micMute: "سكّر الميكرو", micUnmute: "حِلّ الميكرو", switchCamera: "بدّل الكاميرا (قدّام / تالي)", switching: "قاعدة نبدّل الكاميرا…", fullscreen: "الكاميرا في الشاشة الكل", exitFullscreen: "اخرج من الشاشة الكاملة" },
     prompt: (e) => `اسأل وقت ما تحب، مثلاً: «${e}»`,
   },
   ar: {
@@ -116,6 +119,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     heard: "سمعت",
     actions: { group: "الإجراءات", describe: "صف المكان", read: "اقرأ النص", identify: "ما هذا؟", ask: "اطرح سؤالاً", askDone: "انتهيت، أرسل السؤال", pause: "أوقف الوصف", resume: "تابع الوصف", pauseHint: "تبقى التنبيهات تعمل." },
     talkLive: { start: "تحدّث مباشرة", agree: "أوافق: ابدأ المحادثة المباشرة", end: "أنهِ المحادثة المباشرة", hint: "محادثة صوتية مثل مكالمة هاتفية. طوال المحادثة يُرسل صوتك وصورة من الكاميرا كل ثانية تقريبًا إلى Google Gemini." },
+    controls: { micMute: "أطفئ الميكروفون", micUnmute: "شغّل الميكروفون", switchCamera: "بدّل الكاميرا (أمامية / خلفية)", switching: "جارٍ تبديل الكاميرا…", fullscreen: "الكاميرا بملء الشاشة", exitFullscreen: "اخرج من ملء الشاشة" },
     prompt: (e) => `اسأل في أي وقت، مثلاً: «${e}»`,
   },
   fr: {
@@ -146,6 +150,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     heard: "Entendu",
     actions: { group: "Actions", describe: "Décrire les alentours", read: "Lire le texte", identify: "Identifier un objet", ask: "Poser une question", askDone: "Terminé, envoyer la question", pause: "Mettre la description en pause", resume: "Reprendre la description", pauseHint: "Les alertes restent actives." },
     talkLive: { start: "Parler en direct", agree: "J'accepte : démarrer la conversation en direct", end: "Terminer la conversation en direct", hint: "Une conversation à voix haute, comme un appel. Tant qu'elle dure, votre voix et environ une image par seconde sont envoyées à Google Gemini." },
+    controls: { micMute: "Couper le micro", micUnmute: "Activer le micro", switchCamera: "Changer de caméra (avant / arrière)", switching: "Changement de caméra…", fullscreen: "Caméra en plein écran", exitFullscreen: "Quitter le plein écran" },
     prompt: (e) => `Demandez à tout moment, par exemple : « ${e} »`,
   },
   en: {
@@ -176,6 +181,7 @@ export const UI_TEXT: Record<SpeechLang, UiText> = {
     heard: "Heard",
     actions: { group: "Actions", describe: "Describe surroundings", read: "Read text", identify: "Identify object", ask: "Ask a question", askDone: "Done, send question", pause: "Pause descriptions", resume: "Resume descriptions", pauseHint: "Warnings keep running." },
     talkLive: { start: "Talk live", agree: "I agree: start the live conversation", end: "End live conversation", hint: "A spoken conversation, like a phone call. While it is on, your voice and about one picture a second go to Google Gemini." },
+    controls: { micMute: "Mute microphone", micUnmute: "Unmute microphone", switchCamera: "Switch camera (front / back)", switching: "Switching camera…", fullscreen: "Full-screen camera", exitFullscreen: "Exit full screen" },
     prompt: (e) => `Ask any time, for example: “${e}”`,
   },
 };

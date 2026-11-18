@@ -10,9 +10,15 @@ export class CameraError extends Error {
   }
 }
 
+/**
+ * `pick.deviceId`: that camera exactly (a desktop with two webcams). `pick.exact`: only a camera
+ * facing `facingMode` will do (switching between the front and back camera of a phone): no such
+ * camera is the "not-found" error instead of the same camera again.
+ */
 export async function openCamera(
   facingMode: "user" | "environment" = "user",
   size: { width: number; height: number; frameRate: number } = { width: 640, height: 480, frameRate: 30 },
+  pick: { deviceId?: string; exact?: boolean } = {},
 ): Promise<MediaStream> {
   if (typeof window !== "undefined" && !window.isSecureContext) {
     throw new CameraError("insecure", "Camera access needs HTTPS (or http://localhost).");
@@ -24,7 +30,12 @@ export async function openCamera(
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { facingMode, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: size.frameRate, max: 30 } },
+      video: {
+        ...(pick.deviceId ? { deviceId: { exact: pick.deviceId } } : { facingMode: pick.exact ? { exact: facingMode } : facingMode }),
+        width: { ideal: size.width },
+        height: { ideal: size.height },
+        frameRate: { ideal: size.frameRate, max: 30 },
+      },
     });
   } catch (e) {
     const name = (e as DOMException)?.name;

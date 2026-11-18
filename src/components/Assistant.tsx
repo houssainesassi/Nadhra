@@ -2,8 +2,9 @@
 // The whole app is one screen with two states.
 //   Home: «عسلامة» (said aloud once per visit, and shown), then exactly three buttons: Camera,
 //   Microphone (the live conversation) and Settings.
-//   A session (either one): only the assistant: the camera preview, what it is saying, its state,
-//   and one button to end it. Nothing else is on screen until it ends. Describe, Read, Identify,
+//   A session (either one): only the assistant: the camera preview (full screen by itself; a button
+//   leaves it and comes back), what it is saying, its state, and its buttons: microphone off/on,
+//   End, and front/back camera where there are two. Describe, Read, Identify,
 //   Ask and Pause are screen-reader-only buttons (TalkBack swipes to them), keys and voice commands.
 // Everything can also be done by voice and keyboard, and
 // every state change is spoken, so nothing depends on seeing the screen. Settings (with the
@@ -21,7 +22,7 @@ import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiPr
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
 import type { DeviceTotals, LiveSummary } from "@/lib/live/metrics";
-import { CameraIcon, CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon } from "./icons";
+import { CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, ExpandIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon, SwitchCameraIcon } from "./icons";
 
 /** Tunisia's emergency numbers. */
 const EMERGENCY_NUMBERS = [
@@ -81,7 +82,7 @@ function assistanceStatus(s: VisionState, ui: UiText, urgent: boolean): { text: 
 }
 
 function micStatus(s: VisionState, ui: UiText): { text: string; on: boolean } {
-  if (isLiveOn(s)) return { text: ui.live, on: true };
+  if (isLiveOn(s)) return s.live.micMuted ? { text: ui.mic.off, on: false } : { text: ui.live, on: true };
   if (s.mic === "denied") return { text: ui.mic.denied, on: false };
   if (s.mic === "unavailable") return { text: ui.mic.unavailable, on: false };
   if (s.mic === "listening") return { text: ui.mic.listening, on: true };
@@ -118,6 +119,40 @@ function useHeldWarning(text: string, urgent: boolean) {
   return held;
 }
 
+/**
+ * The browser's own full screen (no address bar or system bars) while `on`, where the browser allows
+ * it: it needs a recent tap, so it can fail silently (an iPhone has none for pages), and the camera
+ * still fills the page then. Leaving it with the browser's own gesture (Esc, Android's Back) calls
+ * `onLeft`, so the screen follows.
+ */
+function useBrowserFullscreen(on: boolean, onLeft: () => void) {
+  const entered = useRef(false);
+  const left = useRef(onLeft);
+  left.current = onLeft;
+  useEffect(() => {
+    const root = document.documentElement;
+    if (on) {
+      if (document.fullscreenElement || !document.fullscreenEnabled || typeof root.requestFullscreen !== "function") return;
+      root.requestFullscreen({ navigationUI: "hide" }).then(() => void (entered.current = true), () => {});
+    } else if (entered.current) {
+      entered.current = false;
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    }
+  }, [on]);
+  useEffect(() => {
+    const onChange = () => {
+      if (document.fullscreenElement || !entered.current) return;
+      entered.current = false;
+      left.current();
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      if (entered.current && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+}
+
 const telHref = (phone: string) => `tel:${phone.replace(/\s+/g, "")}`;
 const smsHref = (phone: string, body: string) => `sms:${phone.replace(/\s+/g, "")}?body=${encodeURIComponent(body)}`;
 
@@ -133,6 +168,9 @@ export default function Assistant() {
   const privacyRef = useRef<HTMLDialogElement>(null);
   const emergencyRef = useRef<HTMLDialogElement>(null);
   const callRef = useRef<HTMLAnchorElement>(null);
+  const appRef = useRef<HTMLDivElement>(null);
+  const endBarRef = useRef<HTMLDivElement>(null);
+  const stageTopRef = useRef<HTMLDivElement>(null);
   const [theme, setTheme] = useTheme();
   const heldWarning = useHeldWarning(s.lastSpoken, s.lastUrgent);
 
@@ -141,6 +179,31 @@ export default function Assistant() {
   // Assisting while the camera runs or starts, or while the microphone is still being listened to
   // (after «سكّر الكاميرا», say): the Stop button must stay in reach until everything is off.
   const active = cameraOn || s.camera === "starting" || s.assistantOn || liveOn;
+
+  // Full screen: on by itself at the start of every session, so the camera fills the whole screen.
+  // The button at the top leaves it (the session goes on, in the framed view) and comes back to it.
+  const [full, setFull] = useState(true);
+  useEffect(() => {
+    if (active) setFull(true);
+  }, [active]);
+  const fullOn = active && full;
+  useBrowserFullscreen(fullOn, () => setFull(false));
+  // The captions sit between the state pills and the buttons floating over the camera, whatever
+  // their size (text size, a small phone).
+  useEffect(() => {
+    const bar = endBarRef.current;
+    const top = stageTopRef.current;
+    const app = appRef.current;
+    if (!bar || !top || !app || !fullOn || typeof ResizeObserver !== "function") return;
+    const ro = new ResizeObserver(() => {
+      app.style.setProperty("--controls-h", `${bar.offsetHeight}px`);
+      app.style.setProperty("--controls-w", `${bar.offsetWidth}px`);
+      app.style.setProperty("--top-h", `${top.offsetHeight}px`);
+    });
+    ro.observe(bar);
+    ro.observe(top);
+    return () => ro.disconnect();
+  }, [fullOn]);
 
   useEffect(() => {
     if (videoRef.current) controller.attach(videoRef.current);
@@ -237,6 +300,7 @@ export default function Assistant() {
         KeyT: () => void controller.runTask("read"),
         KeyI: () => void controller.runTask("identify"),
         KeyV: () => controller.toggleAssistant(),
+        KeyM: () => (st.camera === "on" || st.camera === "starting" || st.assistantOn || isLiveOn(st) ? controller.toggleMic() : undefined),
         KeyL: () => controller.toggleLive(),
         KeyQ: () => void controller.askByVoice(),
         KeyP: () => (controller.isPaused ? controller.resume() : controller.pause()),
@@ -263,6 +327,8 @@ export default function Assistant() {
   const urgentNow = !!heldWarning;
   const status = assistanceStatus(s, ui, urgentNow);
   const mic = micStatus(s, ui);
+  // The microphone button: the live conversation's microphone, or (without one) the voice commands'.
+  const micOn = liveOn ? !s.live.micMuted : s.assistantOn;
   const providers = s.status?.providers.map((p) => p.label).join(", ") || "an external AI service";
   const examples = commandExamples(language);
   const contact = s.settings.emergencyPhone;
@@ -289,7 +355,7 @@ export default function Assistant() {
 
   return (
     <>
-      <div className={`app ${rtl ? "arabic" : ""}`} lang={lang.bcp47} dir={lang.dir} data-active={active} data-mode={liveOn ? "live" : "camera"}>
+      <div ref={appRef} className={`app ${rtl ? "arabic" : ""}`} lang={lang.bcp47} dir={lang.dir} data-active={active} data-mode={liveOn ? "live" : "camera"} data-full={fullOn} data-testid="app">
         {/* Screen-reader channel. Silent unless asked for, or the page's own voice has failed. */}
         {/* Two regions per kind, used in turn, so the same sentence twice is still read twice (announcer.ts). */}
         <div aria-live="polite" className="sr-only" data-testid="announce-polite-0">{regions.polite[0]}</div>
@@ -337,6 +403,7 @@ export default function Assistant() {
           <section className="stage" hidden={!active} aria-label={liveOn ? ui.live : ui.active} data-on={cameraOn} data-urgent={urgentNow} data-testid="stage"
             // The controller's state, for automated tests: the status panels are gone from the screen.
             data-camera={s.camera} data-live-status={s.live.status} data-analysis={s.analysis} data-detector={s.detector} data-mic={s.mic} data-voice-commands={s.assistantOn}
+            data-mic-on={micOn} data-facing={s.facing} data-mirror={s.facing === "user"} data-switching={s.cameraSwitching}
             data-detections={s.detections.length} data-local-hazards={s.localHazards.map((h) => `${h.kind}:${h.motion}`).join(" ")}>
             {/* The session's heading (the greeting is the home screen's), for screen-reader navigation. */}
             {active && <h1 className="sr-only">{liveOn ? ui.live : ui.active}</h1>}
@@ -354,15 +421,24 @@ export default function Assistant() {
               </div>
             )}
 
-            <div className="stage-top">
-              <p className="pill" data-tone={status.tone} data-testid="assistant-state">
-                <i aria-hidden="true" />
-                {status.text}
-              </p>
-              <p className="pill" data-tone={mic.on ? "listen" : "quiet"} data-testid="mic-status">
-                {mic.on ? <MicIcon size={18} /> : <MicOffIcon size={18} />}
-                {mic.text}
-              </p>
+            <div ref={stageTopRef} className="stage-top">
+              <div className="stage-pills">
+                <p className="pill" data-tone={status.tone} data-testid="assistant-state">
+                  <i aria-hidden="true" />
+                  {s.cameraSwitching ? ui.controls.switching : status.text}
+                </p>
+                <p className="pill" data-tone={mic.on ? "listen" : "quiet"} data-testid="mic-status">
+                  {mic.on ? <MicIcon size={18} /> : <MicOffIcon size={18} />}
+                  {mic.text}
+                </p>
+              </div>
+              {active && (
+                // Leaves the full-screen camera (the session goes on) and goes back to it.
+                <button type="button" onClick={() => setFull(!full)} className="stage-button" data-testid="fullscreen-toggle" data-full={fullOn}
+                  aria-label={fullOn ? ui.controls.exitFullscreen : ui.controls.fullscreen} title={fullOn ? ui.controls.exitFullscreen : ui.controls.fullscreen}>
+                  {fullOn ? <CloseIcon size={24} /> : <ExpandIcon size={24} />}
+                </button>
+              )}
             </div>
             {notices.length > 0 && (
               <ul className="notices" role="status">
@@ -404,13 +480,24 @@ export default function Assistant() {
             </div>
           )}
           {active && (
-            // The only visible button during a session: it ends everything (camera, microphone, live
-            // conversation) and goes back home. The same call as the C key and «وقّف».
-            <div className="end-bar" data-large={s.settings.textScale >= 1.5}>
+            // The session's buttons: the microphone (off/on, nothing else stops), End, which ends
+            // everything (camera, microphone, live conversation) and goes back home (the same call as
+            // the C key and «وقّف»), and front/back camera where there are two.
+            <div ref={endBarRef} className="end-bar" data-large={s.settings.textScale >= 1.5}>
+              <button type="button" onClick={() => controller.toggleMic()} aria-keyshortcuts="M" className="round-button" data-testid="mic-toggle"
+                data-muted={!micOn} aria-label={micOn ? ui.controls.micMute : ui.controls.micUnmute} title={micOn ? ui.controls.micMute : ui.controls.micUnmute}>
+                {micOn ? <MicIcon size={28} /> : <MicOffIcon size={28} />}
+              </button>
               <button ref={stopRef} type="button" onClick={() => controller.stopAssistance()} aria-keyshortcuts="C" aria-describedby="stop-hint" className="end-button" data-testid="stop-assistance">
                 {liveOn ? <MicOffIcon size={26} /> : <CameraOffIcon size={26} />}
                 <span>{liveOn ? ui.talkLive.end : ui.stop}</span>
               </button>
+              {s.canSwitchCamera && cameraOn && (
+                <button type="button" onClick={() => void controller.switchCamera()} className="round-button" data-testid="switch-camera"
+                  aria-label={ui.controls.switchCamera} title={ui.controls.switchCamera} aria-disabled={s.cameraSwitching}>
+                  <SwitchCameraIcon size={28} />
+                </button>
+              )}
             </div>
           )}
           <p id="stop-hint" className="sr-only">{ui.stopHint}</p>
