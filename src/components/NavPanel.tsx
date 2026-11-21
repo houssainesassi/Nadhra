@@ -61,12 +61,13 @@ export default function NavPanel({ controller, s }: { controller: SmartVisionCon
       {!g.consent && (
         <section className="safety-note flex flex-col gap-3" aria-labelledby="loc-consent-title" data-testid="nav-consent">
           <h3 id="loc-consent-title" className="font-semibold">Before using your location</h3>
-          <p>
-            To tell you where you are, find places near you and guide you there, Nadhra needs your location. Your position goes through Nadhra&apos;s server to the OpenStreetMap
-            services (Nominatim for addresses, Overpass for places, OSRM by FOSSGIS for walking routes). In a conversation, place names, addresses and distances (never your
-            coordinates) also go to Google Gemini so it can answer you. Nothing is stored. GPS is read when you ask, and continuously only while guidance runs. Your browser will
-            also ask for permission.
-          </p>
+          <p>To tell you where you are, find places near you and guide you there, Nadhra needs your location.</p>
+          <ul className="flex list-disc flex-col gap-2 ps-6">
+            <li>Your <strong>GPS coordinates are sent to Nadhra&apos;s server</strong>, which asks OpenStreetMap services for your address (Nominatim), nearby places (Overpass or Nominatim) and walking routes (OSRM, run by FOSSGIS). They are not stored.</li>
+            <li>In a conversation, the address, place names and distances that were found are <strong>shared with Google Gemini</strong> so it can answer you. Your coordinates are not sent to Gemini.</li>
+            <li>GPS is read when you ask, and continuously only while navigation runs.</li>
+            <li>This consent is separate from the camera&apos;s. Your browser will also ask for permission. You can forget it here at any time.</li>
+          </ul>
           <div className="grid gap-3 sm:grid-cols-2">
             <button type="button" className="control control-primary min-h-16" onClick={() => controller.geoAccept()} data-autofocus data-testid="nav-allow">I agree, use my location</button>
             <button type="button" className="control control-quiet min-h-16" onClick={() => controller.geoDecline()}>Not now</button>

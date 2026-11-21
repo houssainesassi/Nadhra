@@ -80,6 +80,60 @@ export function tagAddress(tags: Record<string, string>): string | null {
   return [num ? `${num} ${street}` : street, city].filter(Boolean).join(", ").slice(0, 160);
 }
 
+/**
+ * Names of organisations, not of the place someone would walk to: an order, union, ministry,
+ * association, administration… Mapped with the tag of their field (a dentists' professional body in
+ * Tunis is tagged amenity=hospital). Arabic and French, as Tunisian places are named.
+ */
+const ORGANISATION_NAME = new RegExp(
+  // Not «معهد» / "Institut": in Tunisia that names real hospitals (Institut Salah-Azaïz, Hedi Raies…).
+  "\\b(ordre|syndicat|association|f[ée]d[ée]ration|minist[eè]re|direction|conseil|union|chambre|si[eè]ge|administration|inspection|commissariat g[ée]n[ée]ral|caisse|mutuelle|soci[ée]t[ée] tunisienne de|[ée]cole|institut sup[ée]rieur|facult[ée])\\b" +
+    "|عمادة|هيئة|نقابة|جمعية|وزارة|ادارة|إدارة|مديرية|اتحاد|مجلس|غرفة|صندوق|تعاضدية|المعهد العالي|كلية",
+  "i",
+);
+/**
+ * A smaller or different place mapped under a bigger category: a dentist's or doctor's practice or a
+ * laboratory tagged as a hospital, a parapharmacy (no medicines) tagged as a pharmacy.
+ */
+const SMALLER_PLACE: Partial<Record<ConcreteCategory, RegExp>> = {
+  hospital: /\b(cabinet|dentaire|dentiste|orthodont|laboratoire|labo|opticien|kin[ée]sith[ée]rap|radiologie priv[ée]e|pharmacie)\b|عيادة|مخبر|صيدلية|طبيب أسنان/i,
+  pharmacy: /parapharm|بارافارم|شبه صيدلية/i,
+};
+const CATEGORY_WORD: Record<"pharmacy" | "hospital" | "clinic", RegExp> = {
+  pharmacy: /pharmac|صيدل|فرمسي|فارمسي/i,
+  hospital: /h[oô]pital|hospital|centre hospitalier|chu\b|مستشفى|مستشفي|سبيطار|مستشفيات/i,
+  clinic: /clini|polyclini|cabinet|centre de sant[ée]|dispensaire|docteur|dr\.?\s|مصحة|مصحّة|عيادة|مستوصف|دكتور|طبيب/i,
+};
+/** Categories people walk to for care or help, where a wrong place matters most. */
+const STRICT: ConcreteCategory[] = ["pharmacy", "hospital", "clinic"];
+
+/** Why a place may not be what its category says, from its own tags and name. */
+export function placeDoubt(tags: Record<string, string>, name: string | null, category: ConcreteCategory): Place["doubt"] {
+  if (!STRICT.includes(category)) return null;
+  if (tags.office || tags.government) return "office";
+  const names = [name, tags.name, tags["name:fr"], tags["name:ar"], tags.official_name].filter(Boolean).join(" ");
+  if (!names) return null;
+  if (SMALLER_PLACE[category]?.test(names)) return "name";
+  // A name that says what the category says («Pharmacie de l'Ordre», «مستشفى…») confirms it.
+  if (CATEGORY_WORD[category as "pharmacy"]?.test(names)) return null;
+  return ORGANISATION_NAME.test(names) ? "name" : null;
+}
+
+/** On the map but not in use: never offered. */
+export function isDisused(tags: Record<string, string>): boolean {
+  if (Object.keys(tags).some((k) => /^(disused|abandoned|demolished|was|razed|removed):/.test(k))) return true;
+  if (/^(yes|true)$/i.test(tags.disused ?? "") || /^(yes|true)$/i.test(tags.abandoned ?? "")) return true;
+  if (/^(closed|off)$/i.test(tags.opening_hours?.trim() ?? "")) return true;
+  const end = tags.end_date?.match(/^(\d{4})(?:-(\d{2}))?/);
+  return !!end && new Date(`${end[1]}-${end[2] ?? "12"}-28`).getTime() < Date.now();
+}
+
+/** Nearest first, but places whose tags or name contradict their category come after the others. */
+export function rankPlaces<T extends LatLon & { doubt?: Place["doubt"] }>(places: T[], origin: LatLon): T[] {
+  const sorted = sortByDistance(places, origin);
+  return [...sorted.filter((p) => !p.doubt), ...sorted.filter((p) => p.doubt)];
+}
+
 const clean = (v: string | undefined) => (v?.trim() ? v.trim().slice(0, 120) : null);
 
 interface OverpassElement {
@@ -103,7 +157,7 @@ export function parseOverpass(json: unknown, cats: ConcreteCategory[], lang: Spe
     const tags = e.tags ?? {};
     if (!isValidLatLon(lat, lon) || typeof e.id !== "number") continue;
     const category = classify(tags, cats);
-    if (!category) continue;
+    if (!category || isDisused(tags)) continue;
     const osmId = `${(e.type ?? "n")[0]}${e.id}`;
     if (seen.has(osmId)) continue;
     seen.add(osmId);
@@ -118,9 +172,10 @@ export function parseOverpass(json: unknown, cats: ConcreteCategory[], lang: Spe
       openingHours: clean(tags.opening_hours),
       phone: clean(tags.phone ?? tags["contact:phone"]),
       wheelchair: clean(tags.wheelchair),
+      doubt: placeDoubt(tags, pickName(tags, lang), category),
     });
   }
-  return sortByDistance(out, origin);
+  return rankPlaces(out, origin);
 }
 
 export function sortByDistance<T extends LatLon>(places: T[], origin: LatLon): T[] {
@@ -134,21 +189,23 @@ export function sortByDistance<T extends LatLon>(places: T[], origin: LatLon): T
  * Nominatim's structured `amenity=` search, the fallback when Overpass can't be reached. It finds
  * points of interest by type, one type per request.
  */
-export const NOMINATIM_TYPES: Record<ConcreteCategory, string> = {
-  pharmacy: "pharmacy",
-  hospital: "hospital",
-  clinic: "clinic",
-  restaurant: "restaurant",
-  cafe: "cafe",
-  supermarket: "supermarket",
-  grocery: "convenience",
-  atm: "atm",
-  bank: "bank",
-  bus_stop: "bus stop",
-  train_station: "station",
-  hotel: "hotel",
-  public_place: "post office",
-  shop: "shop",
+// Checked against the live service in central Tunis, Nov 2026: "clinic" and "convenience" return
+// nothing there, "doctors", "greengrocer" and "bakery" do. At most three words (one request each).
+export const NOMINATIM_TYPES: Record<ConcreteCategory, string[]> = {
+  pharmacy: ["pharmacy"],
+  hospital: ["hospital"],
+  clinic: ["doctors", "clinic"],
+  restaurant: ["restaurant"],
+  cafe: ["cafe"],
+  supermarket: ["supermarket"],
+  grocery: ["greengrocer", "bakery", "convenience"],
+  atm: ["atm"],
+  bank: ["bank"],
+  bus_stop: ["bus stop"],
+  train_station: ["station"],
+  hotel: ["hotel"],
+  public_place: ["post office", "townhall"],
+  shop: ["mall", "department store", "supermarket"],
 };
 /** For "any" in the fallback: few requests, since Nominatim allows one a second. */
 export const NOMINATIM_ANY: ConcreteCategory[] = ["pharmacy", "supermarket", "restaurant"];
@@ -175,7 +232,7 @@ export function parseNominatimSearch(json: unknown, cat: ConcreteCategory, lang:
     const lon = Number(it.lon);
     if (!isValidLatLon(lat, lon) || typeof it.osm_id !== "number" || !it.category || !it.type) continue;
     const tags: Record<string, string> = { ...(it.extratags ?? {}), [it.category]: it.type };
-    if (classify(tags, [cat]) !== cat) continue;
+    if (classify(tags, [cat]) !== cat || isDisused(tags)) continue;
     const names = it.namedetails ?? {};
     const name = pickName({ ...names, ...(it.name && !names.name ? { name: it.name } : {}) }, lang);
     const a = it.address ?? {};
@@ -191,9 +248,10 @@ export function parseNominatimSearch(json: unknown, cat: ConcreteCategory, lang:
       openingHours: clean(tags.opening_hours),
       phone: clean(tags.phone ?? tags["contact:phone"]),
       wheelchair: clean(tags.wheelchair),
+      doubt: placeDoubt({ ...tags, ...names }, name, cat),
     });
   }
-  return sortByDistance(out, origin);
+  return rankPlaces(out, origin);
 }
 
 /** A reverse-geocoding answer from Nominatim (jsonv2). */

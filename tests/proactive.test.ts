@@ -160,7 +160,8 @@ test("prompt: no repeats, no unrequested offers, newest important first, concise
   assert.match(p, /don't state anything with certainty from it/);
   assert.match(p, /Mention dangers first, clearly/);
   assert.match(p, /Never promise that a road or path is safe/);
-  assert.doesNotMatch(liveSystemPrompt("en", "outward"), /people talk in Tunis/, "the Derja rule is for Derja");
+  // The Derja rules are in every prompt now (the user may speak Derja at any time), under their own heading.
+  assert.match(liveSystemPrompt("en", "outward"), /WHEN YOU SPEAK TUNISIAN ARABIC \(Derja\)\n- Speak it with a natural Tunis accent/);
 });
 
 test("new objects: the same kind seen again within a minute (flicker, the same person back in view) isn't new", () => {

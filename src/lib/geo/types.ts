@@ -48,6 +48,11 @@ export interface Place extends LatLon {
   openingHours: string | null;
   phone: string | null;
   wheelchair: string | null;
+  /**
+   * Why this may not really be what its category says (the map's tags are wrong or misleading), e.g.
+   * a professional body tagged as a hospital. Null or absent: nothing contradicts the category.
+   */
+  doubt?: "name" | "office" | null;
 }
 
 /** One manoeuvre of a walking route, as the routing engine (OSRM) gives it. */

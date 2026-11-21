@@ -121,7 +121,8 @@ const fits = (name, g, extra = "") => check(`${name}: controls on screen, ≥ 44
 // --- 1. phone, live conversation ------------------------------------------------------------------
 let browser = await launch(2);
 {
-  const { page, fake, errors, ctx } = await context(browser, { width: 390, height: 844 }, { isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  // Subtitles on (off by default since 2026-11-21): these checks measure where the captions sit.
+  const { page, fake, errors, ctx } = await context(browser, { width: 390, height: 844 }, { isMobile: true, hasTouch: true, deviceScaleFactor: 2, settings: { subtitles: true } });
   await page.getByTestId("talk-nadhra").tap();
   check("phone live: the conversation opens", !!(await until(async () => (await stage(page, "data-live-status")) === "open")));
   await until(async () => (await stage(page, "data-camera")) === "on");

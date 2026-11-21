@@ -14,7 +14,8 @@ import { HazardTracker } from "./hazardTracker.ts";
 import { hazardKey, hazardUrgency, WarningGate } from "./hazards.ts";
 import { LocalDetector } from "./localDetector.ts";
 import { cameraErrorText, PHRASES, speech, warningPhrase, type Phrases } from "./phrases.ts";
-import { LANGS, questionLang, type SpeechLang } from "./lang.ts";
+import { CONVERSATION_LANG_LABEL, LANGS, questionLang, spokenLang, uiLangFor, type ConversationLang, type SpeechLang } from "./lang.ts";
+import { cleanLanguageName, COACH_MODE_LABELS, feedbackFromArgs, isCoachMode, isCoachTool, MAX_FEEDBACK_ITEMS, type CoachMode, type FeedbackItem, type LiveCoachOptions } from "../coach/coach.ts";
 import { backoffMs, decideScan } from "./scheduler.ts";
 import { flushReports, report, setLocalOnly } from "./api.ts";
 import { isSafetyClaim, splitSentences } from "./schema.ts";
@@ -172,7 +173,21 @@ export interface VisionState {
   liveTotals: DeviceTotals | null;
   /** Location, nearby places and walking guidance (src/lib/geo/geoController.ts). */
   geo: GeoState;
+  /** AI Language Coach, while a live conversation runs as practice (and its feedback until the next one). */
+  coach: CoachState;
 }
+
+export interface CoachState {
+  /** The live conversation running now is a Language Coach practice. */
+  active: boolean;
+  /** The language being practised, as the model reported it ("" until the user chose). */
+  language: string;
+  mode: CoachMode;
+  /** Corrections and new words, newest first. */
+  feedback: FeedbackItem[];
+}
+
+const COACH_OFF: CoachState = { active: false, language: "", mode: "corrections", feedback: [] };
 
 export interface LiveState {
   status: "off" | LiveStatus;
@@ -233,6 +248,7 @@ const INITIAL: VisionState = {
   answer: { text: "", live: false, web: false },
   live: LIVE_OFF,
   geo: GEO_IDLE,
+  coach: COACH_OFF,
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -290,6 +306,11 @@ export class SmartVisionController {
   private history: { q: string; a: string }[] = [];
   /** The language of the last answer: a follow-up too short to tell («OK», «w ba3d?») keeps it. */
   private lastAnswerLang: SpeechLang | undefined;
+  /** The language the user last clearly spoke (any of ConversationLang), for the next unclear turn. */
+  private spokenLang: ConversationLang | undefined;
+  /** The coach options locked into the running live session's token (null: an ordinary conversation). */
+  private liveCoach: LiveCoachOptions | null = null;
+  private feedbackId = 0;
   private voiceInput: VoiceInput | null = null;
   private forceRecorder = false;
   private listening = false;
@@ -584,9 +605,12 @@ export class SmartVisionController {
     if (this.listening) this.voiceInput?.abort();
     // Nothing can be watched while away: speech shouldn't carry on over another app either.
     this.queue?.stop();
+    // Browsers give no GPS to a hidden page: walking guidance waits, and says so on return.
+    this.geo.pauseForBackground();
   }
 
   private returnFromHidden() {
+    this.geo.resumeFromBackground();
     if (this.liveEndedWhileAway) {
       this.liveEndedWhileAway = false;
       this.say(this.t.liveOff, "status");
@@ -1335,11 +1359,14 @@ export class SmartVisionController {
       this.liveUserTurn++; // a typed question is a turn of the user's too
       this.liveNavStopped = false;
       this.patch({ live: { ...this.state.live, user: q, ai: "" } });
+      this.followSpokenLanguage(q);
       this.liveSession.sendText(q);
       return;
     }
-    // Answered in the language it was asked in, when that is clearly one the assistant speaks.
+    // Answered in the language it was asked in, when that is clearly one the assistant speaks, and
+    // the phone's own sentences follow it from now on.
     const lang = questionLang(q, this.lang, this.lastAnswerLang);
+    this.followSpokenLanguage(q);
     const t = speech(lang);
     const source = this.source;
     const cameraOn = !!source && this.state.camera === "on";
@@ -2063,7 +2090,23 @@ export class SmartVisionController {
       api,
       consent: { get: hasLocationConsent, set: setLocationConsent },
       toLive: (text) => void this.liveSession?.sendText(text, { measure: false }),
+      keepAwake: (on) => void this.keepAwakeForNavigation(on),
     });
+  }
+
+  /** Guidance's own screen wake lock: the camera's is released with the camera, this one isn't. */
+  private navWakeLock: { release(): Promise<void> } | null = null;
+  private async keepAwakeForNavigation(on: boolean) {
+    const held = this.navWakeLock;
+    this.navWakeLock = null;
+    void held?.release().catch(() => {});
+    if (!on) return;
+    try {
+      const nav = navigator as unknown as { wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> } };
+      const lock = (await nav.wakeLock?.request("screen")) ?? null;
+      if (this.geo.navigating && !this.navWakeLock) this.navWakeLock = lock;
+      else void lock?.release().catch(() => {});
+    } catch {} // not available, or refused because the page is hidden: harmless
   }
 
   /** For tests: a fake GPS and fake map routes. */
@@ -2136,6 +2179,7 @@ export class SmartVisionController {
       let response: Record<string, unknown>;
       let appSpoke = false;
       if (this.nadhra) response = { ok: false, error: "unavailable" };
+      else if (isCoachTool(call.name)) response = this.runCoachTool(call.name, call.args);
       else if (!isGeoTool(call.name)) response = { ok: false, error: "unknown_tool" };
       else {
         // A slow map service: a short "searching" so the user isn't left in silence.
@@ -2239,7 +2283,13 @@ export class SmartVisionController {
     this.liveBaseline = null;
     this.liveNewObjectAt = null;
     this.liveObjects.clear();
-    this.patch({ live: { ...LIVE_OFF, status: "connecting" }, liveStats: this.liveMetrics.summary() });
+    const st = this.state.settings;
+    // The Language Coach, if on: fixed for this conversation (its token), with last time's language.
+    this.liveCoach = st.coachEnabled
+      ? { mode: st.coachMode, ...(st.coachLanguage ? { language: st.coachLanguage } : {}), userLanguage: this.ownLanguageName() }
+      : null;
+    const coach: CoachState = this.liveCoach ? { active: true, language: "", mode: st.coachMode, feedback: [] } : COACH_OFF;
+    this.patch({ live: { ...LIVE_OFF, status: "connecting" }, liveStats: this.liveMetrics.summary(), coach });
 
     // Claimed before the camera starts, so End pressed while it is starting closes it too.
     if (this.state.camera === "off" || this.state.camera === "error") {
@@ -2248,7 +2298,8 @@ export class SmartVisionController {
     } else if (this.state.camera !== "on") await this.startCamera(true);
     if (gen !== this.liveGen) return;
 
-    const session = this.makeLiveSession({ lang: this.lang, facing: this.state.facing }, {
+    const coachOpts = this.liveCoach;
+    const session = this.makeLiveSession({ lang: this.lang, facing: this.state.facing, ...(coachOpts ? { coach: () => coachOpts } : {}) }, {
       status: (status, detail) => this.onLiveStatus(gen, status, detail),
       audio: (pcm) => {
         if (gen !== this.liveGen || !this.liveAudio) return;
@@ -2340,6 +2391,8 @@ export class SmartVisionController {
         }
         if (this.checkLiveCommand()) return;
         this.checkLiveSafety(true);
+        // The user's words this turn: the phone's own sentences follow their language.
+        if (!this.liveNewUserTurn && this.state.live.user) this.followSpokenLanguage(this.state.live.user);
         this.liveMuted = false;
         this.liveNewUserTurn = true;
         this.liveNewAnswer = true;
@@ -2605,7 +2658,9 @@ export class SmartVisionController {
     this.liveAudio?.close();
     this.liveAudio = null;
     this.queue?.setHold(false);
-    this.patch({ live: LIVE_OFF });
+    this.liveCoach = null;
+    // The feedback stays readable after the practice ends, until the next conversation.
+    this.patch({ live: LIVE_OFF, coach: { ...this.state.coach, active: false } });
     if (closeCamera) {
       this.resumeOnReturn = false;
       this.releaseCamera(); // the camera's tracks stop here, with the microphone's just above
@@ -2615,6 +2670,8 @@ export class SmartVisionController {
       this.say(this.t.liveOff, "status");
       // The on-device warnings stop with the camera: the user must know.
       if (closeCamera) this.say(this.t.cameraOff, "status");
+      // Guidance goes on without the conversation: say how to stop it now there is no microphone.
+      if (this.geo.navigating) this.say(geoSpeech(this.lang).navReminder, "status");
     }
   }
 
@@ -2803,6 +2860,72 @@ export class SmartVisionController {
     return true;
   }
 
+  // --- the user's language -------------------------------------------------------------------------
+
+  /**
+   * The user spoke: the app's own sentences and the main screen follow their language, without a
+   * word about it, and without restarting anything (the live model follows the user by itself).
+   * Only a clear sentence counts (spokenLang); a short «OK» or a name changes nothing. Not during a
+   * Language Coach practice: the user speaks the language they are learning, not their own.
+   */
+  private followSpokenLanguage(text: string) {
+    if (this.liveCoach) return;
+    const l = spokenLang(text, this.spokenLang);
+    if (!l) return;
+    this.spokenLang = l;
+    this.adaptLanguage(uiLangFor(l));
+  }
+
+  private adaptLanguage(lang: SpeechLang) {
+    if (lang === this.lang) return;
+    const settings = { ...this.state.settings, language: lang };
+    saveVisionSettings(settings);
+    this.tts?.setLanguage?.(lang);
+    this.queue?.resetLanguage();
+    this.patch({ settings, voice: this.tts?.voiceInfo() ?? null });
+  }
+
+  /** The user's own language, by name, for the coach's first question. */
+  private ownLanguageName(): string {
+    return CONVERSATION_LANG_LABEL[this.spokenLang ?? this.lang];
+  }
+
+  /** Clears the coach's feedback panel. */
+  clearCoachFeedback() {
+    this.patch({ coach: { ...this.state.coach, feedback: [] } });
+  }
+
+  /** The coach's tools: answered at once, so the spoken answer isn't held up. */
+  private runCoachTool(name: string, args: unknown): Record<string, unknown> {
+    const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+    const coach = this.state.coach;
+    if (!coach.active) return { ok: false, error: "coach_off" };
+    if (name === "set_practice_language") {
+      const language = cleanLanguageName(a.language);
+      if (!language) return { ok: false, error: "no_language" };
+      this.patch({ coach: { ...coach, language } });
+      if (language !== this.state.settings.coachLanguage) this.saveQuietly({ coachLanguage: language });
+      return { ok: true, language };
+    }
+    if (name === "set_practice_mode") {
+      if (!isCoachMode(a.mode)) return { ok: false, error: "unknown_mode" };
+      this.patch({ coach: { ...coach, mode: a.mode } });
+      this.saveQuietly({ coachMode: a.mode });
+      return { ok: true, mode: a.mode };
+    }
+    const item = feedbackFromArgs(a, ++this.feedbackId, coach.language || undefined);
+    if (!item) return { ok: false, error: "nothing_to_show" };
+    this.patch({ coach: { ...coach, feedback: [item, ...coach.feedback].slice(0, MAX_FEEDBACK_ITEMS) } });
+    return { ok: true };
+  }
+
+  /** Saves a preference that comes from the conversation, without the side effects of updateSettings. */
+  private saveQuietly(p: Partial<VisionSettings>) {
+    const settings = { ...this.state.settings, ...p };
+    saveVisionSettings(settings);
+    this.patch({ settings });
+  }
+
   // --- settings --------------------------------------------------------------------------------
 
   updateSettings(p: Partial<VisionSettings>) {
@@ -2847,6 +2970,14 @@ export class SmartVisionController {
     if (p.language && p.language !== before.language && this.liveSession) {
       this.stopLive(true, { keepCamera: true });
       void this.startLive();
+    } else if (typeof p.coachEnabled === "boolean" && p.coachEnabled !== before.coachEnabled && this.liveSession) {
+      // The coach's instructions and tools are locked into the token: a new conversation, the camera kept.
+      this.stopLive(true, { keepCamera: true });
+      void this.startLive();
+    } else if (p.coachMode && p.coachMode !== before.coachMode && this.liveCoach && this.liveSession?.isOpen) {
+      // Changed in Settings during a practice: the model is told (its instructions list every mode).
+      this.patch({ coach: { ...this.state.coach, mode: p.coachMode } });
+      this.liveSession.sendText(`[app] practice-mode: ${p.coachMode} (${COACH_MODE_LABELS[p.coachMode]}). Follow this mode from now on; don't mention this message.`, { measure: false });
     }
     if (p.facing) {
       this.tracker.clear();

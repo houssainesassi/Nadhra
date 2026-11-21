@@ -219,3 +219,32 @@ test("addresses: the separator follows the language; a building at the address i
   assert.equal(GEO_PHRASES.tn.near("البنك"), "قريب من البنك");
   assert.equal(GEO_PHRASES.en.near("the bank"), "near the bank");
 });
+
+test("map categories: organisations tagged as care places are doubted, names that confirm the category aren't; disused places are dropped", async () => {
+  const { placeDoubt, isDisused, rankPlaces } = await import("../src/lib/geo/osm.ts");
+  assert.equal(placeDoubt({ amenity: "hospital" }, "عمادة أطباء الأسنان بتونس", "hospital"), "name");
+  assert.equal(placeDoubt({ amenity: "hospital" }, "Ordre des Médecins Dentistes de Tunisie", "hospital"), "name");
+  assert.equal(placeDoubt({ amenity: "hospital", office: "association" }, "X", "hospital"), "office");
+  assert.equal(placeDoubt({ amenity: "hospital" }, "Hôpital Charles Nicolle", "hospital"), null);
+  assert.equal(placeDoubt({ amenity: "pharmacy" }, "Pharmacie de l'Ordre", "pharmacy"), null, "the name says pharmacy");
+  assert.equal(placeDoubt({ amenity: "clinic" }, "Clinique de la Caisse", "clinic"), null);
+  assert.equal(placeDoubt({ amenity: "restaurant" }, "Restaurant du Syndicat", "restaurant"), null, "only for care places");
+  // Real names from central Tunis (Nominatim, Nov 2026).
+  assert.equal(placeDoubt({ amenity: "hospital", "name:ar": "معهد صالح عزيز" }, "Institut Salah-Azaïz", "hospital"), null, "«معهد» names real Tunisian hospitals");
+  assert.equal(placeDoubt({ amenity: "hospital" }, "Institut Hedi Raies D'ophtalmologie", "hospital"), null);
+  assert.equal(placeDoubt({ amenity: "hospital" }, "Cabinet dentaire Dr Lina Attia", "hospital"), "name", "a dental practice isn't a hospital");
+  assert.equal(placeDoubt({ amenity: "pharmacy" }, "Parapharmacie du Lac", "pharmacy"), "name", "a parapharmacy has no medicines");
+  assert.equal(isDisused({ "disused:amenity": "pharmacy" }), true);
+  assert.equal(isDisused({ amenity: "pharmacy", opening_hours: "closed" }), true);
+  assert.equal(isDisused({ amenity: "pharmacy", end_date: "2019-05" }), true);
+  assert.equal(isDisused({ amenity: "pharmacy", opening_hours: "Mo-Sa 08:00-20:00" }), false);
+  const els = { elements: [
+    { type: "node", id: 1, lat: 36.7995, lon: 10.1803, tags: { amenity: "hospital", name: "عمادة أطباء الأسنان بتونس" } },
+    { type: "node", id: 2, lat: 36.8100, lon: 10.1900, tags: { amenity: "hospital", name: "مستشفى شارل نيكول" } },
+    { type: "node", id: 3, lat: 36.7994, lon: 10.1802, tags: { "disused:amenity": "hospital", amenity: "hospital", name: "Old" } },
+  ] };
+  const ranked = parseOverpass(els, ["hospital"], "tn", HERE);
+  assert.deepEqual(ranked.map((p) => p.osmId), ["n2", "n1"], "the real hospital first, the doubtful after, the disused gone");
+  assert.equal(ranked[1].doubt, "name");
+  assert.deepEqual(rankPlaces([{ ...HERE, doubt: "name" as const }, { lat: 36.9, lon: 10.3 }], HERE).map((p) => p.lat), [36.9, 36.7993]);
+});

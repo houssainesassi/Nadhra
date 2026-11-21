@@ -96,7 +96,7 @@ for (const [cat, re] of [["pharmacy", /^لقيت \d+ بلايص\. الأقرب: 
   console.log(`      said: ${s} (${Date.now() - t} ms)`);
 }
 await page.selectOption("[data-testid=nav-category]", "pharmacy");
-await until(() => page.isVisible("[data-testid=nav-places] li"), 30_000);
+await until(async () => /Pharmacy/.test((await page.textContent("[data-testid=nav-places] li").catch(() => "")) ?? ""), 30_000);
 const firstPlace = (await page.textContent("[data-testid=nav-places] li"))?.trim();
 check("places listed in text with distance (no map needed)", /metres/.test(firstPlace ?? ""), firstPlace);
 await page.click("[data-testid=nav-places] li button");
@@ -184,6 +184,62 @@ await ctx.close();
   check("camera session still ends", !!(await until(() => page.evaluate(() => document.querySelector("[data-testid=stage]")?.getAttribute("data-camera") === "off"))));
   await page.screenshot({ path: join(OUT, "home-desktop.png") });
   check("desktop: no CSP refusals or page errors", problems.length === 0, problems.join(" | ").slice(0, 400));
+  await ctx.close();
+}
+
+// --- 4. accessibility of guidance outside the session: End, the screen locked, the N key, privacy ---------------
+{
+  const { ctx, page, said, problems } = await open({ width: 390, height: 844 });
+  await page.evaluate(() => localStorage.setItem("assistant.locationConsent.v1", "1"));
+  await page.reload();
+  await page.click("body", { position: { x: 5, y: 5 } });
+  await page.keyboard.press("KeyC");
+  await until(() => page.evaluate(() => document.querySelector("[data-testid=stage]")?.getAttribute("data-camera") === "on"));
+  // The screen-reader action opens the panel during a session.
+  await page.evaluate(() => document.querySelector("[data-testid=action-places]").click());
+  await page.waitForSelector("[data-testid=nav-panel]", { state: "visible" });
+  await page.selectOption("[data-testid=nav-category]", "pharmacy");
+  await until(() => page.isVisible("[data-testid=nav-places] li"), 30_000);
+  await page.click("[data-testid=nav-places] li button");
+  await until(() => page.isVisible("[data-testid=nav-start]"), 20_000);
+  await page.click("[data-testid=nav-start]");
+  check("start also says, once, to keep the screen on", !!(await until(() => saidMatching(said, /^خلّي الشاشة شاعلة/))));
+  await page.keyboard.press("Escape");
+  check("during the session: the strip with Stop is on the camera screen", !!(await until(() => page.isVisible("[data-testid=stage] [data-testid=nav-strip-stop]"))));
+  if (existsSync(AXE)) {
+    await page.addScriptTag({ path: AXE });
+    const v = await page.evaluate(async () => (await window.axe.run("[data-testid=nav-strip]", { runOnly: ["wcag2a", "wcag2aa"] })).violations.map((x) => `${x.id}(${x.nodes.length})`));
+    check("axe on the navigation strip: no violations", v.length === 0, v.join(", "));
+  }
+  await page.click("[data-testid=stop-assistance]");
+  check("End: guidance goes on, its Stop is on the home screen", !!(await until(() => page.isVisible(".home [data-testid=nav-strip-stop]"))));
+  check("End: focus lands on Stop navigation (one double-tap away)", !!(await until(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "nav-strip-stop"))));
+  check("End: said how to stop without a microphone", !!(await until(() => saidMatching(said, /^التوجيه مازال شاعل\. باش توقّفو، اضغط على .?وقّف التوجيه.? في الشاشة/))), said.slice(-3).join(" | "));
+  const stopName = await page.evaluate(() => { const b = document.querySelector("[data-testid=nav-strip-stop]"); return `${b.textContent} | ${document.getElementById(b.getAttribute("aria-describedby"))?.textContent}`; });
+  check("Stop has a name and describes the guidance", /وقّف التوجيه \| ماشي لـ.+ · باقي حوالي/.test(stopName), stopName);
+  // The screen is locked (the page is hidden), then unlocked.
+  const setHidden = (hidden) => page.evaluate((hidden) => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (hidden ? "hidden" : "visible") });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+  await setHidden(true);
+  check("screen locked: the strip says guidance is paused", !!(await until(() => page.evaluate(() => /الشاشة كانت مسكّرة/.test(document.querySelector("[data-testid=nav-strip]")?.textContent ?? "")))));
+  const n = said.length;
+  await setHidden(false);
+  check("screen back: said that guidance was paused and continues", !!(await until(() => said.slice(n).some((t) => t.startsWith("التوجيه كان واقف")))), said.slice(n).join(" | "));
+  check("screen back: the strip shows it running again", !!(await until(() => page.evaluate(() => !/الشاشة كانت مسكّرة/.test(document.querySelector("[data-testid=nav-strip]")?.textContent ?? "")))));
+  await page.keyboard.press("KeyN");
+  check("N key: stops guidance, said", !!(await until(() => said.includes("وقّفت التوجيه."))) && !(await page.isVisible("[data-testid=nav-strip]")));
+  // The privacy text, as shown in the app.
+  await page.click("[data-testid=open-settings]");
+  await page.click("[data-testid=open-privacy]");
+  const privacy = await page.textContent("dialog[open]");
+  check("privacy: says GPS coordinates go to Nadhra's server", /your GPS coordinates are sent to Nadhra's server/.test(privacy ?? ""));
+  check("privacy: says place information is shared with Gemini", /shared with Google Gemini/.test(privacy ?? ""));
+  check("privacy: no claim that location stays on the device", !/location stay on this device/.test(privacy ?? ""));
+  await page.screenshot({ path: join(OUT, "privacy-phone.png") });
+  check("no CSP refusals or page errors", problems.length === 0, problems.join(" | ").slice(0, 400));
   await ctx.close();
 }
 

@@ -7,6 +7,7 @@ import { charge, checkRequest } from "../../../../lib/server/guard.ts";
 import { record } from "../../../../lib/server/monitor.ts";
 import { isSpeechLang } from "../../../../lib/assistant/lang.ts";
 import { aiMode, requestedFamily } from "../../../../lib/ai/router.ts";
+import { parseCoachOptions } from "../../../../lib/coach/coach.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +41,7 @@ export async function POST(req: Request) {
     facing: raw.facing === "user" ? "user" : "outward",
     modelIndex,
     handle,
+    coach: parseCoachOptions(raw.coach),
   });
   if (!result.ok) {
     record("live.token-failed", result.error, "warn");

@@ -72,6 +72,12 @@ interface GeoPhrases {
   nearest: (name: string, distance: string) => string;
   found: (n: number) => string;
   routeReady: (dest: string, distance: string, time: string) => string;
+  /** The nearest place's name says it is an organisation, not that kind of place. */
+  doubtful: string;
+  /** Said once, after guidance starts: the browser stops GPS when the screen is off. */
+  keepScreenOn: string;
+  /** Back after the screen was off or another app was in front: guidance was paused. */
+  resumedAfterBackground: string;
 }
 
 const tnMetres = (m: number) => {
@@ -110,7 +116,7 @@ const TN: GeoPhrases = {
   keepGoing: (d) => `كمّل ${d}.`,
   destinationAhead: (n, d) => `${n} بعد ${d}.`,
   consentNotice:
-    "باش نعرف وين إنت ونلقالك البلايص اللي قريبة ونمشّيك ليها، نحتاج بلاصتك. البلاصة تتعدّى على سيرفر نظرة لخدمات خرائط OpenStreetMap، وأسماء البلايص والمسافات تتبعث لجيميني باش يجاوبك. ما تتسجّلش. التلفون باش يسألك زادا. إذا موافق، قول «موافق».",
+    "باش نعرف وين إنت ونلقالك البلايص اللي قريبة ونمشّيك ليها، نحتاج بلاصتك. إحداثيات الـGPS متاعك تتبعث لسيرفر نظرة، اللي يسأل خدمات خرائط OpenStreetMap على العنوان والبلايص والطريق. وفي المحادثة، العنوان وأسماء البلايص والمسافات تتبعث لجيميني باش يجاوبك، أما الإحداثيات لا. ما يتسجّل شي. التلفون باش يسألك زادا. إذا موافق، قول «موافق».",
   consentGiven: "باهي. نلوّج على بلاصتك.",
   consentRefused: "باهي، ما نستعملش بلاصتك.",
   locating: "نلوّج على بلاصتك.",
@@ -137,7 +143,7 @@ const TN: GeoPhrases = {
   trackingStopped: "وقّفت استعمال بلاصتك.",
   noNavigation: "ما فمّا حتى توجيه شاعل.",
   unnamed: "بلاصة ما عندهاش اسم على الخريطة",
-  navReminder: "التوجيه مازال شاعل. قول «وقّف التوجيه» باش توقّفو.",
+  navReminder: "التوجيه مازال شاعل. باش توقّفو، اضغط على «وقّف التوجيه» في الشاشة، ولا قول «وقّف التوجيه» في المحادثة.",
   youAreAt: (a) => `إنت في ${a}.`,
   near: (n) => `قريب من ${n}`,
   approximate: (d) => `البلاصة تقريبية، بفرق ${d}.`,
@@ -145,6 +151,9 @@ const TN: GeoPhrases = {
   nearest: (n, d) => `الأقرب: ${n}، ${d} في خط مستقيم.`,
   found: (n) => (n === 1 ? "لقيت بلاصة وحدة." : `لقيت ${n} بلايص.`),
   routeReady: (dest, d, t) => `${dest}: ${d} على ساقيك، ${t}. اضغط «ابدا التوجيه» باش نبداو.`,
+  doubtful: "أما الخريطة تنجّم تكون غالطة: الاسم يظهرلي موش متاع هالنوع من البلايص.",
+  keepScreenOn: "خلّي الشاشة شاعلة ونظرة قدّامك: كي تسكّر الشاشة ولا تخرج للتطبيقات الأخرى، التوجيه يوقف.",
+  resumedAfterBackground: "التوجيه كان واقف وقتلّي الشاشة مسكّرة ولا كنت في تطبيق آخر. نكمّلو، نلوّج على بلاصتك.",
 };
 
 const arMetres = (m: number) => {
@@ -183,7 +192,7 @@ const AR: GeoPhrases = {
   keepGoing: (d) => `استمر ${d}.`,
   destinationAhead: (n, d) => `${n} بعد ${d}.`,
   consentNotice:
-    "لأعرف أين أنت وأجد الأماكن القريبة وأرشدك إليها، أحتاج إلى موقعك. يمرّ الموقع عبر خادم نظرة إلى خدمات خرائط OpenStreetMap، وتُرسَل أسماء الأماكن والمسافات إلى جيميني ليجيبك. لا يُحفَظ. سيطلب الهاتف إذنك أيضًا. إذا كنت موافقًا، قل «موافق».",
+    "لأعرف أين أنت وأجد الأماكن القريبة وأرشدك إليها، أحتاج إلى موقعك. تُرسَل إحداثيات GPS الخاصة بك إلى خادم نظرة، الذي يطلب من خدمات خرائط OpenStreetMap العنوان والأماكن والطريق. وفي المحادثة، يُرسَل العنوان وأسماء الأماكن والمسافات إلى جيميني ليجيبك، دون الإحداثيات. لا يُحفَظ شيء. سيطلب الهاتف إذنك أيضًا. إذا كنت موافقًا، قل «موافق».",
   consentGiven: "حسنًا. أبحث عن موقعك.",
   consentRefused: "حسنًا، لن أستعمل موقعك.",
   locating: "أبحث عن موقعك.",
@@ -210,7 +219,7 @@ const AR: GeoPhrases = {
   trackingStopped: "أوقفت استعمال موقعك.",
   noNavigation: "لا يوجد إرشاد قيد التشغيل.",
   unnamed: "مكان بلا اسم على الخريطة",
-  navReminder: "الإرشاد ما زال يعمل. قل «أوقف الإرشاد» لإيقافه.",
+  navReminder: "الإرشاد ما زال يعمل. لإيقافه، اضغط «أوقف الإرشاد» على الشاشة، أو قل «أوقف الإرشاد» في المحادثة.",
   youAreAt: (a) => `أنت في ${a}.`,
   near: (n) => `قرب ${n}`,
   approximate: (d) => `الموقع تقريبي، بهامش ${d}.`,
@@ -218,6 +227,9 @@ const AR: GeoPhrases = {
   nearest: (n, d) => `الأقرب: ${n}، ${d} في خط مستقيم.`,
   found: (n) => (n === 1 ? "وجدت مكانًا واحدًا." : `وجدت ${n} أماكن.`),
   routeReady: (dest, d, t) => `${dest}: ${d} سيرًا، ${t}. اضغط «ابدأ الإرشاد» لنبدأ.`,
+  doubtful: "لكن قد تكون الخريطة مخطئة: يبدو من الاسم أنه ليس مكانًا من هذا النوع.",
+  keepScreenOn: "أبقِ الشاشة مضاءة ونظرة مفتوحًا أمامك: إذا أطفأت الشاشة أو انتقلت إلى تطبيق آخر يتوقف الإرشاد.",
+  resumedAfterBackground: "توقف الإرشاد بينما كانت الشاشة مطفأة أو كنت في تطبيق آخر. نتابع، أبحث عن موقعك.",
 };
 
 const frMetres = (m: number) => {
@@ -256,7 +268,7 @@ const FR: GeoPhrases = {
   keepGoing: (d) => `Continuez ${d}.`,
   destinationAhead: (n, d) => `${n} dans ${d}.`,
   consentNotice:
-    "Pour savoir où vous êtes, trouver les lieux proches et vous y guider, j'ai besoin de votre position. Elle passe par le serveur de Nadhra vers les services de cartes OpenStreetMap, et les noms des lieux et les distances sont envoyés à Gemini pour vous répondre. Rien n'est enregistré. Le téléphone vous demandera aussi l'autorisation. Si vous êtes d'accord, dites « j'accepte ».",
+    "Pour savoir où vous êtes, trouver les lieux proches et vous y guider, j'ai besoin de votre position. Vos coordonnées GPS sont envoyées au serveur de Nadhra, qui demande l'adresse, les lieux et l'itinéraire aux services de cartes OpenStreetMap. Dans une conversation, l'adresse, les noms des lieux et les distances sont envoyés à Gemini pour vous répondre, mais pas vos coordonnées. Rien n'est enregistré. Le téléphone vous demandera aussi l'autorisation. Si vous êtes d'accord, dites « j'accepte ».",
   consentGiven: "D'accord. Je cherche votre position.",
   consentRefused: "D'accord, je n'utilise pas votre position.",
   locating: "Je cherche votre position.",
@@ -283,7 +295,7 @@ const FR: GeoPhrases = {
   trackingStopped: "Je n'utilise plus votre position.",
   noNavigation: "Aucun guidage n'est en cours.",
   unnamed: "un lieu sans nom sur la carte",
-  navReminder: "Le guidage est toujours actif. Dites « arrête le guidage » pour l'arrêter.",
+  navReminder: "Le guidage est toujours actif. Pour l'arrêter, appuyez sur « Arrêter le guidage » à l'écran, ou dites « arrête le guidage » dans la conversation.",
   youAreAt: (a) => `Vous êtes ${a.match(/^\d/) ? "au" : "à"} ${a}.`,
   near: (n) => `près de ${n}`,
   approximate: (d) => `Position approximative, à ${d} près.`,
@@ -291,11 +303,14 @@ const FR: GeoPhrases = {
   nearest: (n, d) => `Le plus proche : ${n}, à ${d} à vol d'oiseau.`,
   found: (n) => (n === 1 ? "J'ai trouvé un lieu." : `J'ai trouvé ${n} lieux.`),
   routeReady: (dest, d, t) => `${dest} : ${d} à pied, ${t}. Appuyez sur « Démarrer le guidage » pour commencer.`,
+  doubtful: "Mais la carte peut se tromper : d'après son nom, ce n'est peut-être pas ce type de lieu.",
+  keepScreenOn: "Gardez l'écran allumé et Nadhra ouvert : si l'écran s'éteint ou si vous passez à une autre application, le guidage s'arrête.",
+  resumedAfterBackground: "Le guidage était en pause pendant que l'écran était éteint ou qu'une autre application était ouverte. On reprend, je cherche votre position.",
 };
 
 const enMetres = (m: number) => {
   const r = roundDistance(m);
-  return r >= 1000 ? `about ${(r / 1000).toLocaleString("en", { maximumFractionDigits: 1 })} kilometre${r >= 2000 ? "s" : ""}` : `about ${r} metres`;
+  return r >= 1000 ? `about ${(r / 1000).toLocaleString("en", { maximumFractionDigits: 1 })} kilometre${r === 1000 ? "" : "s"}` : `about ${r} metres`;
 };
 
 const EN: GeoPhrases = {
@@ -329,7 +344,7 @@ const EN: GeoPhrases = {
   keepGoing: (d) => `Keep going for ${d}.`,
   destinationAhead: (n, d) => `${n} in ${d}.`,
   consentNotice:
-    "To know where you are, find places nearby and guide you there, I need your location. It goes through Nadhra's server to the OpenStreetMap map services, and place names and distances are sent to Gemini to answer you. Nothing is stored. Your phone will also ask for permission. If you agree, say “I agree”.",
+    "To know where you are, find places nearby and guide you there, I need your location. Your GPS coordinates are sent to Nadhra's server, which asks the OpenStreetMap map services for the address, places and route. In a conversation, the address, place names and distances are sent to Gemini to answer you, but not your coordinates. Nothing is stored. Your phone will also ask for permission. If you agree, say “I agree”.",
   consentGiven: "OK. Finding your location.",
   consentRefused: "OK, I won't use your location.",
   locating: "Finding your location.",
@@ -356,7 +371,7 @@ const EN: GeoPhrases = {
   trackingStopped: "I've stopped using your location.",
   noNavigation: "No navigation is running.",
   unnamed: "a place with no name on the map",
-  navReminder: "Navigation is still on. Say “stop navigation” to end it.",
+  navReminder: "Navigation is still on. To end it, press “Stop navigation” on the screen, or say “stop navigation” in a conversation.",
   youAreAt: (a) => `You are at ${a}.`,
   near: (n) => `near ${n}`,
   approximate: (d) => `The position is approximate, to within ${d}.`,
@@ -364,6 +379,9 @@ const EN: GeoPhrases = {
   nearest: (n, d) => `The nearest: ${n}, ${d} in a straight line.`,
   found: (n) => (n === 1 ? "I found one place." : `I found ${n} places.`),
   routeReady: (dest, d, t) => `${dest}: ${d} on foot, ${t}. Press “Start navigation” to begin.`,
+  doubtful: "But the map may be wrong: from its name, it may not be that kind of place.",
+  keepScreenOn: "Keep the screen on and Nadhra open: if the screen turns off or you switch to another app, guidance stops.",
+  resumedAfterBackground: "Guidance was paused while the screen was off or another app was open. Continuing, finding your position.",
 };
 
 export const GEO_PHRASES: Record<SpeechLang, GeoPhrases> = { tn: TN, ar: AR, fr: FR, en: EN };

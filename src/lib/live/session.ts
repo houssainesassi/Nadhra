@@ -11,6 +11,7 @@ import { bytesToBase64, base64ToBytes } from "./pcm.ts";
 import { LIVE_INPUT_RATE } from "./config.ts";
 import { apiFetch, isLocalOnly } from "../assistant/api.ts";
 import type { SpeechLang } from "../assistant/lang.ts";
+import type { LiveCoachOptions } from "../coach/coach.ts";
 import type { CameraFacing } from "../assistant/types.ts";
 import type { LivePricing, UsageMetadata } from "./metrics.ts";
 
@@ -59,6 +60,8 @@ interface TokenResponse {
 export interface LiveSessionOptions {
   lang: SpeechLang;
   facing: CameraFacing;
+  /** AI Language Coach, read at every token request (a reconnection keeps the language chosen since). */
+  coach?: () => LiveCoachOptions | null;
   /** Token route. Absolute in Node tests. */
   tokenUrl?: string;
   fetchImpl?: typeof fetch;
@@ -102,7 +105,7 @@ export class LiveSession {
   private activityStartAt = 0;
   private pendingAudio: Uint8Array[] = [];
   private pendingBytes = 0;
-  private opts: Required<Omit<LiveSessionOptions, "lang" | "facing">> & Pick<LiveSessionOptions, "lang" | "facing">;
+  private opts: Required<Omit<LiveSessionOptions, "lang" | "facing" | "coach">> & Pick<LiveSessionOptions, "lang" | "facing" | "coach">;
 
   private events: LiveEvents;
 
@@ -245,7 +248,7 @@ export class LiveSession {
       res = await this.opts.fetchImpl(this.opts.tokenUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: this.opts.lang, facing: this.opts.facing, modelIndex: this.modelIndex, handle: this.handle }),
+        body: JSON.stringify({ lang: this.opts.lang, facing: this.opts.facing, modelIndex: this.modelIndex, handle: this.handle, ...(this.opts.coach?.() ? { coach: this.opts.coach() } : {}) }),
         cache: "no-store",
         signal: AbortSignal.timeout(10_000),
       });

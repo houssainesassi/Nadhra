@@ -21,15 +21,22 @@ test("models: comma list, junk dropped, defaults when empty", () => {
   assert.deepEqual(parseLiveModels(""), ["gemini-3.1-flash-live-preview", "gemini-3.8-live"]);
 });
 
-test("prompt: Derja by default, safety rules, mirrored sides for a user-facing webcam", () => {
+test("prompt: follows the user's language (Derja rules kept), safety rules, mirrored sides for a user-facing webcam", () => {
   const p = liveSystemPrompt("tn", "outward");
   assert.match(p, /Tunisian Arabic \(Derja/);
-  assert.match(p, /Never speak Modern Standard Arabic, Egyptian/);
+  assert.match(p, /Never Modern Standard Arabic, Egyptian/);
   assert.match(p, /never tell them to cross/);
   assert.match(p, /Never say who a person is/);
   assert.match(p, /left of the image is their left/);
   assert.match(liveSystemPrompt("tn", "user"), /LEFT of the image is the user's RIGHT/);
-  assert.match(liveSystemPrompt("fr", "outward"), /Speak French/);
+  // No language is forced: every prompt says to follow the user, whatever the phone's last language.
+  for (const lang of ["tn", "ar", "fr", "en"] as const) {
+    const q = liveSystemPrompt(lang, "outward");
+    assert.match(q, /There is no fixed language. Always answer in the language the user is speaking in their latest turn/);
+    assert.match(q, /German, Italian, Spanish or any other language → that language/);
+    assert.match(q, /When they switch language, switch with them at once/);
+  }
+  assert.match(liveSystemPrompt("fr", "outward"), /at the very start, French\./, "the phone's language only breaks a tie");
 });
 
 test("token setup: model, female voice, instructions, VAD, transcripts, resumption, compression", () => {

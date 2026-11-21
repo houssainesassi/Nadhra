@@ -7,9 +7,11 @@ import { usageToday } from "../../../lib/server/guard.ts";
 import { snapshot } from "../../../lib/server/monitor.ts";
 import { deviceInfo } from "../../../lib/server/deviceCapabilities.ts";
 import { capabilitySummary } from "../../../lib/ai/vision.ts";
+import { probeGeoServices } from "../../../lib/server/geo.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 20;
 
 function authorized(req: Request): boolean {
   const token = process.env.HEALTH_TOKEN?.trim();
@@ -22,5 +24,7 @@ function authorized(req: Request): boolean {
 export async function GET(req: Request) {
   const headers = { "Cache-Control": "no-store" };
   if (!authorized(req)) return Response.json({ ok: true }, { headers });
-  return Response.json({ ok: true, ...(await usageToday()), ...snapshot(), device: deviceInfo(), ai: capabilitySummary() }, { headers });
+  // ?geo=1: one light request to each map service from this deployment (see docs/NAVIGATION.md).
+  const geo = new URL(req.url).searchParams.get("geo") === "1" ? { geoServices: await probeGeoServices() } : {};
+  return Response.json({ ok: true, ...(await usageToday()), ...snapshot(), device: deviceInfo(), ai: capabilitySummary(), ...geo }, { headers });
 }

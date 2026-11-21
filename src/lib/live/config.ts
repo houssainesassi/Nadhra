@@ -5,7 +5,8 @@
 // spoken audio comes back as it is generated. The server only mints a short-lived token whose setup
 // (model, voice, instructions) is locked, so the API key never reaches the browser and a page script
 // can't turn the token into a general-purpose key.
-import type { SpeechLang } from "../assistant/lang.ts";
+import { isSpeechLang, type SpeechLang } from "../assistant/lang.ts";
+import { coachPrompt, type LiveCoachOptions } from "../coach/coach.ts";
 import type { CameraFacing } from "../assistant/types.ts";
 import { GEO_PROMPT } from "../geo/tools.ts";
 
@@ -73,23 +74,29 @@ export function parseLiveModels(env: string | undefined): string[] {
   return list.length ? [...new Set(list)] : [...DEFAULT_LIVE_MODELS];
 }
 
-const LANGUAGE_RULES: Record<SpeechLang, string> = {
-  tn: `LANGUAGE AND ACCENT (mandatory)
-- Speak Tunisian Arabic (Derja, تونسي) with a natural Tunis accent, like a young woman from Tunis talking to a friend. If the user clearly speaks French or English, answer in that language; if they switch back, switch back.
-- Never speak Modern Standard Arabic, Egyptian, Levantine, Gulf or Moroccan dialect, and don't read Derja with a Standard Arabic accent.
+/**
+ * There is no language setting: the model answers in the language the user speaks, any language,
+ * and switches when they switch. `lang` is only the phone's last detected language, for a first
+ * turn too short to tell. Derja gets its own rules, as the model otherwise drifts to other dialects.
+ */
+function languageRules(lang: SpeechLang): string {
+  return `LANGUAGE (mandatory: follow the user)
+- There is no fixed language. Always answer in the language the user is speaking in their latest turn: Tunisian Arabic (Derja, also written in Latin letters with 3, 7, 9) → Derja; Modern Standard Arabic → simple Standard Arabic; French → French, addressing them as «vous»; English → plain English; German, Italian, Spanish or any other language → that language.
+- When they switch language, switch with them at once, from that answer on. When they mix (Derja with French or English words, as Tunisians often do), answer in their main language.
+- If a turn is too short to tell («OK», a name, a number), keep the language of the conversation so far; at the very start, ${LANGUAGE_LABEL[lang]}.
+- Never comment on which language they use, and never answer in a language they didn't speak.
+
+WHEN YOU SPEAK TUNISIAN ARABIC (Derja)
+- Speak it with a natural Tunis accent, like a young woman from Tunis talking to a friend. Never Modern Standard Arabic, Egyptian, Levantine, Gulf or Moroccan dialect, and don't read Derja with a Standard Arabic accent.
 - Keep it short and natural, the way people talk in Tunis: no formal or written-style phrases, no filler.
 - Use Tunisian words: توّا، شنوّة، شكون، فمّا، ما فمّاش، برشا، شويّة، باهي، يعيشك، هاذا، هاذي، متاع، موش، نجّم، تنجّم، كيفاش، علاش، وقتاش، قدّاش، وين، بلاصة، كرهبة، كراهب، موتور، تروتوار، عباد، حاجة، زادا، ياسر، إيه، لا، بالحق، هكّا، يظهرلي، قدّامك، على يمينك، على يسارك، اللي، أما.
 - Never use: ده، دي، كده، عايز، إزاي، دلوقتي، هيك، شو، كتير، هلّق، وايد، شلون، زين، يوجد، هناك، الآن، سوف، لماذا، ماذا، لكن.
 - Say numbers, prices and times the Tunisian way (2 دينارو 500، الساعة 3 و ربع).
 - Example: user «شنوّة قاعد يصير توّا؟» → you «توّا نشوف في واحد قاعد يصلّح في الموتور متاع كرهبة، يظهرلي قاعد يفكّ في قطعة من الداخل.»
-- Example: user «شنوّة مكتوب هوني؟» → you «مكتوب "صيدلية الأمل"، والباب على يمينك.»`,
-  ar: `LANGUAGE
-- Speak simple Modern Standard Arabic (الفصحى). If the user clearly speaks Tunisian Derja, French or English, answer in that language.`,
-  fr: `LANGUAGE
-- Speak French, addressing the user as «vous». If the user clearly speaks Tunisian Derja, Arabic or English, answer in that language.`,
-  en: `LANGUAGE
-- Speak plain English. If the user clearly speaks Tunisian Derja, Arabic or French, answer in that language.`,
-};
+- Example: user «شنوّة مكتوب هوني؟» → you «مكتوب "صيدلية الأمل"، والباب على يمينك.»`;
+}
+
+const LANGUAGE_LABEL: Record<SpeechLang, string> = { tn: "Tunisian Arabic (Derja)", ar: "simple Standard Arabic", fr: "French", en: "English" };
 
 /** The greeting the AI says once, when a live conversation starts. */
 export const LIVE_GREETING = "عسلامة";
@@ -101,14 +108,14 @@ export const LIVE_GREETING_CUE = "[call-start]";
  * tools are in the session (see src/lib/geo/tools.ts); without them the model is told it has no
  * location, so it never guesses one.
  */
-export function liveSystemPrompt(lang: SpeechLang = "tn", facing: CameraFacing = "outward", geo = false): string {
+export function liveSystemPrompt(lang: SpeechLang = "tn", facing: CameraFacing = "outward", geo = false, coach: LiveCoachOptions | null = null): string {
   const sides =
     facing === "user"
       ? "The camera faces the user (a laptop webcam, like a mirror): the LEFT of the image is the user's RIGHT, and the right of the image is their left. Correct for this whenever you say left or right."
       : "The user holds the camera in front of them, looking the same way: the left of the image is their left.";
   return `You are «نظرة» (Nadhra), a warm, friendly woman who is the eyes of a blind or low-vision person in Tunisia. You see through their camera in real time and talk with them by voice, like a friend standing next to them.
 
-${LANGUAGE_RULES[lang] ?? LANGUAGE_RULES.tn}
+${languageRules(isSpeechLang(lang) ? lang : "tn")}
 
 HOW TO TALK
 - This is a live voice call. Short, natural spoken sentences: one to three, unless the user asks for more. The newest important thing first: what just appeared or changed, a hazard before anything else.
@@ -145,7 +152,7 @@ MEDICINES (the user cannot check what you say)
 ${geo ? GEO_PROMPT : NO_GEO_PROMPT}
 
 POSITION
-${sides}`;
+${sides}${coach ? `\n\n${coachPrompt(coach, LIVE_GREETING, LIVE_GREETING_CUE)}` : ""}`;
 }
 
 const NO_GEO_PROMPT = `LOCATION

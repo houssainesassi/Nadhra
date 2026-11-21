@@ -199,3 +199,25 @@ For each problem: the checklist line, the language, what was said or done, what 
 - **The emergency contact and location** stay on the phone. The location only goes into a text message you send yourself.
 
 On Gemini's free tier, Google may keep the pictures and use them to improve its services, and people may review them. Don't point the camera at bank cards, ID documents or people who haven't agreed to be filmed.
+
+## Location and walking directions (supervised, outdoors)
+
+Only with the sighted companion at arm's reach, on a known quiet pavement, with the cane or dog as usual. Never across a road on Nadhra's directions. Details in `NAVIGATION.md`.
+
+Before: Chrome → Permissions → Location "Allow only while using the app", **"Use precise location" on**, battery saver off, phone charged.
+
+| # | Test | Expected |
+|---|---|---|
+| N1 | In a conversation: «وين أنا توّا؟» (first time) | Nadhra says the location notice (coordinates to Nadhra's server, place names to Gemini). Nothing is located before «موافق». Then Chrome asks for permission |
+| N2 | Say nothing after the notice for a minute, then «موافق» | Not taken as consent (the notice lapsed) |
+| N3 | «وين أنا توّا؟» | A street and area, «قريب من…» for a building, never «قدّامك» from the map |
+| N4 | «win a9reb pharmacie?» | A real pharmacy and «حوالي … متر». Companion checks it exists |
+| N5 | «nheb nemchi lilha» | Distance and time, and a question. Guidance does **not** start before «إيه» |
+| N6 | «إيه» | Start sentence, «ما نجّمش نضمن…», then once «خلّي الشاشة شاعلة…» |
+| N7 | Walk the route | «بعد حوالي … دور…» and «توّا، دور…» at the real turns; never twice; companion notes how many metres off each was |
+| N8 | Walk away from the route ~50 m | «يظهرلي خرجت من الطريق» then «لقيت طريق جديد» |
+| N9 | Lock the screen 30 s, unlock | Nothing said while locked; on unlock «التوجيه كان واقف… نكمّلو» |
+| N10 | End the conversation (End button) | Guidance continues; «باش توقّفو، اضغط على وقّف التوجيه…»; TalkBack focus on Stop navigation |
+| N11 | Double-tap Stop navigation | «وقّفت التوجيه.»; the location indicator in Android's status bar goes off within seconds |
+| N12 | In a conversation during guidance: «وقّف التوجيه» | Stops at once, said once |
+| N13 | Note battery % before and after 15 min of guidance | Write down both |

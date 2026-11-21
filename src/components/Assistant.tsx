@@ -7,22 +7,25 @@
 //   End, and front/back camera where there are two. Describe, Read, Identify,
 //   Ask and Pause are screen-reader-only buttons (TalkBack swipes to them), keys and voice commands.
 // Everything can also be done by voice and keyboard, and
-// every state change is spoken, so nothing depends on seeing the screen. Settings (with the
-// language, the AI in use and Privacy & safety) and the Emergency page are panels over the screen;
+// every state change is spoken, so nothing depends on seeing the screen. Settings (the AI in use,
+// subtitles, the Language Coach, Privacy & safety) and the Emergency page are panels over the screen;
 // the Emergency page opens by voice («نجدة», «عيّط»).
 //
-// The main screen's words follow the language chosen in Settings. The panels stay in English.
+// There is no language selector: the main screen's words follow the language the user speaks
+// (the controller detects it). Subtitles (what is said, as text) are off unless turned on in
+// Settings. The panels stay in English.
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/useStore";
 import { SmartVisionController, type SheetName, type VisionState } from "@/lib/assistant/controller";
 import { commandExamples } from "@/lib/assistant/commands";
-import { documentLang, LANGS, SPEECH_LANGS, type SpeechLang } from "@/lib/assistant/lang";
+import { documentLang, LANGS } from "@/lib/assistant/lang";
 import { cameraErrorText } from "@/lib/assistant/phrases";
 import { providerOf, RATE_CHOICES, TEXT_SCALE_CHOICES, VOLUME_CHOICES, type AiProvider, type FacingSetting } from "@/lib/assistant/settings";
 import { UI_TEXT, type UiText } from "@/lib/assistant/uiText";
 import { announcerRegions, EMPTY_REGIONS, type Announcement, type Regions } from "@/lib/assistant/announcer";
 import type { DeviceTotals, LiveSummary } from "@/lib/live/metrics";
 import NavPanel from "./NavPanel";
+import { COACH_MODE_LABELS, COACH_MODES, type CoachMode, type FeedbackItem } from "@/lib/coach/coach";
 import { geoSpeech } from "@/lib/geo/phrases";
 import { CameraOffIcon, ChevronIcon, CloudIcon, DeviceIcon, CloseIcon, ExpandIcon, LogoMark, MessageIcon, MicIcon, MicOffIcon, PhoneIcon, SettingsIcon, ShieldIcon, SwitchCameraIcon } from "./icons";
 
@@ -270,7 +273,9 @@ export default function Assistant() {
     if (wasActive.current === active) return;
     wasActive.current = active;
     if (document.querySelector("dialog[open]")) return;
-    (active ? stopRef : openRef).current?.focus({ preventScroll: true });
+    // Guidance outlives the session: its Stop button is where focus lands, one double-tap away.
+    const navStop = !active ? document.querySelector<HTMLButtonElement>("[data-testid=nav-strip-stop]") : null;
+    (navStop ?? (active ? stopRef : openRef).current)?.focus({ preventScroll: true });
   }, [active, controller]);
 
   useEffect(() => {
@@ -309,6 +314,7 @@ export default function Assistant() {
         KeyP: () => (controller.isPaused ? controller.resume() : controller.pause()),
         KeyR: () => controller.repeat(),
         KeyH: () => controller.help(),
+        KeyN: () => (controller.navigating ? controller.geoStop() : undefined),
       };
       const action = actions[e.code];
       if (action) {
@@ -338,8 +344,13 @@ export default function Assistant() {
   const contactName = s.settings.emergencyName || "my emergency contact";
 
   // What the assistant is saying: a held warning first, then a live or streaming answer.
-  const caption = heldWarning ?? (liveOn && s.live.ai.trim() ? s.live.ai.trim() : s.answer.live && s.answer.text ? s.answer.text : s.lastSpoken);
-  const heard = liveOn ? s.live.user.trim() : s.lastHeard;
+  // Subtitles: only when turned on in Settings (off by default). Off, no spoken word is shown as text.
+  const subtitles = s.settings.subtitles;
+  const caption = !subtitles ? "" : heldWarning ?? (liveOn && s.live.ai.trim() ? s.live.ai.trim() : s.answer.live && s.answer.text ? s.answer.text : s.lastSpoken);
+  const heard = !subtitles ? "" : liveOn ? s.live.user.trim() : s.lastHeard;
+  // The Language Coach's corrections and new words, in their own panel (when that is turned on).
+  const coachOn = liveOn && s.coach.active;
+  const coachPanel = active && s.settings.coachFeedback && (coachOn || s.coach.feedback.length > 0);
   // Ask is recording a question (push-to-talk): pressing it again sends the question.
   const askRecording = s.mic === "listening" && !s.assistantOn && !liveOn;
   // Pause only has something to stop when the descriptions are automatic (Gemini, outside a live
@@ -388,6 +399,9 @@ export default function Assistant() {
                     <span className="tile-icon" aria-hidden="true"><MicIcon size={40} /></span>
                     <span className="tile-text">
                       <span className="tile-label">{s.liveNotice ? ui.talkLive.agree : ui.talkNadhra}</span>
+                      {s.settings.coachEnabled && provider !== "nadhra" && !s.liveNotice && (
+                        <span className="tile-sub" data-testid="coach-home">{ui.coach.name} · {ui.coach.modes[s.settings.coachMode]}</span>
+                      )}
                     </span>
                   </button>
                 </div>
@@ -407,7 +421,7 @@ export default function Assistant() {
           <section className="stage" hidden={!active} aria-label={liveOn ? ui.live : ui.active} data-on={cameraOn} data-urgent={urgentNow} data-testid="stage"
             // The controller's state, for automated tests: the status panels are gone from the screen.
             data-camera={s.camera} data-live-status={s.live.status} data-analysis={s.analysis} data-detector={s.detector} data-mic={s.mic} data-voice-commands={s.assistantOn}
-            data-mic-on={micOn} data-facing={s.facing} data-mirror={s.facing === "user"} data-switching={s.cameraSwitching}
+            data-mic-on={micOn} data-subtitles={subtitles} data-coach={coachOn} data-facing={s.facing} data-mirror={s.facing === "user"} data-switching={s.cameraSwitching}
             data-detections={s.detections.length} data-local-hazards={s.localHazards.map((h) => `${h.kind}:${h.motion}`).join(" ")}>
             {/* The session's heading (the greeting is the home screen's), for screen-reader navigation. */}
             {active && <h1 className="sr-only">{liveOn ? ui.live : ui.active}</h1>}
@@ -435,6 +449,13 @@ export default function Assistant() {
                   {mic.on ? <MicIcon size={18} /> : <MicOffIcon size={18} />}
                   {mic.text}
                 </p>
+                {coachOn && (
+                  <p className="pill" data-tone="coach" data-testid="coach-status">
+                    <span className="nowrap">{ui.coach.name}</span>
+                    {s.coach.language && <span className="nowrap"> · <span lang="en" dir="ltr">{s.coach.language}</span></span>}
+                    <span className="nowrap"> · {ui.coach.modes[s.coach.mode]}</span>
+                  </p>
+                )}
               </div>
               {active && (
                 // Leaves the full-screen camera (the session goes on) and goes back to it.
@@ -455,19 +476,22 @@ export default function Assistant() {
               </div>
             )}
 
-            <div className="caption-box" data-urgent={urgentNow}>
-              {heard && (
-                <p className="heard" data-testid={liveOn ? "live-user" : "last-heard"}>
-                  <span className="sr-only">{ui.heard}: </span>
-                  <MicIcon size={16} /> <span dir="auto">«{heard}»</span>
-                </p>
-              )}
-              {caption ? (
-                <p dir="auto" data-testid="last-spoken" data-urgent={urgentNow} className="caption">{caption}</p>
-              ) : (
-                <p data-testid="last-spoken" data-urgent="false" className="caption caption-hint">{liveOn ? ui.talkLive.hint : ui.prompt(examples.front ?? "")}</p>
-              )}
-            </div>
+            {(subtitles || coachPanel) && (
+              <div className="caption-box" data-urgent={subtitles && urgentNow} data-testid="caption-box">
+                {coachPanel && <CoachFeedback items={s.coach.feedback} ui={ui} waiting={coachOn && !s.coach.language} />}
+                {subtitles && heard && (
+                  <p className="heard" data-testid={liveOn ? "live-user" : "last-heard"}>
+                    <span className="sr-only">{ui.heard}: </span>
+                    <MicIcon size={16} /> <span dir="auto">«{heard}»</span>
+                  </p>
+                )}
+                {subtitles && (caption ? (
+                  <p dir="auto" data-testid="last-spoken" data-urgent={urgentNow} className="caption">{caption}</p>
+                ) : (
+                  <p data-testid="last-spoken" data-urgent="false" className="caption caption-hint">{liveOn ? ui.talkLive.hint : ui.prompt(examples.front ?? "")}</p>
+                ))}
+              </div>
+            )}
           </section>
 
           {active && (
@@ -517,12 +541,8 @@ export default function Assistant() {
 
       <Sheet dialogRef={settingsRef} title="Settings" onClose={() => controller.closeSheet("settings")}>
         <div className="flex flex-col gap-6 text-lg">
-          {/* What used to sit around the home buttons: the home screen keeps only Camera, Microphone, Settings. */}
-          <Choice label="Language" hint="For speech, for recognition and for the main screen." testId="language" value={language} onChange={(v) => controller.updateSettings({ language: v as SpeechLang })}>
-            {SPEECH_LANGS.map((l) => (
-              <option key={l} value={l} lang={LANGS[l].bcp47}>{UI_TEXT[l].name}</option>
-            ))}
-          </Choice>
+          {/* No language choice: Nadhra answers in the language you speak, and the main screen follows it. */}
+          <Toggle testId="subtitles" label="Subtitles" hint="Show what you say and what Nadhra says as text during a conversation. Off: nothing spoken is shown on the screen." checked={s.settings.subtitles} onChange={(v) => controller.updateSettings({ subtitles: v })} />
           {/* The AI in use. Only where the server offers Nadhra, or it is already chosen (so the user can always switch back). */}
           {(s.status?.nadhra || provider === "nadhra") && (
             <div className="flex flex-col gap-2">
@@ -552,8 +572,20 @@ export default function Assistant() {
             )}
             <Toggle testId="live-proactive" label="Speak first when something important appears" hint="In a live conversation, when the view changes and you are silent, Nadhra looks again and says one short sentence about a possible hazard, a door or a sign, or stays quiet. It never promises the way is clear." checked={s.settings.liveProactive} onChange={(v) => controller.updateSettings({ liveProactive: v })} />
             {s.liveStats && <LiveStats stats={s.liveStats} totals={s.liveTotals} running={liveOn} />}
-            {liveOn && s.live.ai && (
+            {subtitles && liveOn && s.live.ai && (
               <p className="text-base text-ink-2">Nadhra: <span dir="auto" lang={lang.bcp47} data-testid="live-ai" className={rtl ? "arabic" : ""}>{s.live.ai.trim()}</span></p>
+            )}
+          </div>
+          <div className="flex flex-col gap-3 border-t border-hairline pt-6" data-testid="coach-settings">
+            <h3 className="font-medium">AI Language Coach</h3>
+            <Toggle testId="coach-enabled" label="AI Language Coach" hint="“Talk with Nadhra” becomes a language practice conversation. Say which language you want to practise, for example “Let's practise English”; Nadhra talks with you in it and helps you improve. Uses the same live conversation with Google Gemini." checked={s.settings.coachEnabled} onChange={(v) => controller.updateSettings({ coachEnabled: v })} />
+            <Choice label="Practice mode" hint="You can also ask Nadhra to change it during the conversation." testId="coach-mode" value={s.settings.coachMode} onChange={(v) => controller.updateSettings({ coachMode: v as CoachMode })}>
+              {COACH_MODES.map((m) => <option key={m} value={m}>{COACH_MODE_LABELS[m]}</option>)}
+            </Choice>
+            <Toggle testId="coach-feedback" label="Show corrections and new words on screen" hint="In their own panel during practice. Nadhra says them aloud either way." checked={s.settings.coachFeedback} onChange={(v) => controller.updateSettings({ coachFeedback: v })} />
+            {s.settings.coachLanguage && <p className="text-base text-ink-2" data-testid="coach-last-language">Last practised: <span dir="auto">{s.settings.coachLanguage}</span>. Nadhra asks whether to go on with it.</p>}
+            {s.coach.feedback.length > 0 && (
+              <button type="button" onClick={() => controller.clearCoachFeedback()} className="control control-quiet min-h-16" data-testid="coach-clear">Clear the corrections shown</button>
             )}
           </div>
           <Choice label="Speech speed" value={String(s.settings.rate)} onChange={(v) => controller.updateSettings({ rate: Number(v) })}>
@@ -691,19 +723,56 @@ function NavStrip({ s, ui, controller }: { s: VisionState; ui: UiText; controlle
   const nav = g.nav;
   if (!nav) return null;
   const left = geoSpeech(s.settings.language).metres(nav.remaining);
-  const gps = nav.rerouting ? ui.nav.rerouting : nav.signal === "lost" ? ui.nav.gpsLost : nav.signal === "weak" ? ui.nav.gpsWeak : null;
+  const gps = nav.paused ? ui.nav.paused : nav.rerouting ? ui.nav.rerouting : nav.signal === "lost" ? ui.nav.gpsLost : nav.signal === "weak" ? ui.nav.gpsWeak : null;
   return (
     <div className="nav-strip" data-testid="nav-strip" data-state="navigating">
-      <p className="nav-strip-text">
+      <p className="nav-strip-text" id="nav-strip-text">
         <span dir="auto" className="nav-strip-dest">{ui.nav.to(nav.destination)}</span>
         <span> · {ui.nav.left(left)}</span>
         {gps && <span className="nav-strip-gps"> · {gps}</span>}
       </p>
       <div className="nav-strip-actions">
-        <button type="button" className="nav-strip-stop" onClick={() => controller.geoStop()} data-testid="nav-strip-stop">{ui.nav.stop}</button>
+        <button type="button" className="nav-strip-stop" onClick={() => controller.geoStop()} aria-keyshortcuts="N" aria-describedby="nav-strip-text" data-testid="nav-strip-stop">{ui.nav.stop}</button>
         <button type="button" className="nav-strip-small" onClick={() => controller.openSheet("places")}>{ui.nav.open}</button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The Language Coach's corrections and new words, newest first, in their own panel. Each one is
+ * also said aloud by Nadhra, so this is for reading back, not the only place it is given. Not a
+ * live region: a screen reader would talk over Nadhra saying the same thing; it is reached by swiping.
+ */
+function CoachFeedback({ items, ui, waiting }: { items: FeedbackItem[]; ui: UiText; waiting: boolean }) {
+  return (
+    <section className="coach-panel" aria-label={ui.coach.feedback} data-testid="coach-panel">
+      <h2 className="coach-title">{ui.coach.feedback}</h2>
+      {items.length === 0 ? (
+        <p className="coach-empty">{waiting ? ui.coach.choosing : "—"}</p>
+      ) : (
+        <ol className="coach-list">
+          {items.slice(0, 3).map((f) => (
+            <li key={f.id} className="coach-item" data-kind={f.kind} data-testid="coach-item">
+              {f.kind === "vocabulary" ? (
+                <dl>
+                  <dt>{ui.coach.word}</dt><dd dir="auto" className="coach-strong">{f.word}</dd>
+                  {f.meaning && <><dt>{ui.coach.meaning}</dt><dd dir="auto">{f.meaning}</dd></>}
+                  {f.example && <><dt>{ui.coach.example}</dt><dd dir="auto">{f.example}</dd></>}
+                </dl>
+              ) : (
+                <dl>
+                  {f.yourSentence && <><dt>{ui.coach.yourSentence}</dt><dd dir="auto" className="coach-wrong">{f.yourSentence}</dd></>}
+                  {f.correctSentence && <><dt>{ui.coach.correct}</dt><dd dir="auto" className="coach-strong">{f.correctSentence}</dd></>}
+                  {f.explanation && <><dt>{ui.coach.why}</dt><dd dir="auto">{f.explanation}</dd></>}
+                  {f.newExpression && <><dt>{ui.coach.better}</dt><dd dir="auto">{f.newExpression}</dd></>}
+                </dl>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 
@@ -822,8 +891,11 @@ function PrivacyText({ providers }: { providers: string }) {
         "This app doesn't record or store video, images or your voice, on this device or on its server.",
         "The external service may keep and use them under its own terms, especially on a free plan. Don't point the camera at personal documents or bank cards, and be mindful of people around you.",
         "When you ask by voice, your voice goes to your browser's speech service (Google, in Chrome) or to the same external service.",
-        "When the browser has no suitable voice, the sentences the assistant says are sent to Microsoft's online voice service to be spoken.",
-        "Your emergency contact and location stay on this device. The location is only added to a message you send yourself.",
+        "The sentences the assistant says itself (warnings, directions, notices) are sent to Google's Gemini voice service to be spoken in the Sulafat voice.",
+        "Your emergency contact stays on this device. On the Emergency page, your location is only added to a text message you send yourself.",
+        "Location & directions is optional and has its own consent. When you use it, your GPS coordinates are sent to Nadhra's server, which asks OpenStreetMap services for your address, nearby places and walking routes. They are not stored.",
+        "In a conversation, the address, place names and distances that were found are shared with Google Gemini so it can answer you. Your coordinates are not sent to Gemini.",
+        "GPS is read when you ask, and continuously only while navigation runs. You can stop it, or forget the permission, in Settings → Location & directions.",
         "When you stop the camera, switch to another app or leave the page, the camera and microphone turn off. You can withdraw your consent in Settings at any time.",
       ].map((line) => (
         <li key={line} className="border-b border-hairline py-3 last:border-0">{line}</li>

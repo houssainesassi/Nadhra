@@ -10,6 +10,7 @@ import { aiMode } from "../ai/router.ts";
 import type { LivePricing, TokenModality } from "../live/metrics.ts";
 import { geoEnabled } from "./geo.ts";
 import { GEO_FUNCTION_DECLARATIONS } from "../geo/tools.ts";
+import { COACH_FUNCTION_DECLARATIONS, type LiveCoachOptions } from "../coach/coach.ts";
 
 const AUTH_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 
@@ -97,6 +98,8 @@ export interface MintOptions {
   modelIndex: number;
   /** Session resumption handle from the previous connection, to continue the same conversation. */
   handle?: string;
+  /** AI Language Coach: its instructions and tools are locked into the session too. */
+  coach?: LiveCoachOptions | null;
 }
 
 /** The BidiGenerateContentSetup message. The browser sends exactly this; the token enforces it. */
@@ -108,9 +111,10 @@ export function buildLiveSetup(o: MintOptions, c: LiveConfig = liveConfig()) {
       responseModalities: ["AUDIO"],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: c.voice } } },
     },
-    systemInstruction: { parts: [{ text: liveSystemPrompt(o.lang, o.facing, c.geo) }] },
-    // The phone runs these (src/lib/geo/geoController.ts) and answers with what the maps say.
-    ...(c.geo ? { tools: [{ functionDeclarations: GEO_FUNCTION_DECLARATIONS }] } : {}),
+    systemInstruction: { parts: [{ text: liveSystemPrompt(o.lang, o.facing, c.geo, o.coach ?? null) }] },
+    // The phone runs these (src/lib/geo/geoController.ts, and the coach's in the controller) and
+    // answers with what the maps say, or shows the coach's feedback.
+    ...(c.geo || o.coach ? { tools: [{ functionDeclarations: [...(c.geo ? GEO_FUNCTION_DECLARATIONS : []), ...(o.coach ? COACH_FUNCTION_DECLARATIONS : [])] }] } : {}),
     realtimeInputConfig: {
       automaticActivityDetection: { silenceDurationMs: c.silenceMs, prefixPaddingMs: 100, ...(c.endSensitivity ? { endOfSpeechSensitivity: c.endSensitivity } : {}) },
     },

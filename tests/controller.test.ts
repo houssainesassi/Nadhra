@@ -2308,11 +2308,11 @@ test("guidance outlives the conversation: End leaves it running and says how to 
   h.drain();
   const L = startGeoLive(h);
   await h.c.startLive();
-  L.user("guide me to the nearest pharmacy");
+  L.user("وصّلني لأقرب فرماسي");
   const found = await L.call("search_nearby_places", { category: "pharmacy" });
   const r = await L.call("calculate_walking_route", { place_id: found.places[0].place_id });
   L.ev.turnComplete();
-  L.user("yes");
+  L.user("إيه");
   await L.call("start_navigation", { route_id: r.route_id });
   h.c.stopAssistance();
   h.drain();
@@ -2335,4 +2335,234 @@ test("with Nadhra AI selected, location tools are refused and nothing is looked 
   await (h.any.onLiveToolCall as Function).call(h.c, h.any.liveGen, [{ id: "x", name: "search_nearby_places", args: { category: "pharmacy" } }], undefined);
   assert.deepEqual(L.responses.length, 0, "no live session is open for Nadhra, so nothing goes back either");
   assert.equal(h.c.state.geo.search.status, "idle", "no search started");
+});
+
+test("screen locked during guidance: the GPS watch stops, nothing is spoken over other apps; back: said and watched again", async () => {
+  storage.set("assistant.locationConsent.v1", "1");
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startGeoLive(h);
+  await h.c.startLive();
+  L.user("وصّلني لأقرب فرماسي");
+  const found = await L.call("search_nearby_places", { category: "pharmacy" });
+  const r = await L.call("calculate_walking_route", { place_id: found.places[0].place_id });
+  L.ev.turnComplete();
+  L.user("إيه");
+  await L.call("start_navigation", { route_id: r.route_id });
+  h.drain();
+  doc.hidden = true;
+  fire(docListeners, "visibilitychange");
+  assert.equal(L.gps.stops, 1, "no GPS watch in the background");
+  assert.equal(h.c.state.live.status, "off", "the conversation ends as before");
+  assert.equal(h.c.state.geo.nav?.paused, true);
+  assert.equal(h.c.navigating, true, "guidance isn't forgotten, it waits");
+  const n = h.engine.said.length;
+  doc.hidden = false;
+  fire(docListeners, "visibilitychange");
+  h.drain();
+  assert.ok(h.engine.said.slice(n).includes(G.resumedAfterBackground), h.engine.said.slice(n).join(" | "));
+  assert.equal(L.gps.watching, 2);
+  assert.equal(h.c.state.geo.nav?.paused, false);
+});
+
+test("ending the conversation by voice during guidance says how to stop it without a microphone", async () => {
+  storage.set("assistant.locationConsent.v1", "1");
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startGeoLive(h);
+  await h.c.startLive();
+  L.user("وصّلني لأقرب فرماسي");
+  const found = await L.call("search_nearby_places", { category: "pharmacy" });
+  const r = await L.call("calculate_walking_route", { place_id: found.places[0].place_id });
+  L.ev.turnComplete();
+  L.user("إيه");
+  await L.call("start_navigation", { route_id: r.route_id });
+  L.ev.turnComplete();
+  h.drain();
+  L.ev.userText("وقّف المحادثة");
+  h.drain();
+  assert.equal(h.c.state.live.status, "off");
+  assert.equal(h.c.navigating, true);
+  assert.ok(h.engine.said.includes(G.navReminder));
+  assert.match(G.navReminder, /اضغط على «وقّف التوجيه» في الشاشة/, "the way that works without a conversation comes first");
+});
+
+test("privacy text: says coordinates go to the server and place information to Gemini; never that location stays on the device", () => {
+  const src = readFileSync(new URL("../src/components/Assistant.tsx", import.meta.url), "utf8");
+  const privacy = src.slice(src.indexOf("function PrivacyText"));
+  assert.match(privacy, /your GPS coordinates are sent to Nadhra's server/);
+  assert.match(privacy, /shared with Google Gemini/);
+  assert.match(privacy, /has its own consent/);
+  assert.doesNotMatch(privacy, /location stay on this device/);
+  assert.doesNotMatch(privacy, /Microsoft/, "the voice is Gemini's Sulafat now");
+  for (const lang of ["tn", "ar", "fr", "en"] as const) assert.match(GEO_PHRASES[lang].consentNotice, /GPS/, lang);
+  assert.match(GEO_PHRASES.en.consentNotice, /coordinates are sent to Nadhra's server/);
+  assert.match(GEO_PHRASES.tn.consentNotice, /إحداثيات الـGPS متاعك تتبعث لسيرفر نظرة/);
+});
+
+// --- the language follows the user; AI Language Coach; subtitles ---------------------------------
+
+test("language: the phone's own sentences follow the language the user speaks in a live conversation, without restarting it", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startFakeLive(h);
+  await h.c.startLive();
+  const turn = (text: string) => { L.ev.userText(text); L.ev.aiText("…"); L.ev.turnComplete(); };
+  assert.equal(h.c.state.settings.language, "tn");
+  turn("Bonjour, qu'est-ce qu'il y a devant moi ?");
+  assert.equal(h.c.state.settings.language, "fr");
+  assert.equal(JSON.parse(storage.get("assistant.settings")!).language, "fr", "kept for the next visit");
+  assert.equal(L.session.stopped, 0, "the conversation goes on: the model follows the user by itself");
+  assert.equal(h.c.state.live.status, "open");
+  assert.ok(!h.engine.said.includes(speech("fr").languageSet), "said nothing about it");
+  turn("OK");
+  assert.equal(h.c.state.settings.language, "fr", "a word too short to tell changes nothing");
+  turn("What is in front of me right now?");
+  assert.equal(h.c.state.settings.language, "en");
+  turn("Wie spät ist es heute, bitte?");
+  assert.equal(h.c.state.settings.language, "en", "German: the phone's own sentences in English (it has none in German)");
+  turn("شنوّة اللي قدّامي توّا؟");
+  assert.equal(h.c.state.settings.language, "tn");
+  turn("ماذا يوجد أمامي الآن؟");
+  assert.equal(h.c.state.settings.language, "ar");
+  h.c.stopLive(true);
+});
+
+test("language: a question asked without a live conversation also moves the phone's language", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  replies.push(scene({}));
+  await h.c.ask("Qu'est-ce qu'il y a devant moi ?");
+  assert.equal(h.c.state.settings.language, "fr");
+});
+
+/** A fake live session that records the options it was made with. */
+function startCoachLive(h: ReturnType<typeof setup>) {
+  const L = startGeoLive(h);
+  const opts: any[] = [];
+  const make = h.any.makeLiveSession as (o: unknown, e: object) => unknown;
+  h.any.makeLiveSession = (o: unknown, e: object) => (opts.push(o), make(o, e));
+  return { ...L, opts };
+}
+
+test("coach: off by default; on, «Talk with Nadhra» opens a practice with the mode and last language locked into the token", async () => {
+  const h = setup({ auto: false });
+  assert.equal(h.c.state.settings.coachEnabled, false);
+  await h.start();
+  h.drain();
+  let L = startCoachLive(h);
+  await h.c.startLive();
+  assert.equal(L.opts[0].coach, undefined, "an ordinary conversation has no coach");
+  assert.equal(h.c.state.coach.active, false);
+  h.c.stopLive(true);
+
+  h.c.updateSettings({ coachEnabled: true, coachMode: "vocabulary", coachLanguage: "Italian" });
+  L = startCoachLive(h);
+  await h.c.startLive();
+  const coach = L.opts[0].coach();
+  assert.equal(coach.mode, "vocabulary");
+  assert.equal(coach.language, "Italian", "last time's language: Nadhra asks whether to go on with it");
+  assert.equal(coach.userLanguage, "Tunisian Arabic (Derja)");
+  assert.equal(h.c.state.coach.active, true);
+  h.c.stopLive(true);
+  assert.equal(h.c.state.coach.active, false);
+});
+
+test("coach: the language chosen in the conversation, corrections and mode changes come back as tools; nothing else is muted", async () => {
+  const h = setup({ auto: false });
+  h.c.updateSettings({ coachEnabled: true, coachMode: "corrections" });
+  await h.start();
+  h.drain();
+  const L = startCoachLive(h);
+  await h.c.startLive();
+  L.user("Let's practice English. I want to improve my speaking.");
+  assert.deepEqual(await L.call("set_practice_language", { language: "english" }), { ok: true, language: "English" });
+  assert.equal(h.c.state.coach.language, "English");
+  assert.equal(JSON.parse(storage.get("assistant.settings")!).coachLanguage, "English", "remembered for next time");
+  assert.equal(h.c.state.settings.language, "tn", "practising English doesn't switch the phone's own language");
+  L.ev.turnComplete();
+
+  L.user("Today I go to work and I am very tired.");
+  const played = L.audio.played.length;
+  const r = await L.call("show_learning_feedback", { kind: "correction", your_sentence: "Today I go to work", correct_sentence: "Today I went to work", explanation: "You're talking about the past." });
+  assert.deepEqual(r, { ok: true });
+  L.ev.audio(pcm(3));
+  assert.equal(L.audio.played.length, played + 1, "the spoken correction is played as usual");
+  const [item] = h.c.state.coach.feedback;
+  assert.equal(item.kind, "correction");
+  assert.equal(item.yourSentence, "Today I go to work");
+  assert.equal(item.correctSentence, "Today I went to work");
+  assert.equal(item.explanation, "You're talking about the past.");
+  assert.equal(item.language, "English");
+  L.ev.turnComplete();
+
+  L.user("I am agree with you.");
+  await L.call("show_learning_feedback", { kind: "correction", your_sentence: "I am agree with you.", correct_sentence: "I agree with you.", explanation: "\"Agree\" is a verb, so we don't use \"am\" before it.", new_expression: "I completely agree with you." });
+  await L.call("show_learning_feedback", { kind: "vocabulary", word: "exhausted", meaning: "very tired", example: "I was exhausted after work." });
+  assert.equal(h.c.state.coach.feedback.length, 3);
+  assert.equal(h.c.state.coach.feedback[0].word, "exhausted", "newest first");
+  assert.equal(h.c.state.coach.feedback[1].newExpression, "I completely agree with you.");
+  assert.deepEqual(await L.call("show_learning_feedback", { kind: "correction" }), { ok: false, error: "nothing_to_show" });
+  L.ev.turnComplete();
+
+  assert.deepEqual(await L.call("set_practice_mode", { mode: "speaking" }), { ok: true, mode: "speaking" });
+  assert.equal(h.c.state.coach.mode, "speaking");
+  assert.equal(h.c.state.settings.coachMode, "speaking");
+  assert.equal((await L.call("set_practice_mode", { mode: "lecture" })).ok, false);
+
+  // Changed in Settings during the practice: the model is told, the conversation goes on.
+  h.c.updateSettings({ coachMode: "free" });
+  assert.match(L.session.texts.at(-1)!.text, /^\[app\] practice-mode: free/);
+  assert.equal(L.session.stopped, 0);
+
+  // The feedback stays readable after the practice, until cleared or the next conversation.
+  h.c.stopLive(true);
+  assert.equal(h.c.state.coach.feedback.length, 3);
+  h.c.clearCoachFeedback();
+  assert.equal(h.c.state.coach.feedback.length, 0);
+});
+
+test("coach: turning it on or off during a conversation starts a new one (its instructions are in the token), the camera stays", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startCoachLive(h);
+  await h.c.startLive();
+  h.c.updateSettings({ coachEnabled: true });
+  await flush();
+  assert.equal(L.session.stopped, 1);
+  assert.equal(typeof L.opts.at(-1).coach, "function");
+  assert.equal(h.c.state.camera, "on");
+  assert.equal(h.c.state.coach.active, true);
+  h.c.stopLive(true);
+});
+
+test("coach tools are refused outside a practice", async () => {
+  const h = setup({ auto: false });
+  await h.start();
+  h.drain();
+  const L = startCoachLive(h);
+  await h.c.startLive();
+  assert.deepEqual(await L.call("show_learning_feedback", { kind: "vocabulary", word: "x" }), { ok: false, error: "coach_off" });
+  assert.equal(h.c.state.coach.feedback.length, 0);
+  h.c.stopLive(true);
+});
+
+test("subtitles: off by default and kept when chosen; Settings has no language selector", () => {
+  const h = setup({ auto: false });
+  assert.equal(h.c.state.settings.subtitles, false);
+  h.c.updateSettings({ subtitles: true });
+  assert.equal(JSON.parse(storage.get("assistant.settings")!).subtitles, true);
+  const src = readFileSync(new URL("../src/components/Assistant.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /testId="language"/, "the language selector is gone");
+  assert.doesNotMatch(src, /label="Language"/);
+  assert.match(src, /testId="subtitles" label="Subtitles"/);
+  // Every spoken-text element on the main screen is behind the setting.
+  assert.match(src, /const caption = !subtitles \? "" :/);
+  assert.match(src, /const heard = !subtitles \? "" :/);
+  assert.match(src, /\{subtitles && liveOn && s\.live\.ai && \(/);
 });

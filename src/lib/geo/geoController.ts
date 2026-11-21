@@ -8,6 +8,7 @@
 // coordinates: only place ids, names, addresses and rounded distances.
 import { haversine, roundDistance, roundMinutes } from "./math.ts";
 import { RouteNavigator, type NavEvent } from "./navigator.ts";
+import { rankPlaces } from "./osm.ts";
 import { geoSpeech, sentence } from "./phrases.ts";
 import { GeoApiError, PositionError, type GeoApi, type PositionErrorCode, type PositionSource } from "./client.ts";
 import { isPlaceCategory, type Fix, type LatLon, type Place, type PlaceCategory, type WalkingRoute } from "./types.ts";
@@ -23,9 +24,13 @@ export const GEO_TIMING = {
   /** No position for this long during guidance: the signal is lost. */
   SIGNAL_LOST_MS: 20_000,
   SIGNAL_CHECK_MS: 5_000,
+  /** A button's map request slower than this gets a spoken "searching the map". */
+  SLOW_MS: 2_500,
   /** Between two route recalculations. */
   REROUTE_GAP_MS: 15_000,
   MAX_REROUTES: 12,
+  /** An unanswered location notice lapses after this: a later «موافق» isn't taken as the answer. */
+  CONSENT_ANSWER_MS: 60_000,
   /** After the user said no to location, the model's tools don't ask again for this long. */
   REFUSED_QUIET_MS: 120_000,
 } as const;
@@ -39,6 +44,8 @@ export interface PlaceView {
   /** Straight-line metres from the position used for the search. */
   distance: number;
   address: string | null;
+  /** The map's category is doubtful for this place (see osm.ts placeDoubt). */
+  doubt: Place["doubt"];
 }
 
 export interface RouteView {
@@ -62,6 +69,8 @@ export interface NavView {
   offRoute: boolean;
   signal: "ok" | "weak" | "lost";
   rerouting: boolean;
+  /** The page was hidden (screen off, another app): the browser gives no GPS, guidance waits. */
+  paused: boolean;
 }
 
 export interface GeoState {
@@ -108,6 +117,8 @@ export interface GeoDeps {
   consent: { get(): boolean; set(v: boolean): void };
   /** Tells the live conversation's model something (the user allowed location). */
   toLive?(text: string): void;
+  /** Keeps the screen on during guidance (the browser stops GPS when it turns off). */
+  keepAwake?(on: boolean): void;
   now?(): number;
 }
 
@@ -154,6 +165,7 @@ export class GeoController {
   private refusedAt = -Infinity;
   /** The model asked for location before consent: told to go on once the user agrees. */
   private resumeLive = false;
+  private keepScreenSaid = false;
 
   constructor(deps: GeoDeps) {
     this.deps = deps;
@@ -178,9 +190,20 @@ export class GeoController {
     if (this.state.asking) return;
     this.patch({ asking: true });
     this.deps.say(this.p.consentNotice, "info");
+    if (this.askTimer) clearTimeout(this.askTimer);
+    this.askTimer = setTimeout(() => {
+      this.askTimer = null;
+      if (!this.state.asking) return;
+      this.resumeLive = false;
+      this.patch({ asking: false }); // no answer: nothing is allowed
+    }, GEO_TIMING.CONSENT_ANSWER_MS);
+    (this.askTimer as { unref?: () => void }).unref?.();
   }
+  private askTimer: ReturnType<typeof setTimeout> | null = null;
 
   acceptConsent() {
+    if (this.askTimer) clearTimeout(this.askTimer);
+    this.askTimer = null;
     this.deps.consent.set(true);
     this.refusedAt = -Infinity;
     this.patch({ consent: true, asking: false });
@@ -199,6 +222,8 @@ export class GeoController {
   }
 
   declineConsent() {
+    if (this.askTimer) clearTimeout(this.askTimer);
+    this.askTimer = null;
     this.refusedAt = this.now;
     this.resumeLive = false;
     this.patch({ asking: false });
@@ -274,8 +299,8 @@ export class GeoController {
     try {
       const fix = await this.locate();
       const r = await this.deps.api.nearby(fix, category, radius, this.deps.lang());
-      const places = r.places.map((pl) => ({ id: this.register(pl), name: pl.name, category: pl.category, lat: pl.lat, lon: pl.lon, distance: haversine(fix, pl), address: pl.address }));
-      places.sort((a, b) => a.distance - b.distance);
+      // Nearest first, but a place whose name or tags contradict its category never comes first.
+      const places = rankPlaces(r.places.map((pl) => ({ id: this.register(pl), name: pl.name, category: pl.category, lat: pl.lat, lon: pl.lon, distance: haversine(fix, pl), address: pl.address, doubt: pl.doubt ?? null })), fix);
       if (places[0]) this.lastPlaceId = places[0].id;
       this.patch({ search: { category, status: "ready", partial: r.partial, places } });
       return { places, partial: r.partial, radius: r.radius, accuracy: fix.accuracy };
@@ -332,7 +357,18 @@ export class GeoController {
     this.signalLostSaid = false;
     const p = this.p;
     this.deps.say(p.routeStart(v.destination, p.metres(v.distance), p.minutes(v.duration), v.first), "info");
-    this.patch({ route: v, tracking: true, nav: { routeId, destination: v.destination, remaining: v.distance, nextText: v.first, accuracy: this.state.fix?.accuracy ?? null, offRoute: false, signal: "ok", rerouting: false } });
+    if (!this.keepScreenSaid) {
+      this.keepScreenSaid = true;
+      this.deps.say(p.keepScreenOn, "status");
+    }
+    this.patch({ route: v, tracking: true, nav: { routeId, destination: v.destination, remaining: v.distance, nextText: v.first, accuracy: this.state.fix?.accuracy ?? null, offRoute: false, signal: "ok", rerouting: false, paused: false } });
+    this.watchGps();
+    return true;
+  }
+
+  /** The GPS watch and the signal check of the current guidance. */
+  private watchGps() {
+    const gen = this.navGen;
     this.stopWatch = this.deps.position.watch(
       (fix) => gen === this.navGen && this.onFix(fix),
       (code) => gen === this.navGen && this.onWatchError(code),
@@ -340,7 +376,37 @@ export class GeoController {
     this.signalTimer = setInterval(() => gen === this.navGen && this.checkSignal(), GEO_TIMING.SIGNAL_CHECK_MS);
     // In Node (tests, server rendering) a running guidance mustn't keep the process alive.
     (this.signalTimer as { unref?: () => void }).unref?.();
-    return true;
+    this.deps.keepAwake?.(true);
+  }
+
+  private unwatchGps() {
+    this.stopWatch?.();
+    this.stopWatch = null;
+    if (this.signalTimer) clearInterval(this.signalTimer);
+    this.signalTimer = null;
+    this.deps.keepAwake?.(false);
+  }
+
+  /**
+   * The page is hidden (screen locked, another app in front). Browsers stop giving positions then,
+   * so the GPS stops being watched (no battery spent for nothing) and guidance waits. Nothing can be
+   * said reliably while hidden: it is said on return.
+   */
+  pauseForBackground() {
+    if (!this.navigator || this.state.nav?.paused) return;
+    this.unwatchGps();
+    this.patchNav({ paused: true });
+  }
+
+  /** Back in front: said, and guidance goes on from the next position (a new route if far off it). */
+  resumeFromBackground() {
+    if (!this.navigator || !this.state.nav?.paused) return;
+    this.deps.say(this.p.resumedAfterBackground, "info");
+    this.lastFixAt = this.now;
+    this.lastUpdateAt = -Infinity;
+    this.signalLostSaid = false;
+    this.patchNav({ paused: false, signal: "ok" });
+    this.watchGps();
   }
 
   /** Ends guidance. True when some was running. The GPS stops being watched at once. */
@@ -353,11 +419,13 @@ export class GeoController {
   }
 
   private endGuidance() {
+    const had = !!this.navigator;
     this.navGen++;
     this.stopWatch?.();
     this.stopWatch = null;
     if (this.signalTimer) clearInterval(this.signalTimer);
     this.signalTimer = null;
+    if (had) this.deps.keepAwake?.(false);
     this.navigator = null;
     this.navRoute = null;
   }
@@ -376,11 +444,13 @@ export class GeoController {
 
   /** The page is going away. */
   destroy() {
+    if (this.askTimer) clearTimeout(this.askTimer);
+    this.askTimer = null;
     this.endGuidance();
   }
 
   private checkSignal() {
-    if (!this.navigator || this.signalLostSaid) return;
+    if (!this.navigator || this.signalLostSaid || this.state.nav?.paused) return;
     if (this.now - this.lastFixAt < GEO_TIMING.SIGNAL_LOST_MS) return;
     this.signalLostSaid = true;
     this.deps.say(this.p.signalLost, "info");
@@ -482,6 +552,7 @@ export class GeoController {
       off_route: nav.offRoute,
       recalculating: nav.rerouting,
       gps_signal: nav.signal,
+      paused_in_background: nav.paused,
     };
   }
 
@@ -528,7 +599,14 @@ export class GeoController {
           const radius = typeof args.radius_m === "number" && Number.isFinite(args.radius_m) ? args.radius_m : undefined;
           const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(8, Math.max(1, Math.round(args.limit))) : 5;
           const r = await this.search(category, radius);
-          const places = r.places.slice(0, limit).map((pl) => ({ place_id: pl.id, name: pl.name, category: pl.category, distance_m: roundDistance(pl.distance), address: pl.address }));
+          const places = r.places.slice(0, limit).map((pl) => ({
+            place_id: pl.id,
+            name: pl.name,
+            category: pl.category,
+            distance_m: roundDistance(pl.distance),
+            address: pl.address,
+            ...(pl.doubt ? { map_doubt: pl.doubt === "office" ? "tagged as an office or government body too" : "its name suggests an organisation, not this kind of place" } : {}),
+          }));
           return ok({
             category,
             radius_m: r.radius,
@@ -597,11 +675,22 @@ export class GeoController {
 
   // --- the buttons (the app says the results itself) ------------------------------------------------------------
 
+  /** A button's request: if the map service is slow, the wait is said, not silent. */
+  private async slowly<T>(work: Promise<T>): Promise<T> {
+    const t = setTimeout(() => this.deps.say(this.p.searching, "status"), GEO_TIMING.SLOW_MS);
+    (t as { unref?: () => void }).unref?.();
+    try {
+      return await work;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
   async whereAmIByUser() {
     if (!this.state.consent) return this.askConsent();
     const p = this.p;
     try {
-      const a = await this.address();
+      const a = await this.slowly(this.address());
       const sep = this.deps.lang() === "fr" || this.deps.lang() === "en" ? ", " : "، ";
       const text = a.label ? p.youAreAt(a.name ? `${a.label}${sep}${p.near(a.name)}` : a.label) : a.name ? p.youAreAt(p.near(a.name)) : p.noAddress;
       this.deps.say(a.fix.accuracy > 50 ? `${text} ${p.approximate(p.metres(a.fix.accuracy))}` : text, "info");
@@ -614,10 +703,10 @@ export class GeoController {
     if (!this.state.consent) return this.askConsent();
     const p = this.p;
     try {
-      const r = await this.search(category);
+      const r = await this.slowly(this.search(category));
       if (!r.places.length) return this.deps.say(p.notFound, "info");
-      const first = r.places[0];
-      this.deps.say(`${p.found(r.places.length)} ${p.nearest(first.name ?? p.unnamed, p.metres(first.distance))}`, "info");
+      const first = r.places[0]; // doubtful places are ranked last: only first when all are
+      this.deps.say(`${p.found(r.places.length)} ${p.nearest(first.name ?? p.unnamed, p.metres(first.distance))}${first.doubt ? ` ${p.doubtful}` : ""}`, "info");
     } catch (e) {
       this.deps.say(this.errorText(e), "info");
     }
@@ -627,7 +716,7 @@ export class GeoController {
     if (!this.state.consent) return this.askConsent();
     const p = this.p;
     try {
-      const v = await this.calculateRoute(placeId);
+      const v = await this.slowly(this.calculateRoute(placeId));
       this.deps.say(p.routeReady(v.destination, p.metres(v.distance), p.minutes(v.duration)), "info");
     } catch (e) {
       this.deps.say(this.errorText(e), "info");

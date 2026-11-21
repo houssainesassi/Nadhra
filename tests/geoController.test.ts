@@ -8,7 +8,7 @@ import { GeoController, GEO_TIMING, type GeoSayKind } from "../src/lib/geo/geoCo
 import { GeoApiError, PositionError, type GeoApi, type PositionErrorCode, type PositionSource } from "../src/lib/geo/client.ts";
 import { parseOsrm } from "../src/lib/geo/osm.ts";
 import { GEO_PHRASES } from "../src/lib/geo/phrases.ts";
-import type { Fix, LatLon, Place, WalkingRoute } from "../src/lib/geo/types.ts";
+import type { Fix, LatLon, NearbyResult, Place, WalkingRoute } from "../src/lib/geo/types.ts";
 
 const route = parseOsrm(JSON.parse(readFileSync(new URL("./fixtures/geo/osrm-foot.json", import.meta.url), "utf8"))) as WalkingRoute;
 const START: Fix = { lat: route.geometry[0].lat, lon: route.geometry[0].lon, accuracy: 9, at: 0 };
@@ -50,7 +50,7 @@ class FakeApi implements GeoApi {
     if (this.fail) throw new GeoApiError(this.fail);
     return { label: "نهج اليونان، باب البحر، تونس", road: "نهج اليونان", houseNumber: null, neighbourhood: "باب البحر", city: "تونس", name: null };
   }
-  async nearby(_at: LatLon, category: string) {
+  async nearby(_at: LatLon, category: string): Promise<NearbyResult> {
     this.calls.push(`nearby:${category}`);
     if (this.fail) throw new GeoApiError(this.fail);
     return { places: PLACES, source: "overpass" as const, partial: this.partial, radius: 1000 };
@@ -176,8 +176,10 @@ test("guidance needs the user's yes in a later turn; then the phone speaks, the 
   assert.equal(started.response.started, true);
   assert.equal(started.appSpoke, true);
   assert.equal(h.position.watching, 1, "the GPS is watched only now");
-  assert.match(h.said.at(-1)!.text, /^نبداو\. Pharmacie Centrale، حوالي 600 متر على ساقيك، حوالي 8 دقايق\. ابدا امشي/);
-  assert.match(h.said.at(-1)!.text, /ما نجّمش نضمن إلي الثنية آمنة/);
+  const startSaid = h.said.find((x) => x.text.startsWith("نبداو."))!.text;
+  assert.match(startSaid, /^نبداو\. Pharmacie Centrale، حوالي 600 متر على ساقيك، حوالي 8 دقايق\. ابدا امشي/);
+  assert.match(startSaid, /ما نجّمش نضمن إلي الثنية آمنة/);
+  assert.equal(h.said.at(-1)!.text, T.keepScreenOn, "then, once: the screen must stay on");
   const status = (await h.geo.runTool("get_navigation_status", {}, { userTurn: 4 })).response as any;
   assert.equal(status.active, true);
   assert.equal(status.destination, "Pharmacie Centrale");
@@ -292,4 +294,140 @@ test("buttons: the app says the results itself, in the user's language", async (
   await h.geo.refreshByUser();
   await h.geo.whereAmIByUser();
   assert.match(h.said.at(-1)!.text, /البلاصة تقريبية، بفرق حوالي 100 متر\./, "a poor fix is said to be approximate");
+});
+
+// --- hardening: background, GPS loss and recovery, consent, misleading map categories -----------------------
+
+function setupAwake() {
+  const h = setup();
+  const awake: boolean[] = [];
+  (h.geo as any).deps.keepAwake = (on: boolean) => awake.push(on);
+  return { ...h, awake };
+}
+
+test("background: hidden page → GPS watch released and guidance paused (nothing judged); back → said, watched again, then continues", async () => {
+  const h = setupAwake();
+  await h.geo.search("pharmacy");
+  h.geo.startNavigation((await h.geo.calculateRoute("p1")).id);
+  assert.deepEqual(h.awake, [true], "the screen is kept on during guidance");
+  h.geo.pauseForBackground();
+  assert.equal(h.position.stops, 1, "no GPS watch while hidden: the browser gives none, and it costs battery");
+  assert.equal(h.geo.state.nav?.paused, true);
+  assert.deepEqual(h.awake, [true, false]);
+  h.geo.pauseForBackground();
+  assert.equal(h.position.stops, 1, "twice is the same as once");
+  // A long time away: the signal check must not say "lost" while paused (nothing is watched).
+  h.tick(10 * 60_000);
+  (h.geo as any).checkSignal();
+  assert.ok(!h.said.some((x) => x.text === T.signalLost));
+  const status = (await h.geo.runTool("get_navigation_status", {}, { userTurn: 9 })).response as any;
+  assert.equal(status.paused_in_background, true);
+  h.geo.resumeFromBackground();
+  assert.equal(h.said.at(-1)!.text, T.resumedAfterBackground);
+  assert.equal(h.position.watching, 2, "watched again");
+  assert.equal(h.geo.state.nav?.paused, false);
+  assert.deepEqual(h.awake, [true, false, true]);
+  h.geo.resumeFromBackground();
+  assert.equal(h.said.filter((x) => x.text === T.resumedAfterBackground).length, 1, "said once");
+  h.tick(1_100);
+  h.position.onFix!({ ...route.geometry[2], accuracy: 6, at: h.now });
+  assert.equal(h.geo.navigating, true, "guidance carries on from the next position");
+  h.geo.stopNavigation();
+  assert.deepEqual(h.awake.at(-1), false, "the screen lock is released when guidance ends");
+});
+
+test("background without guidance: nothing happens, nothing is said", () => {
+  const h = setupAwake();
+  h.geo.pauseForBackground();
+  h.geo.resumeFromBackground();
+  assert.deepEqual(h.said, []);
+  assert.deepEqual(h.awake, []);
+  assert.equal(h.position.watching, 0);
+});
+
+test("GPS loss: watch timeouts are silent until the signal check; recovery is said; loss twice is said twice", async () => {
+  const h = setup();
+  await h.geo.search("pharmacy");
+  h.geo.startNavigation((await h.geo.calculateRoute("p1")).id);
+  h.position.onError!("timeout");
+  h.position.onError!("unavailable");
+  assert.equal(h.geo.navigating, true, "a timeout doesn't end guidance");
+  assert.ok(!h.said.some((x) => x.text === T.signalLost), "not on the first hiccup");
+  h.tick(GEO_TIMING.SIGNAL_LOST_MS + 1);
+  (h.geo as any).checkSignal();
+  assert.equal(h.geo.state.nav?.signal, "lost");
+  h.tick(1_000);
+  h.position.onFix!({ ...START, accuracy: 7, at: h.now });
+  assert.equal(h.said.filter((x) => x.text === T.signalBack).length, 1);
+  assert.equal(h.geo.state.nav?.signal, "ok");
+  h.tick(GEO_TIMING.SIGNAL_LOST_MS + 1);
+  (h.geo as any).checkSignal();
+  assert.equal(h.said.filter((x) => x.text === T.signalLost).length, 2, "a second loss is a new event");
+});
+
+test("consent: an unanswered notice lapses (a later «موافق» isn't consent); withdrawing stops guidance and asks again next time", async () => {
+  const h = setup({ consent: false });
+  const realSetTimeout = globalThis.setTimeout;
+  let lapse: (() => void) | null = null;
+  (globalThis as any).setTimeout = (fn: () => void, ms: number) => (ms === GEO_TIMING.CONSENT_ANSWER_MS ? ((lapse = fn), 0) : realSetTimeout(fn, ms));
+  try {
+    await h.geo.runTool("get_current_location", {}, { userTurn: 1 });
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  assert.equal(h.geo.state.asking, true);
+  lapse!();
+  assert.equal(h.geo.state.asking, false, "no answer within a minute: nothing allowed");
+  assert.equal(h.consent, false);
+  assert.equal(h.position.calls, 0);
+  assert.equal(h.live.length, 0, "the model is not told to go on");
+  // Separate from everything else: only this notice's own answer grants it.
+  h.geo.acceptConsent();
+  await flush();
+  await h.geo.search("pharmacy");
+  h.geo.startNavigation((await h.geo.calculateRoute("p1")).id);
+  h.geo.withdrawConsent();
+  assert.equal(h.geo.navigating, false);
+  assert.equal(h.position.stops, 1);
+  assert.equal(h.geo.state.fix, null);
+  assert.equal((await h.geo.runTool("search_nearby_places", { category: "pharmacy" }, { userTurn: 5 })).response.error, "permission_pending", "asked again");
+});
+
+test("stopping: every way ends the watch at once and is said once; stop when nothing runs says so (button) or nothing (model)", async () => {
+  const h = setup();
+  for (const how of ["button", "tool", "tracking"] as const) {
+    await h.geo.search("pharmacy");
+    h.geo.startNavigation((await h.geo.calculateRoute("p1")).id);
+    const stops = h.position.stops;
+    const n = h.said.length;
+    if (how === "button") h.geo.stopNavigation();
+    else if (how === "tool") await h.geo.runTool("stop_navigation", {}, { userTurn: 1 });
+    else h.geo.stopTracking();
+    assert.equal(h.position.stops, stops + 1, how);
+    assert.equal(h.geo.navigating, false, how);
+    assert.equal(h.geo.state.tracking, false, how);
+    assert.equal(h.said.length, n + 1, `${how}: one sentence`);
+    // A late position from the old watch changes nothing.
+    h.position.onFix?.({ ...START, at: h.now });
+    assert.equal(h.said.length, n + 1, `${how}: a late position is ignored`);
+  }
+  h.geo.stopNavigation();
+  assert.equal(h.said.at(-1)!.text, T.noNavigation);
+});
+
+test("misleading map categories: a doubtful place is never «the nearest», and the model is told the map may be wrong", async () => {
+  const h = setup();
+  const near = { osmId: "n9", lat: START.lat + 0.0003, lon: START.lon, name: "عمادة أطباء الأسنان بتونس", category: "hospital" as const, kind: "hospital", address: null, openingHours: null, phone: null, wheelchair: null, doubt: "name" as const };
+  const real = { ...near, osmId: "n8", lat: START.lat + 0.01, name: "Hôpital Charles Nicolle", doubt: null };
+  h.api.nearby = async () => ({ places: [near, real], source: "nominatim" as const, partial: true, radius: 3000 });
+  const r = (await h.geo.runTool("search_nearby_places", { category: "hospital" }, { userTurn: 1 })).response as any;
+  assert.equal(r.places[0].name, "Hôpital Charles Nicolle", "the further real hospital comes first");
+  assert.match(r.places[1].map_doubt, /organisation/);
+  assert.equal(r.places[0].map_doubt, undefined);
+  // «go there» means the first one, never the doubtful one.
+  assert.equal(((await h.geo.runTool("calculate_walking_route", {}, { userTurn: 2 })).response as any).destination, "Hôpital Charles Nicolle");
+  // Only doubtful places: said with the warning.
+  h.api.nearby = async () => ({ places: [near], source: "nominatim" as const, partial: true, radius: 3000 });
+  await h.geo.searchByUser("hospital");
+  assert.ok(h.said.at(-1)!.text.endsWith(T.doubtful), h.said.at(-1)!.text);
 });

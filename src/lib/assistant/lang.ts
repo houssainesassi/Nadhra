@@ -89,3 +89,70 @@ export function questionLang(question: string, chosen: SpeechLang, previous?: Sp
   if (en > fr) return "en";
   return fallback;
 }
+
+// --- the language the user speaks, beyond the four the app's own words exist in ---------------------
+// There is no language setting: the app follows the language the user speaks. The live model hears
+// any language itself; this is for the phone's side (its own sentences and the main screen's words),
+// and for the coach's "the user's own language". German, Italian and Spanish are recognised too, but
+// the app's own sentences exist only in the four SpeechLangs: those three use English.
+
+export type ConversationLang = SpeechLang | "de" | "it" | "es";
+
+export const CONVERSATION_LANG_LABEL: Record<ConversationLang, string> = {
+  tn: "Tunisian Arabic (Derja)",
+  ar: "Modern Standard Arabic",
+  fr: "French",
+  en: "English",
+  de: "German",
+  it: "Italian",
+  es: "Spanish",
+};
+
+/** The language the app's own sentences and the main screen use for a spoken language. */
+export const uiLangFor = (l: ConversationLang): SpeechLang => (isSpeechLang(l) ? l : "en");
+
+const words = (list: string) => new Set(list.split(" "));
+const LATIN_WORDS: Record<"fr" | "en" | "de" | "it" | "es", Set<string>> = {
+  fr: words("le la les est je vous tu une des pour comment moi ce cette où quel quelle qui dans avec sur combien merci elle pas mon ma mes du au bonjour salut suis et ai aujourd hui très oui parler apprendre français nous sont faire veux voudrais peux bien fatigué travail"),
+  en: words("the is what how are you this my where which of who with much today please can there it do does i me and to am was went have want speak practice practise learn hello yes very tired work english would like we they don't"),
+  de: words("ich bin ist nicht und der die das was wie wo ein eine mit heute bitte danke ja nein du wir haben habe kannst können möchte guten hallo tag sprechen lernen deutsch mir sehr gut müde arbeit auch aber"),
+  it: words("sono è che come dove cosa questo questa oggi grazie ciao voglio parlare vorrei sei perché anche molto io sto bene stanco lavoro imparare italiano buongiorno della gli"),
+  es: words("el los las soy está estoy qué cómo dónde esto hoy gracias hola quiero hablar puedes muy pero también yo usted por favor cansado trabajo aprender español buenos tengo"),
+};
+const LATIN_MARKS: [RegExp, keyof typeof LATIN_WORDS][] = [
+  [/[äöüß]/i, "de"],
+  [/[ñ¿¡]/i, "es"],
+  [/[çœêëîïûù]/i, "fr"],
+  [/[ìò]/i, "it"],
+];
+
+/**
+ * The language a user's sentence is clearly in, or undefined when it is too short or mixed to tell
+ * (then the conversation keeps its language: a short «OK» or a name never switches it). Arabic
+ * script and Arabizi follow questionLang's rules (Derja or Standard Arabic).
+ */
+export function spokenLang(text: string, previous?: ConversationLang): ConversationLang | undefined {
+  const q = text.trim();
+  if (!q) return undefined;
+  const arabic = count(/[؀-ۿ]/g, q);
+  const latin = count(/[A-Za-zÀ-ÿ]/g, q);
+  if (arabic > latin) {
+    const prev = previous === "tn" || previous === "ar" ? previous : undefined;
+    // A Derja speaker often says semi-standard words: only clear standard Arabic leaves Derja.
+    return questionLang(q, prev ?? "tn", prev);
+  }
+  if (latin === 0) return undefined;
+  if (ARABIZI.test(q) || count(ARABIZI_WEAK, q) >= 2) {
+    // Arabizi words only count when the sentence isn't clearly another language.
+    if (questionLang(q, "en") === "tn") return "tn";
+  }
+  const tokens = q.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
+  const scores = Object.fromEntries(Object.entries(LATIN_WORDS).map(([l, set]) => [l, tokens.filter((t) => set.has(t)).length])) as Record<keyof typeof LATIN_WORDS, number>;
+  for (const [re, l] of LATIN_MARKS) if (re.test(q)) scores[l] += 1;
+  const ranked = (Object.entries(scores) as [keyof typeof LATIN_WORDS, number][]).sort((a, b) => b[1] - a[1]);
+  const [best, second] = ranked;
+  // Two signs at least: one word («yes», «bonjour», «ciao») is too little to change the language.
+  if (best[1] < 2 || best[1] === second[1]) return undefined;
+  return best[0];
+}
+

@@ -1,5 +1,6 @@
 // Assistant settings, kept per device in localStorage and validated on load.
 import { documentLang, isSpeechLang, SPEECH_LANGS, type SpeechLang } from "./lang.ts";
+import { cleanLanguageName, isCoachMode, type CoachMode } from "../coach/coach.ts";
 
 export type AiProvider = "gemini" | "nadhra";
 
@@ -25,8 +26,22 @@ export interface VisionSettings {
    * happens while a live conversation is on, so it sends nothing more than the conversation does.
    */
   liveProactive: boolean;
-  /** The language the assistant speaks and listens for. The main screen follows it; the panels (Settings, Privacy & safety, Emergency, consent) stay in English. */
+  /**
+   * The language the app's own sentences and the main screen use. Not chosen in Settings any more:
+   * it follows the language the user speaks (the controller's adaptLanguage), and is kept so the
+   * next visit starts in it. The live conversation follows the user by itself, in any language.
+   * The panels (Settings, Privacy & safety, Emergency, consent) stay in English.
+   */
   language: SpeechLang;
+  /** Show what is said (the user's words and the assistant's) as text on the screen. Off by default. */
+  subtitles: boolean;
+  /** AI Language Coach: «Talk with Nadhra» becomes a language practice conversation. Off by default. */
+  coachEnabled: boolean;
+  coachMode: CoachMode;
+  /** Show the coach's corrections and new words in their own panel on the screen. */
+  coachFeedback: boolean;
+  /** The language practised last time (said in the conversation, never a setting): "" before any. */
+  coachLanguage: string;
   /** Vibrate on events and warnings, where the device can. */
   vibration: boolean;
   /** Multiplies the page's text size, on top of the browser's own setting. */
@@ -52,6 +67,11 @@ export const DEFAULT_VISION_SETTINGS: VisionSettings = {
   // Tunisian Arabic. Applies only when nothing valid is saved: a saved choice is always kept
   // (sanitizeVisionSettings), so changing this never switches an existing user's language.
   language: "tn",
+  subtitles: false,
+  coachEnabled: false,
+  coachMode: "corrections",
+  coachFeedback: true,
+  coachLanguage: "",
   vibration: true,
   textScale: 1,
   emergencyName: "",
@@ -79,6 +99,12 @@ export function sanitizeVisionSettings(raw: unknown): VisionSettings {
     screenReaderEcho: bool(r.screenReaderEcho, d.screenReaderEcho),
     liveProactive: bool(r.liveProactive, d.liveProactive),
     language: isSpeechLang(r.language) ? r.language : d.language,
+    // Subtitles were always on before this setting existed: off for everyone until chosen.
+    subtitles: bool(r.subtitles, d.subtitles),
+    coachEnabled: bool(r.coachEnabled, d.coachEnabled),
+    coachMode: isCoachMode(r.coachMode) ? r.coachMode : d.coachMode,
+    coachFeedback: bool(r.coachFeedback, d.coachFeedback),
+    coachLanguage: cleanLanguageName(r.coachLanguage),
     vibration: bool(r.vibration, d.vibration),
     textScale: num(r.textScale, 1, 2, d.textScale),
     emergencyName: typeof r.emergencyName === "string" ? r.emergencyName.replace(/[\u0000-\u001f]/g, "").trim().slice(0, 40) : d.emergencyName,
